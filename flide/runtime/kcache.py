@@ -35,6 +35,7 @@ MANIFEST = "flide-kernels.json"
 SHIPPED = Path(__file__).resolve().parent.parent / "kernels" / "prebuilt" / "gpu"
 
 _picks: dict[str, list] = {}
+_matched = False
 
 
 def cache_dir() -> Path:
@@ -164,6 +165,8 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
                 man = json.load(tar.extractfile(MANIFEST))
                 if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
                     continue
+                global _matched
+                _matched = True
                 for fn, picks in man.get("tuning", {}).items():
                     _picks.setdefault(fn, []).extend(picks)
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
@@ -199,6 +202,12 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
         log.info("seeded %s with %d kernels from %s in %.1fs", cache_dir(), n, path.name, time.perf_counter() - t0)
     tune()
     return added
+
+
+def first_compile() -> bool:
+    """Whether this start compiles its kernels: no bundle fits this GPU and Triton, and the Triton cache is empty."""
+    d = cache_dir()
+    return not _matched and not (d.is_dir() and any(d.iterdir()))
 
 
 def tune() -> int:

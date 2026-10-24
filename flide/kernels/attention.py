@@ -179,7 +179,7 @@ def config(device, dtype, head_dim: int) -> dict:
     dp = triton.next_power_of_2(head_dim)
     if dp > 256:
         if big and dtype != torch.float32:
-            return {"BLOCK_M": 128, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1, "SPLIT": 2}
+            return {"BLOCK_M": 128, "BLOCK_N": 32, "num_warps": 8, "num_stages": 2, "SPLIT": 2}
         return {"BLOCK_M": 16, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1}
     if dtype == torch.float32:
         return {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 1}

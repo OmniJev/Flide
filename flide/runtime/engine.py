@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .. import backbones, formats, settings
-from ..formats.base import FINAL, Plan
+from ..formats.base import FINAL, Plan, check_limits
 from .pack import pack
 from .schedule import schedule
 
@@ -57,9 +57,12 @@ class Engine:
         if str(device).startswith("cuda"):
             check_cuda()
         launcher.install()
-        from .kcache import seed, tune
+        from .kcache import cache_dir, first_compile, seed, tune
 
         seed()
+        if first_compile():
+            log.info("no precompiled kernels ship for this GPU and Triton version, so they compile now; only the first "
+                     "start takes these minutes, later ones read them from %s", cache_dir())
         t0 = time.perf_counter()
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
@@ -481,22 +484,27 @@ class Engine:
                 outs[i] = [[[row]] for row in y.tolist()]
         return outs, paths
 
+    def _run_one(self, plan):
+        if settings.batch_invariant:
+            outs, paths = self.forward([plan], "batch")
+            return outs[0], paths[0]
+        branches = self._graph_outputs(plan)
+        if branches is None:
+            return self.run_plans([plan])[0][0], "packed"
+        return branches, "graph"
+
     def decide(self, request, **options):
         t0 = time.perf_counter()
         start = getattr(self.backbone, "start_vision", None)
+        check_limits(self.format, request)
         plan = self.format.plan(request, start_vision=start, **options)
         if start is not None and plan.vision is not None:
             start(plan.vision)
         t1 = time.perf_counter()
-        if settings.batch_invariant:
-            outs, paths = self.forward([plan], "batch")
-            branches, path = outs[0], paths[0]
-        else:
-            branches = self._graph_outputs(plan)
-            path = "graph"
-            if branches is None:
-                branches = self.run_plans([plan])[0][0]
-                path = "packed"
+        branches, path = self._run_one(plan)
+        while (nxt := self.format.follow_up(request, plan, branches, **options)) is not None:
+            plan = nxt
+            branches, path = self._run_one(plan)
         t2 = time.perf_counter()
         response, meta = self.format.finish(request, plan, branches, **options)
         meta["timing"] = {"plan_s": t1 - t0, "forward_s": t2 - t1, "total_s": time.perf_counter() - t0}

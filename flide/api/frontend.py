@@ -73,6 +73,19 @@ class RemoteBatcher:
         if self.router is not None:
             self.router.done(r)
 
+    def follow_up(self, request, plan, branches, **options) -> cf.Future:
+        """The family's next plan for a request, routed as a new plan is, or None."""
+        def run():
+            nxt = self._format().follow_up(request, plan, branches, **options)
+            if nxt is not None:
+                r = self.router.pick(request.state) if self.router is not None else 0
+                self.requests[r].put(("begin",))
+                with self._lock:
+                    self._replica[id(nxt)] = r
+            return nxt
+
+        return self._planners.submit(run)
+
     def finish(self, request, plan, branches, **options) -> cf.Future:
         return self._planners.submit(lambda: self._format().finish(request, plan, branches, **options))
 

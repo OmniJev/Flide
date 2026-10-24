@@ -23,6 +23,7 @@ through the `/v1/systemone` API that vLLM and SGLang also serve.
 
 ## 🔥 News
 
+- 🔥 **2026-10-25** We added two decision model families in Flide 0.1.2 (Intern-Decision, torchcast) and up to 256 options per question. PRs welcome.
 - 🔥 **2026-10-24** We released Flide 0.1.0 on [PyPI](https://pypi.org/project/flide/). Welcome to have a try.
 
 
@@ -108,13 +109,18 @@ Every answer carries the probability of each option, ready for a threshold.
 
 ## Models
 
-| Backbone | Sizes | Inputs |
+| Model | Checkpoints | Inputs |
 |---|---|---|
-| Qwen3.5 | 0.8B, 2B, 4B, 9B, 27B | text, images, video |
-| Gemma 4 | E2B, E4B, 12B, 26B-A4B, 31B | text, images |
+| Gemma 4 | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | text, images |
+| Intern-Decision | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | text |
+| OneJev | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | text, images, video |
+| Open-Jev | `ZefanCai/Open-Jev-2B`, `-9B` | text |
+| Qwen3.5 | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | text, images |
+| torchcast | `torchcast-ai/torchcast-decision-27b` | text |
 
-OneJev and Open-Jev, which read their answers their own way, come with Flide. A new family is one folder in
-`plugins/` and one line in `pyproject.toml`; a separate package can also join through the `flide.formats` entry point.
+Any chat model on Qwen3.5 or Gemma 4 serves as it is; their rows name the official ones. The other rows are
+decision models, each read the way its release reads it. A new family is one folder in `plugins/` and one line
+in `pyproject.toml`; a separate package can also join through the `flide.formats` entry point.
 
 ## Options
 

@@ -149,6 +149,7 @@ class OneJev(Format):
     backbones = ("qwen3_5", "qwen3_5_text", "gemma4", "gemma4_text", "gemma4_unified")
     meta_key = "onejev"
     aliases = ("jev-latest", "jev-preview")
+    max_choice_options = 256
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -181,6 +182,7 @@ class OneJev(Format):
         config = transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
         self.template_kwargs = {"enable_thinking": False} if config.model_type.startswith(("qwen", "gemma4")) else {}
         self.slot_ids = self._verify_slots()
+        self.max_score_levels = self.max_slots
         self.token_cache = TokenCache()
         self._token_cache_selfcheck()
         self.model_dir = model_dir

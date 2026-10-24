@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import formats
+from ..formats.base import check_limits
 
 _worker = None
 _DROP = ("payload", "response", "raw_output", "status", "error", "started_utc", "completed_utc", "total_wall_ms",
@@ -80,7 +81,9 @@ def _init_worker(name: str, model_dir: str, format_args: dict, plan_args: dict):
 def _plan_row(row: dict):
     family, plan_args = _worker
     try:
-        return "ok", family.plan(_request(row), **plan_args), None
+        request = _request(row)
+        check_limits(family, request)
+        return "ok", family.plan(request, **plan_args), None
     except ValueError as exc:
         status = "unsupported" if ("limit is" in str(exc) or "slots" in str(exc)) else "error"
         return status, None, str(exc)
@@ -140,6 +143,31 @@ def _result(row, st, err, plan, output, engine, args, plan_args, ms):
     return result
 
 
+def follow_ups(engine, rows, statuses, plans, outputs, plan_args) -> tuple[int, float]:
+    """The rounds a family asks for after the first (`Format.follow_up`), each round's plans run together; `plans` and
+    `outputs` end up holding every request's last round. Returns the extra rounds' tokens and forward seconds."""
+    tokens, seconds = 0, 0.0
+    while True:
+        idx, nxt = [], []
+        for i, row in enumerate(rows):
+            if statuses[i][0] != "ok" or plans[i] is None:
+                continue
+            try:
+                p = engine.format.follow_up(_request(row), plans[i], outputs[i], **plan_args)
+            except Exception as exc:
+                statuses[i] = ("error", f"{type(exc).__name__}: {exc}")
+                continue
+            if p is not None:
+                idx.append(i)
+                nxt.append(p)
+        if not nxt:
+            return tokens, seconds
+        outs, stats = engine.run_plans(nxt)
+        tokens, seconds = tokens + stats["tokens"], seconds + stats["forward_s"]
+        for i, p, o in zip(idx, nxt, outs):
+            plans[i], outputs[i] = p, o
+
+
 def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) -> dict:
     """Plan, forward and finish overlapped: the planning pool starts before the model loads and keeps running ahead,
     the GPU takes the rows block by block as soon as a block is planned, a writer thread finishes and writes each
@@ -179,12 +207,14 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
             plans = [p if st == "ok" else None for st, p, _ in planned]
             statuses = [("ok", None) if st == "ok" else (st, err) for st, _, err in planned]
             outputs, stats = engine.run_plans(plans)
-            t_forward += stats["forward_s"]
-            tokens += stats["tokens"]
+            extra_tokens, extra_s = follow_ups(engine, block, statuses, plans, outputs, plan_args)
+            t_forward += stats["forward_s"] + extra_s
+            tokens += stats["tokens"] + extra_tokens
             micro += stats["micro_batches"]
             if pending is not None:
                 pending.result()
-            pending = writer.submit(write, block, statuses, plans, outputs, stats["forward_s"], stats["tokens"])
+            pending = writer.submit(write, block, statuses, plans, outputs, stats["forward_s"] + extra_s,
+                                    stats["tokens"] + extra_tokens)
             log(f"rows {lo + len(block)}/{len(rows)}: waited {t_wait:.1f}s for plans, forward {t_forward:.1f}s, "
                 f"{stats['tokens'] / max(stats['forward_s'], 1e-9):.0f} tokens/s in this block")
         t0 = time.perf_counter()
@@ -245,7 +275,8 @@ def run(args) -> None:
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
     outputs, stats = engine.run_plans(plans, log_fn=log, warmup=args.warmup)
-    tokens, t_forward = stats["tokens"], stats["forward_s"]
+    extra_tokens, extra_s = follow_ups(engine, rows, status, plans, outputs, plan_args)
+    tokens, t_forward = stats["tokens"] + extra_tokens, stats["forward_s"] + extra_s
     log(f"forward done in {t_forward:.1f}s, {tokens / t_forward:.0f} tokens/s")
 
     t0 = time.perf_counter()

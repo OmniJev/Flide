@@ -1,20 +1,20 @@
 """next_token: any chat model, read at the first token of its reply.
 
-The user turn holds the state, then the question and its options lettered A, B, C, ..., then an instruction
-to answer with one letter; thinking is off where the chat template has a switch. The answer is the softmax
-of the output head over the letter tokens at the position where the reply starts. Every question of a
-request shares the state as its prefix.
+A request renders and reads as vLLM's /v1/systemone does for chat models (NextTokenStrategy, vLLM 0.32): the state as
+given (JSON without indentation unless it is a string), a blank line, then "Question: ..." and one line per option
+labeled A, B, ... ("A: name - description"), yes / no for a noul, 0, 1, ... for a score (A, B, ... past ten levels),
+and that type's reply instruction; past 26 labels come AA, AB, ... as OneJev's slots, each one token, up to 256. Each
+label is read as the reply's first token after the chat template's generation prompt. The same requests then give the
+same probabilities on both engines (up to arithmetic). Thinking is off where the chat template has a switch, and every
+question of a request shares the state as its prefix.
 
-This is the family for chat models that were never trained as decision models. It is built in and it
-serves a checkpoint that no installed family claims; it reads up to 26 options.
+This is the family for chat models that were never trained as decision models. It is built in and it serves a
+checkpoint that no installed family claims.
 
-`style="vllm"` renders and reads as vLLM's /v1/systemone does for chat models (NextTokenStrategy, vLLM 0.32): the
-state as given (JSON without indentation unless it is a string), a blank line, then "Question: ..." and one line per
-option labeled A, B, ... ("A: name - description"), yes / no for a noul, 0, 1, ... for a score, and that type's reply
-instruction; each label read as the reply's first token after the chat template's generation prompt. The same
-requests then give the same probabilities on both engines (up to arithmetic). `style="sglang"` renders as SGLang's
-/v1/systemone does (0.5.21, prompt format version 1): the same as vllm except that JSON is compact, a noul opens with
-"Is the following true?" and lists only the outcomes that have a description.
+`style="sglang"` renders as SGLang's /v1/systemone does (0.5.21, prompt format version 1): the same except that JSON is
+compact, a noul opens with "Is the following true?" and lists only the outcomes that have a description.
+`style="flide"` holds the state, then the question and its options lettered A, B, C, ..., then an instruction to
+answer with one letter (AA, AB, ... past 26), read over the label tokens; it takes no images.
 
 Images: a request's `images` (data URLs or base64, as vLLM's /v1/systemone takes them) go ahead of the text in the user
 turn, as vLLM places them, at the image processor's own resolution; they belong to the shared prefix.
@@ -39,6 +39,7 @@ log = logging.getLogger("flide.next_token")
 LETTERS = string.ascii_uppercase
 MARK = "FLIDE_SPLIT_MARK"
 READ = Read("letters")
+WIDE = Read("wide")
 VLLM_LABELS = {"choice": tuple(LETTERS), "noul": ("yes", "no"), "score": tuple(string.digits)}
 VLLM_REPLY = {"choice": "Answer with the letter of one option only.", "noul": "Answer with yes or no only.",
               "score": "Answer with the number of one level only."}
@@ -83,7 +84,7 @@ class NextToken(Format):
     backbones = ()
 
     def __init__(self, model_dir: str, tokenizer=None, max_branch_tokens: int = 32768, max_request_tokens: int = 65536,
-                 style: str = "flide"):
+                 style: str = "vllm"):
         import transformers
 
         if style not in ("flide", "vllm", "sglang"):
@@ -101,37 +102,74 @@ class NextToken(Format):
         if style != "flide":
             self.labels = [label for kind in ("choice", "noul", "score") for label in VLLM_LABELS[kind]]
             self.letter_ids = self._reply_label_ids(self.labels)
-            return
-        self.letter_ids = []
-        for letter in LETTERS:
-            ids = self.tokenizer.encode(letter, add_special_tokens=False)
-            if len(ids) != 1:
-                break
-            self.letter_ids.append(ids[0])
-        if len(self.letter_ids) < 2:
-            raise ValueError("the tokenizer does not hold A and B as single tokens")
+            self.rows = {}
+            for i, label in enumerate(self.labels):
+                self.rows.setdefault(label, i)
+        else:
+            self.letter_ids = []
+            for letter in LETTERS:
+                ids = self.tokenizer.encode(letter, add_special_tokens=False)
+                if len(ids) != 1:
+                    break
+                self.letter_ids.append(ids[0])
+            if len(self.letter_ids) < 2:
+                raise ValueError("the tokenizer does not hold A and B as single tokens")
+        self.pairs, self.pair_ids = self._pairs() if len(self.letter_ids) >= len(LETTERS) else ([], [])
+        if style != "flide":
+            self.rows.update((label, len(self.labels) + k) for k, label in enumerate(self.pairs))
+        self.max_choice_options = self.max_score_levels = min(len(LETTERS) + len(self.pairs), 256) if self.pairs \
+            else len(self.letter_ids)
+
+    def _reply_token(self, label: str) -> int | None:
+        """The label's token as the reply's first token, as vLLM finds it: the generation prompt's ids after its last
+        added token, decoded, the label appended, encoded again; None when the label adds more than one token."""
+        tok = self.tokenizer
+        if getattr(self, "_reply_tail", None) is None:
+            probe = tok.apply_chat_template([{"role": "user", "content": "x"}], tokenize=False,
+                                            add_generation_prompt=True, **self.template_kwargs)
+            ids = tok.encode(probe, add_special_tokens=False)
+            added = set(tok.get_added_vocab().values())
+            self._reply_tail = ids[max((i + 1 for i, t in enumerate(ids) if t in added), default=0):]
+            self._reply_text = tok.decode(self._reply_tail)
+        ext = tok.encode(self._reply_text + label, add_special_tokens=False)
+        return ext[-1] if ext[:-1] == self._reply_tail else None
 
     def _reply_label_ids(self, labels) -> list[int]:
-        """Each label's token as the reply's first token, as vLLM finds it: the generation prompt's ids after its last
-        added token, decoded, the label appended, encoded again; the label must add exactly one distinct token."""
-        tok = self.tokenizer
-        probe = tok.apply_chat_template([{"role": "user", "content": "x"}], tokenize=False, add_generation_prompt=True,
-                                        **self.template_kwargs)
-        ids = tok.encode(probe, add_special_tokens=False)
-        added = set(tok.get_added_vocab().values())
-        tail = ids[max((i + 1 for i, t in enumerate(ids) if t in added), default=0):]
-        text = tok.decode(tail)
+        """Each label's reply token (`_reply_token`); every label must add exactly one distinct token."""
         out: list[int] = []
         for label in labels:
-            ext = tok.encode(text + label, add_special_tokens=False)
-            if ext[:-1] != tail or ext[-1] in out:
+            i = self._reply_token(label)
+            if i is None or i in out:
                 raise ValueError(f"label {label!r} is not one distinct token after this model's chat prompt")
-            out.append(ext[-1])
+            out.append(i)
         return out
+
+    def _pairs(self) -> tuple[list[str], list[int]]:
+        """Labels past Z, as OneJev's slots: AA, AB, ... that are one token where they are read (the reply's first
+        token, or a token of their own in style flide) and distinct from every other label, up to 256 labels."""
+        taken = set(self.letter_ids)
+        labels, ids = [], []
+        for label in (a + b for a in LETTERS for b in LETTERS):
+            if len(labels) == 256 - len(LETTERS):
+                break
+            if self.style != "flide":
+                i = self._reply_token(label)
+            else:
+                enc = self.tokenizer.encode(label, add_special_tokens=False)
+                i = enc[0] if len(enc) == 1 else None
+            if i is not None and i not in taken:
+                taken.add(i)
+                labels.append(label)
+                ids.append(i)
+        return labels, ids
 
     def load_heads(self, backbone) -> dict[str, Any]:
         weight, bias = backbone.output_head()
-        return {"letters": TokenRows(weight, self.letter_ids, bias, softcap=getattr(backbone, "logit_softcap", None))}
+        softcap = getattr(backbone, "logit_softcap", None)
+        heads = {"letters": TokenRows(weight, self.letter_ids, bias, softcap=softcap)}
+        if self.pairs:
+            heads["wide"] = TokenRows(weight, self.letter_ids + self.pair_ids, bias, softcap=softcap)
+        return heads
 
 
     def _plain(self, entry: Any) -> str:
@@ -153,7 +191,11 @@ class NextToken(Format):
             descs = [None] * len(names)
         else:
             raise TypeError(f"unknown question type {type(q).__name__}")
-        labels = VLLM_LABELS[kind]
+        labels, reply = VLLM_LABELS[kind], VLLM_REPLY[kind]
+        if kind != "noul" and len(names) > len(labels):
+            labels = tuple(LETTERS) + tuple(self.pairs)
+            word = "option" if kind == "choice" else "level"
+            reply = f"Answer with the {'letter' if len(names) <= len(LETTERS) else 'label'} of one {word} only."
         if len(names) > len(labels):
             raise ValueError(f"{len(names)} options; a {kind} reads at most {len(labels)}")
         raw = q.instructions
@@ -169,8 +211,8 @@ class NextToken(Format):
                     lines.append(f"{label}: {desc}" if desc else label)
             else:
                 lines.append(f"{label}: {name} - {desc}" if desc else f"{label}: {name}")
-        lines.append(VLLM_REPLY[kind])
-        return kind, names, "\n".join(lines), [self.labels.index(label) for label in labels[: len(names)]]
+        lines.append(reply)
+        return kind, names, "\n".join(lines), [self.rows[label] for label in labels[: len(names)]]
 
     def _question(self, q) -> tuple[str, list[str], list[str]]:
         """(kind, option names, suffix text)."""
@@ -194,14 +236,16 @@ class NextToken(Format):
             instructions = _text(q.instructions) or "Which level applies?"
         else:
             raise TypeError(f"unknown question type {type(q).__name__}")
-        if len(names) > len(self.letter_ids):
-            raise ValueError(f"{len(names)} options; the next_token format reads at most {len(self.letter_ids)}")
+        if len(names) > self.max_choice_options:
+            raise ValueError(f"{len(names)} options; the next_token format reads at most {self.max_choice_options}")
+        letters = LETTERS if len(names) <= len(self.letter_ids) else list(LETTERS) + self.pairs
         lines = []
-        for letter, name, desc in zip(LETTERS, names, descs):
+        for letter, name, desc in zip(letters, names, descs):
             label = name if kind != "score" else f"level {name}"
             lines.append(f"{letter}. {label}: {desc}" if desc else f"{letter}. {label}")
+        word = "letter" if len(names) <= len(self.letter_ids) else "label"
         suffix = (f"Question: {instructions}\nOptions:\n" + "\n".join(lines)
-                  + f"\nAnswer with the letter of one option ({', '.join(LETTERS[: len(names)])}).")
+                  + f"\nAnswer with the {word} of one option ({', '.join(letters[: len(names)])}).")
         return kind, names, suffix
 
     def _render(self, state: Any, suffix: str, images: int = 0) -> str:
@@ -234,8 +278,12 @@ class NextToken(Format):
             except ImportError as e:
                 if "orchvision" not in str(e):
                     raise
-                raise ImportError("images and video need torchvision; install it from the same index as torch, e.g. "
-                                  "pip install torchvision --index-url https://download.pytorch.org/whl/cu126") from e
+                import torch
+
+                cuda = torch.version.cuda
+                where = f" --index-url https://download.pytorch.org/whl/cu{cuda.replace('.', '')}" if cuda else ""
+                raise ImportError(f"images and video need torchvision built for torch {torch.__version__}: "
+                                  f"pip install torchvision{where}") from e
             if p.tokenizer.chat_template is None:
                 p.tokenizer.chat_template = p.chat_template
         return p
@@ -340,10 +388,15 @@ class NextToken(Format):
         if total > self.max_request_tokens:
             raise ValueError(f"request is {total} tokens, limit is {self.max_request_tokens}")
         data = [(qid, kind, names) for qid, kind, names, _ in questions]
+        if self.style != "flide":
+            wide = any(max(at) >= len(self.labels) for _, _, (_, at), _ in questions)
+        else:
+            wide = any(len(names) > len(self.letter_ids) for _, _, names, _ in questions)
+        reads = (WIDE,) if wide else (READ,)
         if refs:
             prefix, vision = self._vision(head + tails[0][:m], [self._open(r) for r in refs], texts[0], suffixes[0])
-            return Plan(prefix, suffixes, (READ,), data, vision=vision)
-        return Plan(head + tails[0][:m], suffixes, (READ,), data)
+            return Plan(prefix, suffixes, reads, data, vision=vision)
+        return Plan(head + tails[0][:m], suffixes, reads, data)
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         import math

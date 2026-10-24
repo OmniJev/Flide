@@ -48,6 +48,7 @@ from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
+from ..base import capture_progress
 from .ops import add_rms, final_norm, gated_rms, last_qkv, qk_norm_rope, rms, rows_ranges, swiglu
 from .ops import gate as gate_out
 
@@ -669,8 +670,9 @@ class RequestGraphs:
         t0 = time.perf_counter()
         size = lambda s: s[1] * s[2] if s[0] == "branch" else s[1]
         shapes = sorted((s for s in self.shapes() if max_tokens is None or size(s) <= max_tokens), key=lambda s: -size(s))
-        for s in shapes:
+        for i, s in enumerate(shapes, 1):
             self.capture(s)
+            capture_progress(i, len(shapes), t0, "CUDA graphs", log_fn or log.info)
         msg = f"captured {len(self.graphs)} CUDA graphs in {time.perf_counter() - t0:.1f}s"
         (log_fn or log.info)(msg)
 
@@ -678,8 +680,9 @@ class RequestGraphs:
         """Capture the flat graphs up to `max_tokens` (all when None)."""
         t0 = time.perf_counter()
         shapes = [s for s in self.flat_shapes() if max_tokens is None or s[1] <= max_tokens]
-        for s in sorted(shapes, key=lambda s: -s[1]):
+        for i, s in enumerate(sorted(shapes, key=lambda s: -s[1]), 1):
             self.capture(s)
+            capture_progress(i, len(shapes), t0, "flat graphs", log_fn or log.info)
         (log_fn or log.info)(f"captured {len(shapes)} flat graphs in {time.perf_counter() - t0:.1f}s")
 
     def capture_sessions(self, log_fn=None) -> None:

@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Entry = Union[str, dict[str, Any], list[Any], None]
 
-MAX_CHOICE_OPTIONS = 255
-MAX_SCORE_LEVELS = 10
+MAX_CHOICE_OPTIONS = 256
+MAX_SCORE_LEVELS = 256
 
 
 class _Lenient(BaseModel):

@@ -22,6 +22,7 @@ Flide 在一次前向传播里把状态分叉给所有问题，状态只读一�
 
 ## 🔥 动态
 
+- 🔥 **2026-10-25** Flide 0.1.2 新增两个决策模型家族（Intern-Decision、torchcast），每道题最多支持 256 个选项。欢迎提 PR。
 - 🔥 **2026-10-24** Flide 0.1.0 已发布到 [PyPI](https://pypi.org/project/flide/)，欢迎试用。
 
 
@@ -107,13 +108,18 @@ EOF
 
 ## 模型
 
-| 骨干 | 尺寸 | 输入 |
+| 模型 | 检查点 | 输入 |
 |---|---|---|
-| Qwen3.5 | 0.8B, 2B, 4B, 9B, 27B | 文本、图片、视频 |
-| Gemma 4 | E2B, E4B, 12B, 26B-A4B, 31B | 文本、图片 |
+| Gemma 4 | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | 文本、图片 |
+| Intern-Decision | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | 文本 |
+| OneJev | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | 文本、图片、视频 |
+| Open-Jev | `ZefanCai/Open-Jev-2B`, `-9B` | 文本 |
+| Qwen3.5 | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
+| torchcast | `torchcast-ai/torchcast-decision-27b` | 文本 |
 
-用自己方式读答案的 OneJev 和 Open-Jev 已经包含在 Flide 里。新增一个模型族，只需在 `plugins/` 里加一个目录，
-再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过 `flide.formats` 入口点接入。
+基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。
+新增一个模型族，只需在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
+`flide.formats` 入口点接入。
 
 ## 选项
 

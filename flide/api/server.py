@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import ValidationError
 
 from .. import __version__
+from ..formats.base import check_limits
 from .schema import ModelMetadata, ModelMetadataList, SystemOneRequest
 
 log = logging.getLogger("flide.server")
@@ -82,9 +83,14 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         plan = await asyncio.wrap_future(batcher.plan(req, **options))
         t1 = time.perf_counter()
         branches, info = await asyncio.wrap_future(batcher.forward(plan))
+        queue_s, forward_s = info["queue_s"], info["forward_s"]
+        while (nxt := await asyncio.wrap_future(batcher.follow_up(req, plan, branches, **options))) is not None:
+            plan = nxt
+            branches, info = await asyncio.wrap_future(batcher.forward(plan))
+            queue_s, forward_s = queue_s + info["queue_s"], forward_s + info["forward_s"]
         t2 = time.perf_counter()
         response, meta = await asyncio.wrap_future(batcher.finish(req, plan, branches, **options))
-        meta["timing"] = {"plan_s": t1 - t0, "queue_s": info["queue_s"], "forward_s": info["forward_s"],
+        meta["timing"] = {"plan_s": t1 - t0, "queue_s": queue_s, "forward_s": forward_s,
                           "gpu_wait_s": t2 - t1, "total_s": time.perf_counter() - t0}
         meta["path"] = info["path"]
         meta["round"] = info["round"]
@@ -127,10 +133,13 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         options = {"debias": int(request.query_params.get("debias", app.state.debias)),
                    "debug": bool(request.query_params.get("debug"))}
         try:
+            check_limits(family, req)
             response, meta = await answer(req, **options)
         except ValueError as exc:
             return JSONResponse(status_code=422,
                                 content={"detail": [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]})
+        except ImportError as exc:
+            return JSONResponse(status_code=500, content={"detail": str(exc)})
         response.model = model_name
         payload = response.model_dump()
         payload[family.meta_key] = meta

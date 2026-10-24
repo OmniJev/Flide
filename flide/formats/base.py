@@ -66,6 +66,8 @@ class Format:
     backbones: ClassVar[tuple[str, ...]] = ()
     meta_key: ClassVar[str] = "meta"
     aliases: ClassVar[tuple[str, ...]] = ()
+    max_choice_options: ClassVar[int] = 255
+    max_score_levels: ClassVar[int] = 10
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -89,6 +91,21 @@ class Format:
     def plan(self, request, **options) -> Plan:
         raise NotImplementedError
 
+    def follow_up(self, request, plan: Plan, outputs: Sequence[Sequence[Any]], **options) -> Plan | None:
+        """A further plan that depends on this plan's outputs (a second read of the questions the model is unsure
+        about), or None. The runtime runs it and asks again; `finish` gets the last plan and its outputs, so a family
+        carries what it needs from earlier rounds in that plan's `data`."""
+        return None
+
     def finish(self, request, plan: Plan, outputs: Sequence[Sequence[Any]], **options):
         """`outputs[b][r]` is the head output of read r of branch b: one row per position, as lists."""
         raise NotImplementedError
+
+
+def check_limits(family: Format, request) -> None:
+    """Refuses a request with a choice or a score larger than the family reads."""
+    for q in request.questions.values():
+        if q.type == "choice" and len(q.criteria) > family.max_choice_options:
+            raise ValueError(f"choice question has {len(q.criteria)} options, maximum is {family.max_choice_options}")
+        if q.type == "score" and len(q.criteria) > family.max_score_levels:
+            raise ValueError(f"score question has {len(q.criteria)} levels, maximum is {family.max_score_levels}")

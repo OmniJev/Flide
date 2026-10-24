@@ -18,6 +18,7 @@ import time
 import torch
 
 from ... import settings
+from ..base import capture_progress
 from . import _Meta, window_ranges
 
 log = logging.getLogger("flide.graphs")
@@ -145,8 +146,10 @@ class GemmaGraphs:
 
     def capture_all(self, log_fn=None, max_tokens: int | None = None) -> None:
         t0 = time.perf_counter()
-        for L in sorted((x for x in self.ladder if max_tokens is None or x <= max_tokens), reverse=True):
+        lengths = sorted((x for x in self.ladder if max_tokens is None or x <= max_tokens), reverse=True)
+        for i, L in enumerate(lengths, 1):
             self.capture(L)
+            capture_progress(i, len(lengths), t0, "CUDA graphs (gemma4)", log_fn or log.info)
         (log_fn or log.info)(f"captured {len(self.graphs)} CUDA graphs (gemma4) in {time.perf_counter() - t0:.1f}s")
 
     def _stage_dummy(self, L: int) -> None:

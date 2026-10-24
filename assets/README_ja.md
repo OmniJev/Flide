@@ -23,6 +23,7 @@ Flide は意思決定モデルのための推論エンジンです。1 つのリ
 
 ## 🔥 ニュース
 
+- 🔥 **2026-10-25** Flide 0.1.2 で意思決定モデルのファミリーを 2 つ（Intern-Decision、torchcast）追加し、1 問あたり最大 256 個の選択肢に対応しました。PR を歓迎します。
 - 🔥 **2026-10-24** Flide 0.1.0 を [PyPI](https://pypi.org/project/flide/) で公開しました。ぜひお試しください。
 
 
@@ -108,13 +109,18 @@ EOF
 
 ## モデル
 
-| バックボーン | サイズ | 入力 |
+| モデル | チェックポイント | 入力 |
 |---|---|---|
-| Qwen3.5 | 0.8B, 2B, 4B, 9B, 27B | テキスト、画像、動画 |
-| Gemma 4 | E2B, E4B, 12B, 26B-A4B, 31B | テキスト、画像 |
+| Gemma 4 | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | テキスト、画像 |
+| Intern-Decision | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | テキスト |
+| OneJev | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | テキスト、画像、動画 |
+| Open-Jev | `ZefanCai/Open-Jev-2B`, `-9B` | テキスト |
+| Qwen3.5 | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
+| torchcast | `torchcast-ai/torchcast-decision-27b` | テキスト |
 
-独自の方法で答えを読む OneJev と Open-Jev は Flide に含まれています。新しいモデルファミリーは `plugins/` に
-ディレクトリを 1 つ加え、`pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
+Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、
+それぞれのリリースと同じ方法で答えを読みます。新しいモデルファミリーは `plugins/` にディレクトリを 1 つ加え、
+`pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
 
 ## オプション
 

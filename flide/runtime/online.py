@@ -84,6 +84,16 @@ class Batcher:
         fut.add_done_callback(lambda f: f.exception() is not None and self._planned(-1))
         return fut
 
+    def follow_up(self, request, plan, branches, **options) -> cf.Future:
+        """The family's next plan for a request after `plan`, or None; a next plan is counted until its `forward`."""
+        def run():
+            nxt = self._format().follow_up(request, plan, branches, **options)
+            if nxt is not None:
+                self._planned(1)
+            return nxt
+
+        return self._planners.submit(run)
+
     def finish(self, request, plan, branches, **options) -> cf.Future:
         return self._planners.submit(lambda: self._format().finish(request, plan, branches, **options))
 
