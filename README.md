@@ -47,18 +47,8 @@ through the `/v1/systemone` API that vLLM and SGLang also serve.
 ### 1. Install
 
 ```bash
-pip install flide
-```
-
-The NVIDIA driver is all a machine needs. PyTorch brings the CUDA runtime, and Flide ships its kernels compiled for
-the H100 and H200 and for the A40, A10 and RTX 30 series. On other GPUs they compile once at the first start.
-Images and video also need torchvision, installed from the same index as torch.
-
-PyTorch's wheels on PyPI need driver 580 or newer. With an older driver, install PyTorch's CUDA 12.6 build first, with torchvision.
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-pip install flide
+uv venv -p 3.12 && source .venv/bin/activate
+uv pip install flide torchvision
 ```
 
 ### 2. Start a server
@@ -82,7 +72,7 @@ python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
 flide serve --model open-jev-2b
 ```
 
-`flide serve` listens on all interfaces at port 8000, as vLLM does; pass `--host 127.0.0.1` to keep it local.
+`flide serve` listens on all interfaces at port 8000; pass `--host 127.0.0.1` to keep it local.
 
 ### 3. Send a request
 
@@ -95,6 +85,23 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
     "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
   }
 }'
+```
+
+OneJev models also read images. Put `<image:1>` where the photo belongs in the state and send the photo in `media`.
+
+```bash
+IMG=$(base64 -w0 photo.jpg)
+curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d @- <<EOF
+{
+  "state": {"ticket": "Order #1182 arrived with a cracked screen. The customer asks for a refund.", "photo": "<image:1>"},
+  "media": [{"type": "image", "data": "data:image/jpeg;base64,$IMG"}],
+  "questions": {
+    "cracked": {"type": "noul", "instructions": "The photo shows a cracked screen"},
+    "action": {"type": "choice", "instructions": "What should support do next?",
+               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}}
+  }
+}
+EOF
 ```
 
 Every answer carries the probability of each option, ready for a threshold.

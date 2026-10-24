@@ -47,17 +47,8 @@ Flide は意思決定モデルのための推論エンジンです。1 つのリ
 ### 1. インストール
 
 ```bash
-pip install flide
-```
-
-必要なのは NVIDIA ドライバだけです。CUDA ランタイムは PyTorch に含まれ、Flide は H100、H200 と A40、A10、RTX 30
-シリーズ向けにコンパイル済みのカーネルを同梱しています。それ以外の GPU では最初の起動時に一度だけコンパイルします。画像と動画には torchvision も必要です。torch と同じインデックスから入れてください。
-
-PyPI の PyTorch にはドライバ 580 以降が必要です。古いドライバでは、先に PyTorch の CUDA 12.6 版を torchvision と一緒に入れてください。
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-pip install flide
+uv venv -p 3.12 && source .venv/bin/activate
+uv pip install flide torchvision
 ```
 
 ### 2. サーバーを起動する
@@ -81,7 +72,7 @@ python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
 flide serve --model open-jev-2b
 ```
 
-`flide serve` は vLLM と同じくすべてのインターフェースのポート 8000 で待ち受けます。ローカルだけにするには `--host 127.0.0.1` を付けてください。
+`flide serve` はすべてのインターフェースのポート 8000 で待ち受けます。ローカルだけにするには `--host 127.0.0.1` を付けてください。
 
 ### 3. リクエストを送る
 
@@ -94,6 +85,23 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
     "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
   }
 }'
+```
+
+OneJev モデルは画像も読めます。state の中で写真が入る位置に `<image:1>` と書き、写真を `media` に入れて一緒に送ります。
+
+```bash
+IMG=$(base64 -w0 photo.jpg)
+curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d @- <<EOF
+{
+  "state": {"ticket": "Order #1182 arrived with a cracked screen. The customer asks for a refund.", "photo": "<image:1>"},
+  "media": [{"type": "image", "data": "data:image/jpeg;base64,$IMG"}],
+  "questions": {
+    "cracked": {"type": "noul", "instructions": "The photo shows a cracked screen"},
+    "action": {"type": "choice", "instructions": "What should support do next?",
+               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}}
+  }
+}
+EOF
 ```
 
 答えにはそれぞれの選択肢の確率が付くので、そのまましきい値と比べられます。

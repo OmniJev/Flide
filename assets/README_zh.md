@@ -46,17 +46,8 @@ Flide 在一次前向传播里把状态分叉给所有问题，状态只读一�
 ### 1. 安装
 
 ```bash
-pip install flide
-```
-
-机器上只需要 NVIDIA 驱动。CUDA 运行时由 PyTorch 带来，Flide 自带为 H100、H200 以及 A40、A10、RTX 30 系列编译好的内核，
-其他显卡在第一次启动时编译一次。处理图片和视频还需要 torchvision，请从安装 torch 的同一个源安装。
-
-PyPI 上的 PyTorch 需要 580 及以上的驱动。驱动较旧时，先装 PyTorch 的 CUDA 12.6 版本，连同 torchvision。
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-pip install flide
+uv venv -p 3.12 && source .venv/bin/activate
+uv pip install flide torchvision
 ```
 
 ### 2. 启动服务
@@ -80,7 +71,7 @@ python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
 flide serve --model open-jev-2b
 ```
 
-`flide serve` 和 vLLM 一样默认监听所有网卡的 8000 端口，只想本机访问时加 `--host 127.0.0.1`。
+`flide serve` 默认监听所有网卡的 8000 端口，只想本机访问时加 `--host 127.0.0.1`。
 
 ### 3. 发送请求
 
@@ -93,6 +84,23 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
     "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
   }
 }'
+```
+
+OneJev 模型也能读图片。在 state 里图片该出现的位置写 `<image:1>`，再把图片放进 `media` 一起发送。
+
+```bash
+IMG=$(base64 -w0 photo.jpg)
+curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d @- <<EOF
+{
+  "state": {"ticket": "Order #1182 arrived with a cracked screen. The customer asks for a refund.", "photo": "<image:1>"},
+  "media": [{"type": "image", "data": "data:image/jpeg;base64,$IMG"}],
+  "questions": {
+    "cracked": {"type": "noul", "instructions": "The photo shows a cracked screen"},
+    "action": {"type": "choice", "instructions": "What should support do next?",
+               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}}
+  }
+}
+EOF
 ```
 
 每个答案都带着每个选项的概率，可以直接拿去和阈值比较。
