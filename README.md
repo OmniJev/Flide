@@ -1,0 +1,125 @@
+<p align="center">
+  <img alt="Flide: Accelerating Decision Inference with Exact State Forking" src="assets/banner.svg" width="100%">
+</p>
+
+<p align="center"><b>English</b> · <a href="assets/README_zh.md">简体中文</a> · <a href="assets/README_ja.md">日本語</a></p>
+
+<p align="center">
+  <a href="https://pypi.org/project/flide/"><img alt="PyPI" src="https://img.shields.io/pypi/v/flide?style=flat-square&logo=pypi&logoColor=white&color=3A86FF"></a>
+  <a href="https://github.com/OmniJev/Flide"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-OmniJev%2FFlide-18202F?style=flat-square&logo=github&logoColor=white"></a>
+  <a href="https://flide.org"><img alt="Website" src="https://img.shields.io/badge/Website-flide.org-00A890?style=flat-square&logo=googlechrome&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
+  <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-F28E2B?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
+</p>
+
+<p align="center"><a href="#-news">News</a> · <a href="#speed">Speed</a> · <a href="#exact-answers">Exact answers</a> · <a href="#quick-start">Quick start</a> · <a href="#models">Models</a> · <a href="#options">Options</a></p>
+
+Flide serves decision models. A request holds a state, such as an agent's trajectory or a document, and typed
+questions about it. Flide forks the state into all of its questions inside one forward pass, so the state is read
+once and every question gets the answer it would get if it were asked alone. Answers come back as probabilities
+through the `/v1/systemone` API that vLLM and SGLang also serve.
+
+
+## 🔥 News
+
+- 🔥 **2026-10-24** We released Flide 0.1.0 on [PyPI](https://pypi.org/project/flide/). Welcome to have a try.
+
+
+<p align="center">
+  <img alt="Fork the state into every question: a generation engine runs every question as a sequence and computes part of the state again, multi-item scoring adds delimiters that change the answers, and Flide forks the state at its last token" src="assets/fork.svg" width="100%">
+</p>
+
+## Speed
+
+<p align="center">
+  <img alt="Speed of Flide, vLLM and SGLang on one H200 with Qwen3.5-0.8B" src="assets/speed.svg" width="100%">
+</p>
+
+## Exact answers
+
+<p align="center">
+  <img alt="Shared work, exact answers: Flide stays within 1.1 points of a float32 reference, multi-item scoring moves 0.9 to 14.8 points; with --batch-invariant a request gets the same bits however it is batched" src="assets/exact.svg" width="100%">
+</p>
+
+## Quick start
+
+### 1. Install
+
+```bash
+pip install flide
+```
+
+The NVIDIA driver is all a machine needs. PyTorch brings the CUDA runtime, and Flide ships its kernels compiled for
+the H100 and H200 and for the A40, A10 and RTX 30 series. On other GPUs they compile once at the first start.
+Images and video also need torchvision, installed from the same index as torch.
+
+PyTorch's wheels on PyPI need driver 580 or newer. With an older driver, install PyTorch's CUDA 12.6 build first, with torchvision.
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install flide
+```
+
+### 2. Start a server
+
+Any chat model on Qwen3.5 or Gemma 4 serves as it is and answers through its next token.
+
+```bash
+flide serve --model Qwen/Qwen3.5-4B
+```
+
+OneJev models read their answers their own way, and Flide serves them as they are too.
+
+```bash
+flide serve --model OmniJev/OneJev1.6-0.8B
+```
+
+An Open-Jev release is an adapter on a Qwen3.5 base. Merge it into a checkpoint once, then serve that.
+
+```bash
+python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
+flide serve --model open-jev-2b
+```
+
+`flide serve` listens on all interfaces at port 8000, as vLLM does; pass `--host 127.0.0.1` to keep it local.
+
+### 3. Send a request
+
+```bash
+curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
+  "state": "Order #1182 arrived with a cracked screen. The customer asks for a refund and attached two photos.",
+  "questions": {
+    "action": {"type": "choice", "instructions": "What should support do next?",
+               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}},
+    "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
+  }
+}'
+```
+
+Every answer carries the probability of each option, ready for a threshold.
+
+## Models
+
+| Backbone | Sizes | Inputs |
+|---|---|---|
+| Qwen3.5 | 0.8B, 2B, 4B, 9B, 27B | text, images, video |
+| Gemma 4 | E2B, E4B, 12B, 26B-A4B, 31B | text, images |
+
+OneJev and Open-Jev, which read their answers their own way, come with Flide. A new family is one folder in
+`plugins/` and one line in `pyproject.toml`; a separate package can also join through the `flide.formats` entry point.
+
+## Options
+
+| Option | What it does |
+|---|---|
+| `--session-cache-gb 40` | keeps the states of earlier requests, so an agent's next step reads only what is new |
+| `--batch-invariant` | the same bits for a request whatever it is batched with, at some cost in speed |
+| `--quantize fp8` | Qwen3.5 in FP8 on Ada, Hopper and Blackwell GPUs |
+| `--frontends 2` | HTTP, rendering and tokenizing in two processes of their own, for many clients |
+
+## License
+
+Apache-2.0. `flide/kernels/gdn.py` holds a kernel derived from two kernels of
+[flash-linear-attention](https://github.com/fla-org/flash-linear-attention) (MIT); THIRD_PARTY_NOTICES lists it with
+the other code Flide builds on.

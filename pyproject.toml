@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flide"
+version = "0.1.0"
+description = "Accelerating decision inference with exact state forking"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.12",
+    "transformers>=5.0",
+    "flash-linear-attention>=0.5.2,<0.6",
+    "accelerate",
+    "huggingface_hub",
+    "pydantic>=2",
+    "pillow",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.scripts]
+flide = "flide.cli:main"
+
+[project.urls]
+Homepage = "https://flide.org"
+Repository = "https://github.com/OmniJev/Flide"
+
+[project.entry-points."flide.formats"]
+onejev = "flide_onejev:OneJev"
+open_jev = "flide_open_jev:OpenJev"
+
+[tool.setuptools.package-data]
+flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz"]
+
+[tool.setuptools.packages.find]
+where = [".", "plugins/onejev", "plugins/open_jev"]
+include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*"]
