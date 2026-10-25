@@ -52,6 +52,8 @@ Flide stays within 1.1 points of a float32 reference, the closest of any engine,
 
 ## Quick start
 
+See the [docs](https://docs.flide.org) for every model, the API and all options.
+
 ### 1. Install
 
 ```bash
@@ -113,8 +115,6 @@ EOF
 ```
 
 Every answer carries the probability of each option, ready for a threshold.
-
-The [docs](https://docs.flide.org) cover every model family, the API, the options and the Python engine.
 
 ## Models
 
