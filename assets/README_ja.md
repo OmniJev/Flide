@@ -111,12 +111,12 @@ EOF
 
 | モデル | チェックポイント | 入力 |
 |---|---|---|
-| Gemma 4 | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | テキスト、画像 |
-| Intern-Decision | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | テキスト |
-| OneJev | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | テキスト、画像、動画 |
-| Open-Jev | `ZefanCai/Open-Jev-2B`, `-9B` | テキスト |
-| Qwen3.5 | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
-| torchcast | `torchcast-ai/torchcast-decision-27b` | テキスト |
+| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | テキスト、画像 |
+| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | テキスト |
+| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | テキスト、画像、動画 |
+| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | テキスト |
+| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | テキスト |
 
 Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、
 それぞれのリリースと同じ方法で答えを読みます。新しいモデルファミリーは `plugins/` にディレクトリを 1 つ加え、

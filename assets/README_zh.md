@@ -110,12 +110,12 @@ EOF
 
 | 模型 | 检查点 | 输入 |
 |---|---|---|
-| Gemma 4 | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | 文本、图片 |
-| Intern-Decision | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | 文本 |
-| OneJev | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | 文本、图片、视频 |
-| Open-Jev | `ZefanCai/Open-Jev-2B`, `-9B` | 文本 |
-| Qwen3.5 | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
-| torchcast | `torchcast-ai/torchcast-decision-27b` | 文本 |
+| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | 文本、图片 |
+| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | 文本 |
+| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | 文本、图片、视频 |
+| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | 文本 |
+| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | 文本 |
 
 基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。
 新增一个模型族，只需在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
