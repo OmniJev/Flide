@@ -1,4 +1,4 @@
-"""Model families are plugins. The core ships one, the generic `next_token` family, and imports no other by name.
+"""Model families are plugins. The core ships two generic families, `next_token` and `template`, and imports no other by name.
 
 A family package registers its Format subclass in the `flide.formats` entry point group:
 
@@ -51,7 +51,7 @@ def load_plugins() -> None:
     if _loaded:
         return
     _loaded = True
-    from . import next_token
+    from . import next_token, template
     for ep in entry_points(group=GROUP):
         try:
             ep.load()

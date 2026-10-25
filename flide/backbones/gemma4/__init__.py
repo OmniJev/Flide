@@ -156,7 +156,10 @@ class Gemma4(Backbone):
         elif vision:
             arch = (transformers.Gemma4UnifiedForConditionalGeneration if config.model_type == "gemma4_unified"
                     else transformers.Gemma4ForConditionalGeneration)
-            cfg, key_map = config, []
+            cfg, key_map = config, ([(r"^model\.vision_embedder\.", "model.embed_vision."),
+                                     (r"^model\.embed_vision\.embedding_projection",
+                                      "model.embed_vision.multimodal_embedder.embedding_projection")]
+                                    if config.model_type == "gemma4_unified" else [])
         else:
             arch, cfg = transformers.Gemma4ForCausalLM, config.get_text_config()
             key_map = [(r"^model\.language_model\.", "model.")]

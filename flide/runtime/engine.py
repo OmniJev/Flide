@@ -15,12 +15,17 @@ log = logging.getLogger("flide.engine")
 
 
 def resolve_model(name: str) -> str:
-    """A local directory, or a Hub repository id downloaded (or found in the cache) as a snapshot."""
-    if Path(name).is_dir():
-        return name
-    from huggingface_hub import snapshot_download
+    """A local directory, or a Hub repository id downloaded (or found in the cache) as a snapshot; a LoRA adapter
+    becomes the directory it runs from, its base checkpoint with the adapter (lora.view)."""
+    from .. import lora
 
-    return snapshot_download(name)
+    if Path(name).is_dir():
+        d = name
+    else:
+        from huggingface_hub import snapshot_download
+
+        d = snapshot_download(name)
+    return lora.view(d, resolve_model) if lora.is_adapter(d) else d
 
 
 def model_config(model_dir: str):

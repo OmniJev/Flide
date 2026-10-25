@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.2"
+version = "0.1.3"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -36,7 +36,7 @@ intern_decision = "flide_intern_decision:InternDecision"
 torchcast = "flide_torchcast:Torchcast"
 
 [tool.setuptools.package-data]
-flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz"]
+flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
 
 [tool.setuptools.packages.find]
 where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast"]

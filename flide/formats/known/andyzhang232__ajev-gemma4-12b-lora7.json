@@ -1,0 +1,37 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "andyzhang232/ajev-gemma4-12b-lora7"
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "You are a decision model. Read the state and answer the question by picking exactly one option.\n\n### State\n{{ state_text }}\n\n### Question\n{{ question.instructions if 'instructions' in question.given else '' }}\n{% if question.type == 'noul' %}Decide whether the statement holds.{% elif question.type == 'choice' %}Pick the single best option.{% else %}Pick the level that best fits; levels are ordered from lowest to highest.{% endif %}\n\n### Options\n{% for o in options %}{% if not loop.first %}\n{% endif %}{%- if question.type == 'noul' -%}{%- set name = 'Yes' if o.key == 'true' else 'No' -%}{%- set desc = o.description if o.description else ('Yes, the statement holds.' if o.key == 'true' else 'No, the statement does not hold.') -%}{%- else -%}{%- set name = o.key -%}{%- set desc = o.description -%}{%- endif -%}{{ o.label }}. {{ name }}{% if desc %}: {{ desc }}{% endif %}{% endfor %}\n\nReply with the {{ 'letter' if options | length <= 26 else 'code' }} of the best option only."
+    }
+  ],
+  "state": {
+    "text": "{{ state if state is string else state | json(compact=True) }}",
+    "max_tokens": 16384,
+    "keep": "head",
+    "marks": {
+      "head": [
+        "",
+        " …[truncated]"
+      ]
+    }
+  },
+  "labels": "A-Z+",
+  "label_forms": [
+    "{label}",
+    " {label}"
+  ],
+  "max_options": 255,
+  "noul": [
+    "true",
+    "false"
+  ],
+  "temperature": "@ajev_lm_config.json#temperatures",
+  "max_prompt_tokens": 262144
+}

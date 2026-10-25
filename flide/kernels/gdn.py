@@ -63,9 +63,10 @@ def _slot_x(q, k, v, A, beta, g, o, h0, h0_idx, ht, cu, i_n, i_h, i_v, scale, H:
             K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr, BV: tl.constexpr, USE_H0: tl.constexpr,
             STORE_HT: tl.constexpr, H0_SK: tl.constexpr, H0_SV: tl.constexpr):
     """The recurrence over one slot's chunks and its outputs, with the corrected values made from the chunk's solved
-    matrix: v_new = (I + A)^-1 diag(beta) (v - (exp(g) k) S), the 16-bit operands rounded as the products are formed,
-    so no w, u kernel and none of its two [T, HV, 128] outputs. H0_SK, H0_SV: the strides of a key and a value in a
-    row of h0."""
+    matrix: v_new = (I + A)^-1 diag(beta) v - (I + A)^-1 diag(beta) ((exp(g) k) S), so no w, u kernel and none of its
+    two [T, HV, 128] outputs. The two products run apart, v as stored and (exp(g) k) S rounded to 16 bits: rounding
+    their difference instead loses the digits the solved matrix multiplies up where it is ill-conditioned. H0_SK,
+    H0_SV: the strides of a key and a value in a row of h0."""
     bos, eos = tl.load(cu + i_n).to(tl.int32), tl.load(cu + i_n + 1).to(tl.int32)
     T = eos - bos
     if T > 0:
@@ -119,12 +120,11 @@ def _slot_x(q, k, v, A, beta, g, o, h0, h0_idx, ht, cu, i_n, i_h, i_v, scale, H:
                               other=0.0)
                 b_o += tl.dot(b_q, s_h2)
                 b_A += tl.dot(b_q, tl.trans(b_k2))
-            b_x = tl.load(pv + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None] & m_v[None, :],
-                          other=0.0).to(tl.float32) - b_s
+            b_x = tl.load(pv + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None] & m_v[None, :], other=0.0)
             b_b = tl.load(pb + o_t * HV, mask=m_t, other=0.0).to(tl.float32)
             b_T = tl.load(pa + o_t[:, None] * (HV * BT) + o_c[None, :], mask=m_t[:, None], other=0.0).to(tl.float32)
             b_T = (b_T * b_b[None, :]).to(pq.dtype.element_ty)
-            b_v = tl.dot(b_T, b_x.to(pq.dtype.element_ty))
+            b_v = tl.dot(b_T, b_x) - tl.dot(b_T, b_s.to(pq.dtype.element_ty))
 
             b_vs = b_v.to(pq.dtype.element_ty)
             b_o = b_o * e_g[:, None]

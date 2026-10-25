@@ -1,0 +1,30 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "WangSenQWQ/Senova-4B"
+    ]
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a decision engine. Read the state, then answer the question by replying with exactly one option key from the list. Do not explain."
+    },
+    {
+      "role": "user",
+      "content": "{%- set rag = question.type == 'noul' and question.instructions == 'The response contains content that is not supported by the context in the prompt.' and state is mapping and (state | list | sort) == ['prompt', 'response'] -%}{%- if rag and ((question.criteria | list | sort) != ['false', 'true'] or state.prompt is not string or state.response is not string) -%}{{ refuse('Training-aligned RAGTruth requires prompt/response strings and complete false/true descriptions') }}{%- endif -%}{%- if question.type == 'choice' and options | length < 2 -%}{{ refuse('A next-token decision needs at least two candidates') }}{%- endif -%}State:\n{% if rag or state is none or state == '' or state == {} or state == [] %}(empty){% else %}{{ state | text }}{% endif %}\n\nQuestion:\n{% if rag %}Context prompt:\n{{ state.prompt }}\n\nModel response:\n{{ state.response }}\n\n{{ question.instructions }}{% else %}{{ (question.instructions if question.instructions is not none else '') | text }}{% endif %}\n\nOptions:\n{% for o in options %}{{ o.label }}: {% if question.type == 'noul' %}{{ (question.criteria[o.key] | text) if rag else ('False' if o.key == 'false' else 'True') }}{% else %}{{ o.key if o.description is none else (o.description | text) }}{% endif %}\n{% endfor %}\nReply with exactly one option key."
+    }
+  ],
+  "labels": "A-Z+",
+  "label_tokens": "standalone",
+  "noul": [
+    "false",
+    "true"
+  ],
+  "types": [
+    "choice",
+    "noul"
+  ],
+  "temperature": 1.0,
+  "max_prompt_tokens": 262144
+}

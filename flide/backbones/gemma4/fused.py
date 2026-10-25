@@ -7,13 +7,14 @@ embedding over the whole head (q, k) and the value norm, then after the attentio
 input) one pass for the post-norm, the residual add, the layer scalar and the next pre-norm, and GELU-tanh times the
 up projection. Each kernel computes in float32 and rounds once at its output; the rotary tables are float32.
 Keys-shared layers read the keys and values of the layer they share with, as transformers does. The mixture-of-experts
-blocks (26B-A4B) keep transformers' modules.
+blocks (26B-A4B) keep transformers' modules. A LoRA adapter's projections run unmerged beside their weights
+(lora.attached).
 """
 from __future__ import annotations
 
 import torch
 
-from ... import settings
+from ... import lora, settings
 from ...kernels import attention as attn_kernel
 from ...kernels import pointwise as pw
 from ...kernels.fp8 import mm
@@ -24,7 +25,7 @@ def rmm(x, w):
     number of rows (a replay holds as many read rows as its length allows, so the count changes with the round)."""
     from ...kernels.invariant import mm as imm
 
-    return imm(x, w)
+    return imm(x, w) if isinstance(w, torch.Tensor) else w(x, imm)
 
 
 def _merge(linears):
@@ -55,14 +56,16 @@ class FusedDecoder:
             a, mlp = layer.self_attn, layer.mlp
             mods = ([a.q_proj] if a.is_kv_shared_layer else
                     [a.q_proj, a.k_proj] + ([a.v_proj] if a.v_proj is not None else []))
-            w = {"qkv": _merge(mods), "o": a.o_proj.weight, "gate_up": _merge([mlp.gate_proj, mlp.up_proj]),
-                 "down": mlp.down_proj.weight, "inter": mlp.gate_proj.weight.shape[0], "hd": a.head_dim,
+            gu = [mlp.gate_proj, mlp.up_proj]
+            w = {"qkv": lora.attached(_merge(mods), mods), "o": lora.attached(a.o_proj.weight, [a.o_proj]),
+                 "gate_up": lora.attached(_merge(gu), gu), "down": lora.attached(mlp.down_proj.weight, [mlp.down_proj]),
+                 "inter": mlp.gate_proj.weight.shape[0], "hd": a.head_dim,
                  "nh": a.q_proj.weight.shape[0] // a.head_dim,
                  "nkv": 0 if a.is_kv_shared_layer else a.k_proj.weight.shape[0] // a.head_dim,
                  "window": int(a.sliding_window or 0)}
             if self.ple:
-                w["ple_gate"] = layer.per_layer_input_gate.weight
-                w["ple_proj"] = layer.per_layer_projection.weight
+                w["ple_gate"] = lora.attached(layer.per_layer_input_gate.weight, [layer.per_layer_input_gate])
+                w["ple_proj"] = lora.attached(layer.per_layer_projection.weight, [layer.per_layer_projection])
             self.w.append(w)
 
     def tables(self, pos: torch.Tensor) -> dict:

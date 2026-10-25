@@ -1,0 +1,59 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "chinhnc/Quyet-1.0-Medium"
+    ]
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a decision model. Read the state and the question, then choose exactly one option. Base the decision only on the state and the option descriptions. Reply with the option letter only."
+    },
+    {
+      "role": "user",
+      "content": "{%- if question.instructions is not string or (question.instructions | trim) == '' -%}{{ refuse('instructions must be a non-empty string') }}{%- endif -%}{%- if options | length < 2 -%}{{ refuse(question.type ~ ' needs at least 2 options') }}{%- endif -%}State:\n{{ state_text }}\n\nQuestion: {{ question.instructions }}\n{% if question.type == 'choice' %}Choose the option that fits best.{% elif question.type == 'score' %}Choose the level that fits best (levels are ordered from lowest to highest).{% else %}Choose A if the statement is true for this state, B if it is not.{% endif %}\n\nOptions:\n{% for o in options %}{% if not loop.first %}\n{% endif %}{{ o.label }}. {{ o.description | describe if o.description else o.key }}{% endfor %}\n\nAnswer with one letter."
+    }
+  ],
+  "state": {
+    "text": "{%- if state is none or state is number -%}{{ refuse('state must be a string, object or list') }}{%- endif -%}{{ state if state is string else state | json(indent=1) }}",
+    "max_tokens": "@quyet_config.json#limits.max_state_tokens",
+    "min_tokens": "@quyet_config.json#limits.min_state_tokens",
+    "keep": {
+      "list": "tail",
+      "default": "head"
+    },
+    "marks": {
+      "tail": [
+        "… ",
+        ""
+      ],
+      "head": [
+        "",
+        " …"
+      ]
+    },
+    "slack": 16,
+    "tries": 4
+  },
+  "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J"
+  ],
+  "label_tokens": "standalone",
+  "noul": [
+    "true",
+    "false"
+  ],
+  "temperature": "@quyet_config.json#temperatures",
+  "max_options": 10,
+  "max_prompt_tokens": "@quyet_config.json#limits.max_prompt_tokens"
+}

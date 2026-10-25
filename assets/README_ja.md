@@ -22,6 +22,7 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-10-26** Flide 0.1.3 で意思決定モデルのファミリーを 8 つ（AJev、Bespoke-Nimble、Darwin、jiwo、Lumma、mogan、Quyet、Senova）追加し、LoRA アダプターもそのまま提供できるようになりました。PR を歓迎します。
 - 🔥 **2026-10-25** Flide 0.1.2 で意思決定モデルのファミリーを 2 つ（Intern-Decision、torchcast）追加し、1 問あたり最大 256 個の選択肢に対応しました。PR を歓迎します。
 - 🔥 **2026-10-24** Flide 0.1.0 を [PyPI](https://pypi.org/project/flide/) で公開しました。ぜひお試しください。
 
@@ -118,14 +119,22 @@ EOF
 
 | モデル | チェックポイント | 入力 |
 |---|---|---|
+| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | `andyzhang232/ajev-gemma4-12b-lora7` | テキスト |
+| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | `bespokelabs/Bespoke-Nimble-9B-v3` | テキスト |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | `FINAL-Bench/Darwin-27B-ZTC` | テキスト |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | テキスト、画像 |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | テキスト |
+| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | `eljiwo/jiwo-0.8b`, `-4b` | テキスト |
+| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | `FrontiersMind/Lumma-fev-27B` | テキスト |
+| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | `moganai/mogan-decision-31B-it` | テキスト |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | テキスト、画像、動画 |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | テキスト |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium` | テキスト |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
+| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | `WangSenQWQ/Senova-4B` | テキスト |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | テキスト |
 
-Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。新しいモデルファミリーは `plugins/` にディレクトリを 1 つ加え、
+Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。AJev、Bespoke-Nimble、mogan は LoRA アダプターとして公開されており、Flide は peft と同じくアダプターをベースの重みの横で動かします。新しいモデルファミリーは、プロンプトテンプレートで書けるなら `flide/formats/known/` に JSON ファイルを 1 つ置くだけで、そうでなければ `plugins/` にディレクトリを 1 つ加え、
 `pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
 
 ## オプション

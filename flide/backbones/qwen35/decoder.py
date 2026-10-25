@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from ... import lora
 from ...formats.base import FINAL
 from ...kernels.fla import pin_fla_size_buckets
 from ...runtime.pack import PackedBatch
@@ -51,7 +52,7 @@ def _fp8_target(name: str) -> bool:
 
 
 class _Headless(torch.nn.Module):
-    """A Qwen3_5Model where the backbone expects a model with an output head; it has none."""
+    """A Qwen3_5Model or Qwen3_5TextModel where the backbone expects a model with an output head; it has none."""
 
     def __init__(self, model):
         super().__init__()
@@ -79,9 +80,11 @@ class Qwen35(Backbone):
         config = transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
         if vision is None:
             vision = getattr(config, "vision_config", None) is not None
-        headless = "Qwen3_5Model" in (getattr(config, "architectures", None) or [])
+        archs = getattr(config, "architectures", None) or []
+        headless = "Qwen3_5Model" in archs or "Qwen3_5TextModel" in archs
         if headless:
-            arch, cfg, key_map, skip = transformers.Qwen3_5Model, config, [], ("mtp.",)
+            arch = transformers.Qwen3_5Model if "Qwen3_5Model" in archs else transformers.Qwen3_5TextModel
+            cfg, key_map, skip = config, [], ("mtp.",)
         elif vision:
             arch, cfg, key_map, skip = transformers.Qwen3_5ForConditionalGeneration, config, [], ("mtp.",)
         else:
@@ -158,18 +161,24 @@ class Qwen35(Backbone):
         and value heads split evenly; Gated DeltaNet keeps whole groups (a key head with its value heads)."""
         from ...runtime.tp import split
 
+        def take(t, idx, dim=0):
+            return (t.index_select(dim, idx) if isinstance(idx, torch.Tensor)
+                    else t.narrow(dim, idx.start, idx.stop - idx.start)).contiguous()
+
         def keep(param, idx, dim=0):
-            return torch.nn.Parameter(param.data.index_select(dim, idx).contiguous() if isinstance(idx, torch.Tensor)
-                                      else param.data.narrow(dim, idx.start, idx.stop - idx.start).contiguous(),
-                                      requires_grad=False)
+            return torch.nn.Parameter(take(param.data, idx, dim), requires_grad=False)
 
         def rows(lin, idx):
             if lin.bias is not None:
                 raise ValueError("tensor parallel: projections with a bias")
             lin.weight = keep(lin.weight, idx)
+            if getattr(lin, "lora", None) is not None:
+                lin.lora = (lin.lora[0], take(lin.lora[1], idx))
 
         def cols(lin, idx):
             lin.weight = keep(lin.weight, idx, 1)
+            if getattr(lin, "lora", None) is not None:
+                lin.lora = (take(lin.lora[0], idx, 1), lin.lora[1])
 
         for i, layer in enumerate(self.layers):
             mlp = layer.mlp
@@ -330,10 +339,10 @@ class Qwen35(Backbone):
         """Per layer, the weights of every matrix product (projections that read the same input merged into one) and
         the sizes the forward needs, so the products go through `mm` whatever the weights are stored as."""
         def merged(mods):
-            return None if any(m.weight.is_meta for m in mods) else merge(mods)
+            return None if any(m.weight.is_meta for m in mods) else lora.attached(merge(mods), mods)
 
         def single(mod):
-            return None if mod.weight.is_meta else mod.weight
+            return None if mod.weight.is_meta else lora.attached(mod.weight, [mod])
 
         self._w = []
         for i, layer in enumerate(self.layers):
@@ -360,9 +369,9 @@ class Qwen35(Backbone):
         def get(mod):
             return store[names[id(mod)] + ".weight"]
 
-        def joined(mods, tail=None):
+        def joined(mods, tail=None, tail_mods=None):
             qs, ss = zip(*(get(m) for m in mods))
-            return fp8.Fp8Weight(torch.cat(qs), torch.cat(ss), tail, self.dtype)
+            return lora.attached(fp8.Fp8Weight(torch.cat(qs), torch.cat(ss), tail, self.dtype), mods + (tail_mods or []))
 
         for i, layer in enumerate(self.layers):
             w, mlp = self._w[i], layer.mlp
@@ -371,7 +380,7 @@ class Qwen35(Backbone):
             if self.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
                 tail = torch.cat([m.in_proj_b.weight.data, m.in_proj_a.weight.data])
-                w["in"] = joined([m.in_proj_qkv, m.in_proj_z], tail)
+                w["in"] = joined([m.in_proj_qkv, m.in_proj_z], tail, [m.in_proj_b, m.in_proj_a])
                 w["out"] = joined([m.out_proj])
             else:
                 m = layer.self_attn
@@ -395,7 +404,10 @@ class Qwen35(Backbone):
             for key in ("gate_up", "down", "in", "out", "qkv", "o"):
                 if key in w:
                     tail = 2 * layer.linear_attn.num_v_heads if key == "in" else 0
-                    w[key] = fp8.Fp8Weight.from_weight(w[key], tail)
+                    if isinstance(w[key], lora.LowRank):
+                        w[key] = w[key].with_base(fp8.Fp8Weight.from_weight(w[key].base, tail))
+                    else:
+                        w[key] = fp8.Fp8Weight.from_weight(w[key], tail)
                     n += 1
             mods = [layer.mlp.gate_proj, layer.mlp.up_proj, layer.mlp.down_proj]
             if self.layer_types[i] == "linear_attention":

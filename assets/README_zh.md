@@ -21,6 +21,7 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-10-26** Flide 0.1.3 新增八个决策模型家族（AJev、Bespoke-Nimble、Darwin、jiwo、Lumma、mogan、Quyet、Senova），LoRA 适配器也能直接服务。欢迎提 PR。
 - 🔥 **2026-10-25** Flide 0.1.2 新增两个决策模型家族（Intern-Decision、torchcast），每道题最多支持 256 个选项。欢迎提 PR。
 - 🔥 **2026-10-24** Flide 0.1.0 已发布到 [PyPI](https://pypi.org/project/flide/)，欢迎试用。
 
@@ -117,14 +118,22 @@ EOF
 
 | 模型 | 检查点 | 输入 |
 |---|---|---|
+| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | `andyzhang232/ajev-gemma4-12b-lora7` | 文本 |
+| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | `bespokelabs/Bespoke-Nimble-9B-v3` | 文本 |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | `FINAL-Bench/Darwin-27B-ZTC` | 文本 |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | 文本、图片 |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | 文本 |
+| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | `eljiwo/jiwo-0.8b`, `-4b` | 文本 |
+| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | `FrontiersMind/Lumma-fev-27B` | 文本 |
+| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | `moganai/mogan-decision-31B-it` | 文本 |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | 文本、图片、视频 |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | 文本 |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium` | 文本 |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
+| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | `WangSenQWQ/Senova-4B` | 文本 |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | 文本 |
 
-基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。新增一个模型族，只需在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
+基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。AJev、Bespoke-Nimble 和 mogan 以 LoRA 适配器发布，Flide 像 peft 一样把适配器放在底座权重旁边运行。新增一个模型族，能用提示词模板描述的只需在 `flide/formats/known/` 里加一个 JSON 文件，否则在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
 `flide.formats` 入口点接入。
 
 ## 选项

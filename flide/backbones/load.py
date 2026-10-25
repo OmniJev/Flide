@@ -10,7 +10,12 @@ fill raise, except output heads tied to the embedding.
 FP8: the weights `lean(name)` picks are never allocated in 16 bits (they stay on the meta device, shape only); each is
 read into `fp8` as (float8 weight, per-row scale), quantized on the device as it is read, or taken as stored when
 the checkpoint already holds it in float8 with a `weight_scale` (compressed-tensors). Device memory
-then holds the float8 copy only.
+then holds the float8 copy only. A float8 tensor of such a checkpoint that FP8 keeps in 16 bits (Gated DeltaNet's gate
+projections) is read back to 16 bits through its scale.
+
+A LoRA adapter under lora/ of the directory (flide/lora.py) is read with the checkpoint (modules saved whole and
+an embedding's LoRA go into the tensors as they are read) and its projections' LoRA attached to the modules after it,
+unmerged; with one, a failed read raises instead of falling back to transformers, which would drop it.
 """
 from __future__ import annotations
 
@@ -115,6 +120,22 @@ def blank(model, device=None, lean=None, fp8: dict | None = None) -> None:
 @torch.inference_mode()
 def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | None = None,
               skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None) -> dict:
+    from .. import lora
+
+    adapter = lora.load(model_dir, device)
+    if adapter is None:
+        return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None)
+    try:
+        out = _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter)
+        adapter.attach(model)
+        adapter.check()
+    except (ValueError, FileNotFoundError) as exc:
+        raise RuntimeError(f"{model_dir}: with its LoRA adapter: {exc}") from exc
+    log.info("a LoRA adapter beside the weights (%d tensors)", len(adapter))
+    return out
+
+
+def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter) -> dict:
     from safetensors import safe_open
 
     t0 = time.perf_counter()
@@ -139,6 +160,8 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
                     src = f.get_tensor(key)
                     if tuple(src.shape) != tuple(t.shape):
                         raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(t.shape)}")
+                    if adapter is not None and src.dtype != FP8:
+                        src = adapter.apply(key, src)
                     if src.dtype == FP8:
                         fp8[name] = (src, f.get_tensor(key + "_scale").float().reshape(-1, 1))
                     else:
@@ -148,7 +171,11 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
                     continue
                 src = f.get_tensor(key)
                 if src.dtype == torch.float8_e4m3fn:
-                    raise ValueError(f"{key} is stored in float8; load this checkpoint with FP8 (--quantize fp8)")
+                    if lean is None:
+                        raise ValueError(f"{key} is stored in float8; load this checkpoint with FP8 (--quantize fp8)")
+                    src = (src.float() * f.get_tensor(key + "_scale").float().reshape(-1, 1)).to(t.dtype)
+                if adapter is not None:
+                    src = adapter.apply(key, src)
                 if tuple(src.shape) != tuple(t.shape):
                     raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(t.shape)}")
                 t.data.copy_(src)
@@ -156,6 +183,9 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
                 filled.add(name)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
+    head = model.get_output_embeddings() if adapter is not None and adapter.embedding is not None else None
+    if head is not None and head.weight.data_ptr() == model.get_input_embeddings().weight.data_ptr():
+        head.weight = torch.nn.Parameter(adapter.embedding, requires_grad=False)
     _init_buffers(model)
     tied = set()
     for a, b in (getattr(model, "_tied_weights_keys", None) or {}).items():
