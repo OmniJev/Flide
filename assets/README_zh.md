@@ -8,6 +8,7 @@
   <a href="https://pypi.org/project/flide/"><img alt="PyPI" src="https://img.shields.io/pypi/v/flide?style=flat-square&logo=pypi&logoColor=white&color=3A86FF"></a>
   <a href="https://github.com/OmniJev/Flide"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-OmniJev%2FFlide-18202F?style=flat-square&logo=github&logoColor=white"></a>
   <a href="https://flide.org"><img alt="Website" src="https://img.shields.io/badge/Website-flide.org-00A890?style=flat-square&logo=googlechrome&logoColor=white"></a>
+  <a href="https://docs.flide.org"><img alt="Docs" src="https://img.shields.io/badge/Docs-docs.flide.org-1F5FD1?style=flat-square&logo=materialformkdocs&logoColor=white"></a>
   <a href="../LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
   <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-F28E2B?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
@@ -15,7 +16,7 @@
 
 <p align="center"><a href="#-动态">动态</a> · <a href="#速度">速度</a> · <a href="#精确的答案">精确的答案</a> · <a href="#快速开始">快速开始</a> · <a href="#模型">模型</a> · <a href="#选项">选项</a></p>
 
-Flide 是决策模型的推理引擎。一个请求里有一个状态，比如智能体的轨迹或一篇文档，还有关于它的若干个问题。
+[Flide](https://docs.flide.org) 是决策模型的推理引擎。一个请求里有一个状态，比如智能体的轨迹或一篇文档，还有关于它的若干个问题。
 Flide 在一次前向传播里把状态分叉给所有问题，状态只读一遍，每个问题拿到的答案和单独问它时完全一样。
 答案以概率的形式返回，接口是 vLLM 和 SGLang 也在用的 `/v1/systemone`。
 
@@ -30,17 +31,23 @@ Flide 在一次前向传播里把状态分叉给所有问题，状态只读一�
   <img alt="把状态分叉给每个问题：生成引擎为每个问题单独跑一条序列并重算部分状态，多项打分插入分隔符改变了答案，Flide 在状态末尾分叉" src="fork.svg" width="100%">
 </p>
 
+以 3 个问题为例，生成引擎要跑 3 条序列，重算 4 格状态；多项打分插入 3 个分隔符，答案随之改变。Flide 只跑 1 条序列，什么都不重算，不加任何 token，每个问题的答案都和单独问它时一样。
+
 ## 速度
 
 <p align="center">
   <img alt="Flide、vLLM 与 SGLang 在一块 H200 上的速度，Qwen3.5-0.8B" src="speed.svg" width="100%">
 </p>
 
+在一块 H200 上跑 Qwen3.5-0.8B，Flide 最高比 vLLM 和 SGLang 都快 9.4 倍（QuALITY，比 vLLM 快 14 倍），在 RACE 和 Decision Index 上快 3.6 到 4 倍，64 个客户端并发时吞吐是它们的 2.4 倍。一个状态带的问题越多，差距越大。
+
 ## 精确的答案
 
 <p align="center">
   <img alt="共享计算，答案精确：Flide 离 float32 参考最多 1.1 个点，多项打分偏 0.9 到 14.8 个点；开启 --batch-invariant 后，无论怎么组批，同一个请求的比特都一样" src="exact.svg" width="100%">
 </p>
+
+Flide 离 float32 参考最多 1.1 个点，是所有引擎里最近的，在 0.5 处翻转的决策最多 2.3%。多项打分会把答案挪动最多 14.8 个点，翻转最多 28.9% 的决策。开启 `--batch-invariant` 后，无论怎么组批，同一个请求得到的比特都一样。
 
 ## 快速开始
 
@@ -105,6 +112,8 @@ EOF
 ```
 
 每个答案都带着每个选项的概率，可以直接拿去和阈值比较。
+
+[文档](https://docs.flide.org)里有每个模型家族、接口、选项和 Python 引擎的说明。
 
 ## 模型
 
