@@ -16,9 +16,7 @@
 
 <p align="center"><a href="#-ニュース">ニュース</a> · <a href="#速度">速度</a> · <a href="#正確な答え">正確な答え</a> · <a href="#クイックスタート">クイックスタート</a> · <a href="#モデル">モデル</a> · <a href="#オプション">オプション</a></p>
 
-[Flide](https://docs.flide.org) は意思決定モデルのための推論エンジンです。1 つのリクエストには、エージェントの軌跡や文書のような状態と、
-それについての型付きの質問が入ります。Flide は 1 回の順伝播の中で状態をすべての質問に分岐させるので、状態は一度だけ
-読まれ、どの質問も単独で聞いたときと同じ答えを受け取ります。答えは確率として、vLLM や SGLang も提供する
+[Flide](https://docs.flide.org) は意思決定モデルのための推論エンジンです。1 つのリクエストには、エージェントの軌跡や文書のような状態と、それについての型付きの質問が入ります。Flide は 1 回の順伝播の中で状態をすべての質問に分岐させるので、状態は一度だけ読まれ、どの質問も単独で聞いたときと同じ答えを受け取ります。答えは確率として、vLLM や SGLang も提供する
 `/v1/systemone` API で返ります。
 
 
@@ -127,8 +125,7 @@ EOF
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | テキスト |
 
-Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、
-それぞれのリリースと同じ方法で答えを読みます。新しいモデルファミリーは `plugins/` にディレクトリを 1 つ加え、
+Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。新しいモデルファミリーは `plugins/` にディレクトリを 1 つ加え、
 `pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
 
 ## オプション
@@ -142,6 +139,4 @@ Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使
 
 ## ライセンス
 
-Apache-2.0。`flide/kernels/gdn.py` には
-[flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）の 2 つのカーネルから派生した
-カーネルが含まれます。THIRD_PARTY_NOTICES に、それと Flide が利用しているほかのコードを記載しています。
+Apache-2.0。`flide/kernels/gdn.py` には [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）の 2 つのカーネルから派生したカーネルが含まれます。THIRD_PARTY_NOTICES に、それと Flide が利用しているほかのコードを記載しています。

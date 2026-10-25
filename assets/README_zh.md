@@ -16,9 +16,7 @@
 
 <p align="center"><a href="#-动态">动态</a> · <a href="#速度">速度</a> · <a href="#精确的答案">精确的答案</a> · <a href="#快速开始">快速开始</a> · <a href="#模型">模型</a> · <a href="#选项">选项</a></p>
 
-[Flide](https://docs.flide.org) 是决策模型的推理引擎。一个请求里有一个状态，比如智能体的轨迹或一篇文档，还有关于它的若干个问题。
-Flide 在一次前向传播里把状态分叉给所有问题，状态只读一遍，每个问题拿到的答案和单独问它时完全一样。
-答案以概率的形式返回，接口是 vLLM 和 SGLang 也在用的 `/v1/systemone`。
+[Flide](https://docs.flide.org) 是决策模型的推理引擎。一个请求里有一个状态，比如智能体的轨迹或一篇文档，还有关于它的若干个问题。 Flide 在一次前向传播里把状态分叉给所有问题，状态只读一遍，每个问题拿到的答案和单独问它时完全一样。答案以概率的形式返回，接口是 vLLM 和 SGLang 也在用的 `/v1/systemone`。
 
 
 ## 🔥 动态
@@ -126,8 +124,7 @@ EOF
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | 文本 |
 
-基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。
-新增一个模型族，只需在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
+基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。新增一个模型族，只需在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
 `flide.formats` 入口点接入。
 
 ## 选项
@@ -141,6 +138,4 @@ EOF
 
 ## 许可证
 
-Apache-2.0。`flide/kernels/gdn.py` 中有一个内核改写自
-[flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）的两个内核，
-THIRD_PARTY_NOTICES 列出了它和 Flide 用到的其他代码。
+Apache-2.0。`flide/kernels/gdn.py` 中有一个内核改写自 [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）的两个内核， THIRD_PARTY_NOTICES 列出了它和 Flide 用到的其他代码。
