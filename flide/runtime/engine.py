@@ -34,6 +34,13 @@ def model_config(model_dir: str):
     return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
 
 
+def _blocks(plan: Plan) -> bool:
+    """Whether a plan reads with block attention (formats.base.Plan); ValueError for an attention no backbone runs."""
+    if plan.attention not in ("causal", "blocks"):
+        raise ValueError(f"unknown attention {plan.attention!r}")
+    return plan.attention == "blocks"
+
+
 def _gib() -> tuple[float, float, float]:
     """GPU memory in GiB: allocated by torch, reserved by its caching allocator (graph pools included), used on the
     device by every process."""
@@ -86,6 +93,10 @@ class Engine:
         else:
             self.backbone = backbones.get(config.model_type).load(self.model_dir, device=device, dtype=dtype, **options)
         tune()
+        needs = getattr(self.format, "attention", "causal")
+        if needs != "causal" and not getattr(self.backbone, "block_attention", False):
+            raise ValueError(f"{self.model_dir} reads with block attention, which the {config.model_type} backbone "
+                             "does not run")
         self.heads = self.format.load_heads(self.backbone)
         mem = _gib()
         self.budget = budget
@@ -164,6 +175,8 @@ class Engine:
 
         budget = budget or self.budget
         for p in plans:
+            if p is not None and _blocks(p) and not getattr(self.backbone, "block_attention", False):
+                raise ValueError("this backbone does not run block attention")
             if p is not None and p.vision is not None and p.positions is None:
                 p.positions, p.offset = self.backbone.vision_positions(p.prefix, p.vision)
         outputs: list[Any] = [None if p is None else [None] * len(p.suffixes) for p in plans]
@@ -244,6 +257,8 @@ class Engine:
         """Sessions take text-only plans whose reads all fall inside the branches."""
         if self.sessions is None or plan.vision is not None or plan.positions is not None or plan.offset:
             return False
+        if _blocks(plan):
+            return False
         if not plan.prefix:
             return False
         shortest = min(len(s) for s in plan.suffixes)
@@ -273,6 +288,9 @@ class Engine:
         if graphs is None or (plan.vision is not None and not graphs.media):
             return None
         if not plan.prefix:
+            return None
+        blocks = _blocks(plan)
+        if blocks and not getattr(graphs, "block_attention", False):
             return None
         reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
         if len(reads) != 1:
@@ -306,7 +324,7 @@ class Engine:
             if hidden is not None:
                 head = read[0].head
                 return self.heads[head](hidden) if head is not None else hidden
-        if not graphs.fits(len(plan.prefix), [len(s) for s in plan.suffixes]):
+        if blocks or not graphs.fits(len(plan.prefix), [len(s) for s in plan.suffixes]):
             return None
         if plan.vision is not None:
             if not hasattr(graphs, "run_media"):
@@ -322,10 +340,13 @@ class Engine:
         return self.heads[head](hidden) if head is not None else hidden
 
     def _flat_item(self, plan: Plan, graphs):
-        """(prefix, branches, media) of a plan the flat graphs take, else None: causal, every branch read at its last
-        token after the final layer by the same head, text or media the backbone embeds, not one the session cache
-        takes."""
+        """(prefix, branches, media) of a plan the flat graphs take, else None: every branch read at its last token
+        after the final layer by the same head, text or media the backbone embeds, not one the session cache takes. A
+        plan with block attention gets a fourth field, True, on graphs with `block_attention`."""
         if not plan.suffixes or not plan.prefix:
+            return None
+        blocks = _blocks(plan)
+        if blocks and not getattr(graphs, "block_attention", False):
             return None
         reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
         if len(reads) != 1:
@@ -338,12 +359,12 @@ class Engine:
         if plan.vision is None:
             if plan.positions is not None or plan.offset:
                 return None
-            return plan.prefix, plan.suffixes, None
+            return (plan.prefix, plan.suffixes, None) + ((True,) if blocks else ())
         if not graphs.media:
             return None
         if plan.positions is None:
             plan.positions, plan.offset = self.backbone.vision_positions(plan.prefix, plan.vision)
-        return plan.prefix, plan.suffixes, (plan.vision, plan.positions, plan.offset)
+        return (plan.prefix, plan.suffixes, (plan.vision, plan.positions, plan.offset)) + ((True,) if blocks else ())
 
     def _run_flat(self, plans) -> dict:
         """Plans of a round through flat graphs: as many per replay as fit, in order."""

@@ -1,0 +1,42 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "PNPM244/linne-fern-1-0",
+      "MISA-core/linne-fern-1-0",
+      "beyoru/linne-fern-1-0"
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "{%- macro t(v) -%}{%- if v is none -%}{%- elif v is string -%}{{ v }}{%- else -%}{{ v | text }}{%- endif -%}{%- endmacro -%}{%- set ins = question.instructions -%}{%- set qt = '' if (ins is none or (ins is string and ins.strip() == '') or (ins is not string and not ins)) else t(ins) -%}{{ t(state) }}\n\n{% if question.type == 'choice' %}{% if qt %}Question: {{ qt }}\n{% endif %}{% for o in options %}{% set d = t(o.description) %}{{ o.label }}: {{ o.key }}{% if d %} - {{ d }}{% endif %}\n{% endfor %}Answer with the letter of one option only.{%- else -%}Is the following true?{% if qt %} {{ qt }}{% endif %}\n{% for o in options %}{% set d = t(o.description) %}{% if d %}{{ o.label }}: {{ d }}\n{% endif %}{% endfor %}Answer with yes or no only.{%- endif -%}"
+    }
+  ],
+  "labels": {
+    "choice": [
+      {
+        "upto": 26,
+        "labels": "A-Z"
+      },
+      {
+        "labels": "pairs"
+      }
+    ],
+    "noul": [
+      "yes",
+      "no"
+    ],
+    "score": "A-Z"
+  },
+  "noul": [
+    "true",
+    "false"
+  ],
+  "types": [
+    "choice",
+    "noul"
+  ],
+  "temperature": 1.0,
+  "max_prompt_tokens": 65535
+}

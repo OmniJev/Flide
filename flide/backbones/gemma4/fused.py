@@ -20,6 +20,15 @@ from ...kernels import pointwise as pw
 from ...kernels.fp8 import mm
 
 
+def _geglu(a, b):
+    """pointwise.geglu, whose kernel addresses a row as row x stride in 32 bits: a stream of more rows than that holds
+    (a large packed round of Gemma 4 31B, 43008 numbers a row) goes in pieces."""
+    step = (2 ** 31 - 1) // max(a.stride(0), b.stride(0), 1)
+    if a.shape[0] <= step:
+        return pw.geglu(a, b)
+    return torch.cat([pw.geglu(a[i: i + step], b[i: i + step]) for i in range(0, a.shape[0], step)])
+
+
 def rmm(x, w):
     """The products of the last layer at the read rows: the batch-invariant kernel, whose sums do not depend on the
     number of rows (a replay holds as many read rows as its length allows, so the count changes with the round)."""
@@ -149,7 +158,7 @@ class FusedDecoder:
                                w2=layer.pre_feedforward_layernorm.weight)
             n = w["inter"]
             gu = m_(x, w["gate_up"])
-            d = m_(pw.geglu(gu[:, :n], gu[:, n:]), w["down"])
+            d = m_(_geglu(gu[:, :n], gu[:, n:]), w["down"])
             nxt = layers[i + 1].input_layernorm.weight if i + 1 < top else None
             if self.ple:
                 h, _ = pw.sandwich(d, h, layer.post_feedforward_layernorm.weight, eps)

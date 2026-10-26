@@ -39,7 +39,12 @@ class Plan:
     `positions` are the prefix's rotary positions [3, P] when they are not 0..P-1, and suffix tokens start
     at position P + `offset`. The backbone fills both from `vision` when the family leaves them empty.
 
-    An empty `prefix` makes every suffix a sequence of its own (nothing shared)."""
+    An empty `prefix` makes every suffix a sequence of its own (nothing shared).
+
+    `attention` "blocks": in the full-attention layers the prefix sees all of itself and each suffix sees the prefix
+    and all of itself (the block-bidirectional mask some checkpoints are trained with); recurrent layers stay causal,
+    and the prefix still never sees a suffix, so it is shared exactly. Such a plan needs a prefix and a backbone with
+    `block_attention`, and takes no session states."""
 
     prefix: list[int]
     suffixes: list[list[int]]
@@ -48,6 +53,7 @@ class Plan:
     vision: Any = None
     positions: Any = None
     offset: int = 0
+    attention: str = "causal"
 
     @property
     def tokens(self) -> int:

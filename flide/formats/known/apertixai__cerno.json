@@ -1,0 +1,21 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "apertixai/cerno-4b",
+      "apertixai/cerno-9b",
+      "apertixai/cerno-27b"
+    ]
+  },
+  "prompt": "{%- macro opt(o) -%}{%- if question.type == 'noul' -%}{%- set s = ('no' if o.key == 'false' else 'yes') if o.description is none or o.description == '' else ('no: ' if o.key == 'false' else 'yes: ') ~ (o.description | describe) -%}{%- elif question.type == 'score' -%}{%- set s = o.key ~ ': ' ~ (o.description | describe) -%}{%- else -%}{%- set s = o.key if o.description is none or o.description == '' else o.key ~ ': ' ~ (o.description | describe) -%}{%- endif -%}{%- set low = s | trim | lower -%}{{ 'not listed here' if low.startswith('none of the above') or low in ('none', 'n/a', 'none of these') else s }}{%- endmacro -%}{%- if 'instructions' not in question.given or (question.instructions | describe) == '' -%}{{ refuse('question without instructions') }}{%- endif -%}{%- if options | length < 2 -%}{{ refuse('a ' ~ question.type ~ ' needs at least two options') }}{%- endif -%}{%- if question.type == 'score' and options | length > 10 -%}{{ refuse('score criteria: 2..10 levels') }}{%- endif -%}{%- if options | length <= 10 -%}{{ state_text }}\n\nQuestion: {{ question.instructions | describe }}\nOptions:{% for o in options %}\n({{ o.label }}) {{ opt(o) }}{% endfor %}\nAnswer: ({%- else -%}{{ state_text }}{{ boundary() }}\n\nQuestion: {{ question.instructions | describe }}\nOptions:{% for o in options %}{{ boundary() }}\n({{ boundary() }}{{ o.label }}{{ boundary() }}) {{ opt(o) }}{% endfor %}{{ boundary() }}\nAnswer: ({%- endif -%}",
+  "state": {
+    "text": "{%- macro j(x) -%}{%- if x is mapping -%}{{ '{' }}{%- for k, v in x.items() -%}{{ k | json }}: {{ j(v) }}{{ ', ' if not loop.last else '' }}{%- endfor -%}{{ '}' }}{%- elif x is sequence and x is not string -%}[{%- set long = x | length >= 8 -%}{%- for v in x -%}{%- if long and v is mapping -%}{{ '{' }}\"_index\": {{ j(v['_index']) if '_index' in v else loop.index0 }}{%- for k, w in v.items() if k != '_index' -%}, {{ k | json }}: {{ j(w) }}{%- endfor -%}{{ '}' }}{%- elif long -%}{{ '{' }}\"_index\": {{ loop.index0 }}, \"value\": {{ j(v) }}{{ '}' }}{%- else -%}{{ j(v) }}{%- endif -%}{{ ', ' if not loop.last else '' }}{%- endfor -%}]{%- else -%}{{ x | json }}{%- endif -%}{%- endmacro -%}Context:\n{{ state if state is string else j(state) }}",
+    "max_tokens": 16384,
+    "keep": "head"
+  },
+  "labels": "A-Z+",
+  "label_tokens": "standalone",
+  "max_options": 255,
+  "temperature": "@decider_config.json#temperature",
+  "max_prompt_tokens": 20479
+}

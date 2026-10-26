@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 class Backbone:
     model_types: ClassVar[tuple[str, ...]] = ()
+    block_attention: ClassVar[bool] = False
 
     device: Any
     dtype: Any

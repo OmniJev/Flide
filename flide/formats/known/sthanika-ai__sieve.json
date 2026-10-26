@@ -1,0 +1,24 @@
+{
+  "format_id": "flide-template-v1",
+  "match": {
+    "repos": [
+      "sthanika-ai/Sieve-31B"
+    ]
+  },
+  "prompt": "{%- macro opt(o) -%}{%- if question.type == 'noul' -%}{%- set s = ('no' if o.key == 'false' else 'yes') if o.description is none or o.description == '' else ('no: ' if o.key == 'false' else 'yes: ') ~ (o.description | describe) -%}{%- elif question.type == 'score' -%}{%- set s = o.key ~ ': ' ~ (o.description | describe) -%}{%- else -%}{%- set s = o.key if o.description is none or o.description == '' else o.key ~ ': ' ~ (o.description | describe) -%}{%- endif -%}{%- set low = s | trim | lower -%}{{ 'not listed here' if low.startswith('none of the above') or low in ('none', 'n/a', 'none of these') else s }}{%- endmacro -%}{%- set given = 'instructions' in question.given -%}{%- set ns = namespace(described=false) -%}{%- for o in options -%}{%- if o.description is not none and o.description != '' -%}{%- set ns.described = true -%}{%- endif -%}{%- endfor -%}{%- if question.type == 'noul' and (not given or question.instructions is none or question.instructions == '') -%}{%- if not ns.described -%}{{ refuse('noul question without instructions: criteria must describe true or false') }}{%- endif -%}{%- set qtext = 'Which answer fits the context?' -%}{%- else -%}{%- set qtext = (question.instructions | describe) if given else '' -%}{%- if qtext == '' -%}{{ refuse('question without instructions') }}{%- endif -%}{%- endif -%}{%- if options | length < 2 -%}{{ refuse('a ' ~ question.type ~ ' needs at least two options') }}{%- endif -%}{%- if question.type == 'score' and options | length > 10 -%}{{ refuse('score criteria: 2..10 levels') }}{%- endif -%}<bos><|turn>user\n{{ boundary() }}{{ state_text }}{{ boundary() }}\n\nQuestion: {{ qtext }}\nOptions:{{ boundary() }}{%- if options | length <= 10 -%}{% for o in options %}\n({{ o.label }}) {{ opt(o) }}{% endfor %}{%- else -%}{% for o in options %}\n({{ boundary() }}{{ o.label }}{{ boundary() }}) {{ opt(o) }}{{ boundary() }}{% endfor %}{%- endif -%}{{ boundary() }}<turn|>\n<|turn>model\n<|channel>thought\n<channel|>{{ boundary() }}Answer: (",
+  "state": {
+    "text": "{%- macro j(x) -%}{%- if x is mapping -%}{{ '{' }}{%- for k, v in x.items() -%}{{ k | json }}: {{ j(v) }}{{ ', ' if not loop.last else '' }}{%- endfor -%}{{ '}' }}{%- elif x is sequence and x is not string -%}[{%- set long = x | length >= 8 -%}{%- for v in x -%}{%- if long and v is mapping -%}{{ '{' }}\"_index\": {{ j(v['_index']) if '_index' in v else loop.index0 }}{%- for k, w in v.items() if k != '_index' -%}, {{ k | json }}: {{ j(w) }}{%- endfor -%}{{ '}' }}{%- elif long -%}{{ '{' }}\"_index\": {{ loop.index0 }}, \"value\": {{ j(v) }}{{ '}' }}{%- else -%}{{ j(v) }}{%- endif -%}{{ ', ' if not loop.last else '' }}{%- endfor -%}]{%- else -%}{{ x | json }}{%- endif -%}{%- endmacro -%}Context:\n{{ state if state is string else j(state) }}",
+    "max_tokens": 1073741824
+  },
+  "labels": "A-Z+",
+  "label_tokens": "standalone",
+  "max_options": 255,
+  "noul": [
+    "false",
+    "true"
+  ],
+  "head": "output",
+  "softcap": false,
+  "temperature": 8.5495,
+  "max_prompt_tokens": 32768
+}

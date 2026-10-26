@@ -111,6 +111,8 @@ class Adapter:
             raise NotImplementedError(f"{d / CONFIG}: DoRA, fan_in_fan_out and LoRA biases are not supported")
         self.alpha = float(cfg.get("lora_alpha", 8))
         self.patterns = dict(cfg.get("alpha_pattern") or {})
+        self.r = cfg.get("r")
+        self.rank_patterns = dict(cfg.get("rank_pattern") or {})
         self.rslora = bool(cfg.get("use_rslora"))
         parts: dict[str, dict] = {}
         self.full = {}
@@ -136,7 +138,11 @@ class Adapter:
         self.embedding = None
 
     def _scaling(self, name: str, r: int) -> float:
+        """alpha / r of the adapter's configuration (its patterns first); `r`, the tensors' rank, when it names none. A
+        converted adapter may hold LoRAs of lower rank than its r under one alpha: they keep that alpha / r."""
         alpha = next((float(a) for pat, a in self.patterns.items() if re.search(pat, name)), self.alpha)
+        r = next((int(x) for pat, x in self.rank_patterns.items() if re.search(pat, name)),
+                 int(self.r) if self.r else r)
         return alpha / (r ** 0.5 if self.rslora else r)
 
     def __len__(self) -> int:
@@ -184,6 +190,30 @@ class Adapter:
         loose = sorted(k for k, p in self.pairs.items() if not p[2] and k not in self.attached)
         if loose:
             raise ValueError(f"{len(loose)} adapter projections found no linear module, e.g. {loose[:4]}")
+
+
+class HeadRows:
+    """An output head whose LoRA stays unmerged, as the families' heads read it: the rows of the token ids they select
+    (`index_select`), merged in float32 (W[ids] + scaling B[ids] A); never the whole vocabulary."""
+
+    def __init__(self, weight, lora):
+        self.weight = weight
+        self.A, self.B = lora
+        self.device = weight.device
+
+    def detach(self) -> "HeadRows":
+        return self
+
+    def index_select(self, dim: int, idx):
+        if dim != 0:
+            raise ValueError("an output head is read by rows")
+        return self.weight.index_select(0, idx).float() + self.B.index_select(0, idx).float() @ self.A.float()
+
+
+def output_head(head):
+    """(weight, bias) of an output head module; its weight as HeadRows when the adapter gave it a LoRA."""
+    lr = getattr(head, "lora", None)
+    return (head.weight if lr is None else HeadRows(head.weight, lr)), getattr(head, "bias", None)
 
 
 def _hook(mod, args, out):

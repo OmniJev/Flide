@@ -22,6 +22,7 @@ import torch
 
 import numpy as np
 
+from ... import lora
 from ...formats.base import FINAL
 from ...kernels import attention as attn_kernel
 from ...runtime.pack import PackedBatch
@@ -137,6 +138,7 @@ def _register() -> None:
 
 class Gemma4(Backbone):
     model_types = ("gemma4", "gemma4_text", "gemma4_unified")
+    block_attention = True
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -298,6 +300,8 @@ class Gemma4(Backbone):
         their window and also letting the tokens of one image see each other on the sizes trained so (their key
         ranges are widened to the end of the image in place). A batch with sessions reads prefix keys from a context
         buffer."""
+        if batch is not None and any(j.blocks for j in batch.jobs):
+            return self._block_meta(tok, ranges, batch)
         ctx = k1 = None
         if batch is not None and batch.ctx is not None:
             ctx, k1 = _Ctx(batch, self.config.sliding_window or 0), batch.ctx["meta"]
@@ -318,6 +322,25 @@ class Gemma4(Backbone):
         return {"full_attention": _Meta(tok, full_ranges, k1, ctx, groups),
                 "sliding_attention": _Meta(sl_tok, sl_ranges, k1, ctx, groups, tiles=full_ranges)}
 
+    def _block_meta(self, tok, ranges, batch: PackedBatch) -> dict:
+        """Block attention (formats.base.Plan): the global layers see every block whole, from the batch's key ranges and a
+        block number per token (a block job's prefix 0, its branches 1, every other token -1); the sliding layers read
+        the same queries causally, cut to their window. Text without sessions."""
+        if batch.vision or batch.ctx is not None:
+            raise ValueError("block attention on gemma4 takes text without session states")
+        job, branch, qpos = tok
+        isblk = torch.tensor([j.blocks for j in batch.jobs], device=job.device)[job.long()]
+        blk = torch.where(isblk, (branch >= 0).int(), -1).to(torch.int32)
+        causal = ranges.clone()
+        idx = torch.arange(ranges.shape[0], device=ranges.device, dtype=ranges.dtype)
+        causal[:, 1] = torch.where(branch < 0, torch.minimum(ranges[:, 1], ranges[:, 0] + qpos.to(ranges.dtype) + 1),
+                                   ranges[:, 1])
+        causal[:, 3] = torch.where(branch >= 0, torch.minimum(ranges[:, 3], idx + 1), ranges[:, 3])
+        groups = batch.attn_runs or attn_kernel.runs(ranges.cpu().numpy(), by_row=True)
+        return {"full_attention": _Meta(tuple(tok) + (blk,), ranges, None, None, groups),
+                "sliding_attention": _Meta(tok, window_ranges(causal, qpos, self.config.sliding_window or 0), None, None,
+                                           groups, tiles=causal)}
+
     def request_graphs(self):
         """CUDA graphs for one request at a time (graphs.py), built on first use; None without CUDA graphs."""
         if not self.cuda_graphs or self.device.type != "cuda" or self._experts() == "eager":
@@ -329,8 +352,7 @@ class Gemma4(Backbone):
         return self._graphs
 
     def output_head(self):
-        head = self.model.get_output_embeddings()
-        return head.weight, getattr(head, "bias", None)
+        return lora.output_head(self.model.get_output_embeddings())
 
     @torch.inference_mode()
     def forward(self, b: PackedBatch, pad_to: int | None = None) -> dict:

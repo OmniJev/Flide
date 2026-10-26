@@ -34,7 +34,7 @@ def _piece(i: int, plan: Plan, branches: list[int], session: dict | None = None,
         extra = {"start": session.get("start", 0), "resume": session.get("resume"),
                  "marks": session.get("marks", ()) if first else ()}
     job = Job(plan.prefix, [plan.suffixes[b] for b in branches], [plan.branch_reads(b) for b in branches],
-              plan.vision, plan.positions, plan.offset, **extra)
+              plan.vision, plan.positions, plan.offset, blocks=plan.attention == "blocks", **extra)
     return Piece(i, branches, job)
 
 
@@ -42,6 +42,8 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
     if not plan.prefix:
         if plan.vision is not None:
             raise ValueError("a plan without a prefix takes no media")
+        if plan.attention != "causal":
+            raise ValueError("block attention needs a prefix")
         out = []
         for b, s in enumerate(plan.suffixes):
             if len(s) < 2:

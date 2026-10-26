@@ -64,6 +64,7 @@ class _Headless(torch.nn.Module):
 
 class Qwen35(Backbone):
     model_types = ("qwen3_5", "qwen3_5_text")
+    block_attention = True
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -231,7 +232,7 @@ class Qwen35(Backbone):
         head = self.causal_lm.get_output_embeddings()
         if head is None:
             raise ValueError("this checkpoint has no output head")
-        return head.weight, getattr(head, "bias", None)
+        return lora.output_head(head)
 
     def _stop_layer(self, b: PackedBatch) -> int:
         ints = [k for k in b.reads if k is not FINAL]

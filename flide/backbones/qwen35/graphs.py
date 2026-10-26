@@ -12,6 +12,8 @@ A request is a prefix and n branches, read at the last token of each branch.
 
 Several requests at once go through a *flat graph* (one replay per round): every prefix, then every branch, then
 padding to a length on a ladder, in one stream with no padding between them, the layout of the packed eager forward.
+Requests with block attention (formats.base.Plan) take flat graphs only: their key ranges run to the end of each
+block, as in runtime/pack.py.
 Gated DeltaNet layers run over sequence slots whose lengths, chunk lists and initial-state indices are filled before
 the replay (kernels/gdn.py), full attention reads per-token key ranges, so a graph of length T takes any round of up
 to T tokens, 64 requests and T / 32 + 16 sequences and chunks.
@@ -125,6 +127,8 @@ def _flat_layout(T: int, sess: bool = False) -> dict:
 
 
 class RequestGraphs:
+    block_attention = True
+
     def __init__(self, bb, sequence_ladder=SEQUENCE_LADDER, width_ladder=WIDTH_LADDER, batch_ladder=BATCH_LADDER,
                  kmax: int = KMAX, branch_tokens: int = BRANCH_TOKENS, cont_ladder=CONT_LADDER,
                  tail_ladder=TAIL_LADDER):
@@ -806,11 +810,12 @@ class RequestGraphs:
         for req in reqs:
             pre, sufs = req[0], req[1]
             media = req[2] if len(req) > 2 else None
-            items.append((pre + sufs[0], [], media, len(pre)) if len(sufs) == 1 and not settings.batch_invariant
-                         else (pre, sufs, media, len(pre)))
+            blk = len(req) > 3 and req[3]
+            items.append((pre + sufs[0], [], media, len(pre), blk) if len(sufs) == 1 and not settings.batch_invariant
+                         else (pre, sufs, media, len(pre), blk))
         at = 0
         starts = []
-        for j, (seq, _, media, p) in enumerate(items):
+        for j, (seq, _, media, p, blk) in enumerate(items):
             n = len(seq)
             s = slice(at, at + n)
             ar = np.arange(n)
@@ -825,7 +830,7 @@ class RequestGraphs:
             job[s] = j
             br[s] = -1
             r[0, s] = at
-            r[1, s] = ar + at + 1
+            r[1, s] = np.where(ar < p, at + p, at + n) if blk else ar + at + 1
             r[2:, s] = 0
             for d in (1, 2, 3):
                 src[d - 1, s] = np.where(ar >= d, ar + at - d, -1)
@@ -834,7 +839,7 @@ class RequestGraphs:
             at += n
         nread = 0
         b = 0
-        for j, (seq, sufs, media, _) in enumerate(items):
+        for j, (seq, sufs, media, _, blk) in enumerate(items):
             n, p0 = len(seq), starts[j]
             if not sufs:
                 reads[nread] = p0 + n - 1
@@ -852,7 +857,7 @@ class RequestGraphs:
                 r[0, s] = p0
                 r[1, s] = p0 + n
                 r[2, s] = at
-                r[3, s] = ar + at + 1
+                r[3, s] = at + m if blk else ar + at + 1
                 for d in (1, 2, 3):
                     back = ar - d
                     src[d - 1, s] = np.where(back >= 0, at + back, np.where(n + back >= 0, p0 + n + back, -1))
@@ -895,7 +900,7 @@ class RequestGraphs:
         self.staged.record()
         dev_ids = self.flat_in[lay["ids"][0]: lay["ids"][1]]
         torch.index_select(self.lm.embed_tokens.weight, 0, dev_ids, out=self.emb_flat[:T])
-        for j, (seq, _, media, _) in enumerate(items):
+        for j, (seq, _, media, _, _) in enumerate(items):
             if media is not None:
                 s = slice(starts[j], starts[j] + len(seq))
                 self.emb_flat[s] = self.bb.encode_vision(dev_ids[s], self.emb_flat[s], [media[0]],

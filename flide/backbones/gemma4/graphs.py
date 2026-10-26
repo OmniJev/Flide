@@ -7,7 +7,9 @@ interface is the flat graphs' of qwen3_5 (flat_cost, flat_rung, run_flat), so th
 ranges per query tile must not overlap: the first covers the prefix, the second the branches and the padding. Branching lives in
 that metadata alone. Padding tokens are jobs of their own that attend to themselves only, so they never touch a real
 token. The graph runs the checkpoint's own transformers decoder with flide's attention and gathers the
-final-norm hidden state at every branch's last token.
+final-norm hidden state at every branch's last token. Rounds of requests with block attention (formats.base.Plan)
+replay graphs of their own, captured when first needed: the global layers read the staged block ranges with a block
+number per token, the sliding layers the same queries causally.
 """
 from __future__ import annotations
 
@@ -30,6 +32,8 @@ REQUESTS = 64
 
 
 class GemmaGraphs:
+    block_attention = True
+
     def __init__(self, bb, ladder=LADDER, bmax: int = BMAX):
         self.bb = bb
         self.media = bb.vlm is not None
@@ -42,9 +46,10 @@ class GemmaGraphs:
         self.pos = torch.zeros(n, dtype=torch.long, device=dev)
         self.meta = torch.zeros(4, n, dtype=torch.int32, device=dev)
         self.ranges = torch.zeros(n, 4, dtype=torch.int32, device=dev)
+        self.gblk = torch.zeros(n, dtype=torch.int32, device=dev)
         self.reads = torch.zeros(bmax, dtype=torch.long, device=dev)
         self.emb = torch.zeros(n, bb.config.hidden_size, device=dev, dtype=bb.dtype)
-        self.host = torch.zeros(11, n, dtype=torch.long, pin_memory=True)
+        self.host = torch.zeros(12, n, dtype=torch.long, pin_memory=True)
         self.host_reads = torch.zeros(bmax, dtype=torch.long, pin_memory=True)
         self.out = torch.zeros(bmax, bb.config.hidden_size, device=dev, dtype=bb.dtype)
         self.staged = torch.cuda.Event()
@@ -52,6 +57,8 @@ class GemmaGraphs:
         self.pool = torch.cuda.graph_pool_handle()
         self.graphs: dict[int, torch.cuda.CUDAGraph] = {}
         self.failed: set[int] = set()
+        self.bgraphs: dict[int, torch.cuda.CUDAGraph] = {}
+        self.bfailed: set[int] = set()
 
         self.flat_max = self.ladder[-1]
 
@@ -93,18 +100,32 @@ class GemmaGraphs:
         cost = [self.flat_cost(r) for r in reqs]
         return self.flat_rung(len(reqs), sum(c[0] for c in cost), sum(c[1] for c in cost))
 
-    def _body(self, L: int):
-        bb, lm = self.bb, self.bb.lm
+    def _body(self, L: int, blocks: bool = False):
+        bb = self.bb
         tok = (self.meta[0, :L], self.meta[1, :L], self.meta[2, :L])
         r = self.ranges[:L]
+        groups = self.nreq(L) + self.nread(L) + 1 if settings.batch_invariant else 2 * self.nreq(L) + 1
+        if blocks:
+            br, qpos = self.meta[1, :L], self.meta[2, :L]
+            ar = torch.arange(L, device=r.device, dtype=r.dtype)
+            c = r.clone()
+            c[:, 1] = torch.where(br < 0, torch.minimum(r[:, 1], r[:, 0] + qpos + 1), r[:, 1])
+            c[:, 3] = torch.where(br >= 0, torch.minimum(r[:, 3], ar + 1), r[:, 3])
+            full = _Meta(tok + (self.gblk[:L],), r, groups=groups)
+            sliding = _Meta(tok, window_ranges(c, qpos, bb.config.sliding_window or 0), groups=groups, tiles=c)
+            self._decode(L, full, sliding)
+            return
         if bb.bidir:
             r = r.clone()
             r[:, 1] = torch.minimum(r[:, 1], r[:, 0] + self.meta[2, :L] + 1)
-        groups = self.nreq(L) + self.nread(L) + 1 if settings.batch_invariant else 2 * self.nreq(L) + 1
         full = _Meta(tok, r, groups=groups)
         sliding = _Meta(tok + (self.meta[3, :L],) if bb.bidir else tok,
                         window_ranges(self.ranges[:L], self.meta[2, :L], bb.config.sliding_window or 0), groups=groups,
                         tiles=r)
+        self._decode(L, full, sliding)
+
+    def _decode(self, L: int, full, sliding):
+        bb, lm = self.bb, self.bb.lm
         dec = bb.decoder()
         if dec is not None:
             n = self.nread(L)
@@ -119,26 +140,27 @@ class GemmaGraphs:
         self.out.copy_(out.last_hidden_state[0].index_select(0, self.reads))
 
     @torch.inference_mode()
-    def capture(self, L: int) -> bool:
-        if L in self.graphs:
+    def capture(self, L: int, blocks: bool = False) -> bool:
+        graphs, failed = (self.bgraphs, self.bfailed) if blocks else (self.graphs, self.failed)
+        if L in graphs:
             return True
-        if L in self.failed:
+        if L in failed:
             return False
         try:
             self._stage_dummy(L)
-            self._body(L)
+            self._body(L, blocks)
             torch.cuda.synchronize()
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g, pool=self.pool):
-                self._body(L)
+                self._body(L, blocks)
             torch.cuda.synchronize()
         except (RuntimeError, torch.OutOfMemoryError) as exc:
             log.warning("CUDA graph (gemma4, %d tokens) not captured (%s: %s); that length runs eagerly", L,
                         type(exc).__name__, str(exc)[:200])
-            self.failed.add(L)
+            failed.add(L)
             torch.cuda.empty_cache()
             return False
-        self.graphs[L] = g
+        graphs[L] = g
         return True
 
     def capture_flat(self, log_fn=None, max_tokens: int | None = None) -> None:
@@ -160,6 +182,7 @@ class GemmaGraphs:
         self.meta[1, :L].fill_(-2)
         self.meta[2, :L].zero_()
         self.meta[3, :L].fill_(-1)
+        self.gblk[:L].fill_(-1)
         self.emb[:L].zero_()
         self.ranges[:L, :2].zero_()
         self.ranges[:L, 2].copy_(ar)
@@ -181,10 +204,13 @@ class GemmaGraphs:
         """Final-norm hidden states at the last token of every branch of a round of (prefix, branches) requests, in
         request and branch order, one replay; None when the round does not fit."""
         L = self.flat_shape(reqs)
-        if L is None or not self.capture(L):
+        blocks = any(len(r) > 3 and r[3] for r in reqs)
+        if blocks and any(len(r) > 2 and r[2] is not None for r in reqs):
+            return None
+        if L is None or not self.capture(L, blocks):
             return None
         self._stage(reqs, L)
-        self.graphs[L].replay()
+        (self.bgraphs if blocks else self.graphs)[L].replay()
         return self.out[: sum(max(1, len(r[1])) for r in reqs)].clone()
 
     def _stage(self, reqs, L: int) -> None:
@@ -197,13 +223,16 @@ class GemmaGraphs:
         h = self.host.numpy()[:, :L]
         ids, pos, job, br, mpos, blk = h[0], h[1], h[2], h[3], h[4], h[5]
         r = h[6:10]
-        raw = h[10]
+        raw, gblk = h[10], h[11]
         reads = self.host_reads.numpy()
         items = []
         for req in reqs:
             media = req[2] if len(req) > 2 else None
             items.append((req[0] + req[1][0], [], media) if len(req[1]) == 1 else (req[0], req[1], media))
+        blocks = [len(req) > 3 and bool(req[3]) for req in reqs]
         blk[:] = -1
+        if any(blocks):
+            gblk[:] = -1
         at, starts, nblk = 0, [], 0
         for j, (seq, _, media) in enumerate(items):
             n = len(seq)
@@ -216,6 +245,10 @@ class GemmaGraphs:
             r[0, s] = at
             r[1, s] = ar + at + 1
             r[2:, s] = 0
+            if blocks[j]:
+                p = len(reqs[j][0])
+                r[1, s] = np.where(ar < p, at + p, at + n)
+                gblk[s] = (ar >= p).astype(np.int64)
             if media is not None and bb.bidir:
                 for a, e in vision_runs(ids[s], bb.placeholders):
                     blk[at + a: at + e] = nblk
@@ -240,7 +273,9 @@ class GemmaGraphs:
                 r[0, s] = p0
                 r[1, s] = p0 + n
                 r[2, s] = at
-                r[3, s] = ar + at + 1
+                r[3, s] = at + m if blocks[j] else ar + at + 1
+                if blocks[j]:
+                    gblk[s] = 1
                 reads[nread] = at + m - 1
                 nread += 1
                 at += m
@@ -265,6 +300,8 @@ class GemmaGraphs:
         self.meta[:, :L].copy_(t[2:6], non_blocking=True)
         self.ranges[:L].copy_(t[6:10].T, non_blocking=True)
         self.raw[:L].copy_(t[10], non_blocking=True)
+        if any(blocks):
+            self.gblk[:L].copy_(t[11], non_blocking=True)
         self.reads.copy_(self.host_reads, non_blocking=True)
         self.staged.record()
         self.emb[:L] = bb.lm.embed_tokens(self.ids[:L])

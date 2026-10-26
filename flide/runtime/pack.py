@@ -19,6 +19,9 @@ and linear-attention layers run one call per level, each starting from the state
 attention then reads prefix keys from a context buffer that holds every job's whole prefix in order (saved
 keys first), so a job's prefix needs no contiguous span of the stream.
 
+Block attention (`blocks`): every prefix query's key range runs to the end of its prefix and every branch query's to
+the end of its branch, so full attention is bidirectional inside each block and causal across them.
+
 Reads become gather indices into the stream, one index tensor per layer key, and a list of groups that
 say which rows of which layer go to which head and back to which branch and read.
 """
@@ -44,6 +47,7 @@ class Job:
     start: int = 0
     resume: Any = None
     marks: tuple[int, ...] = ()
+    blocks: bool = False
 
     @property
     def tokens(self) -> int:
@@ -109,6 +113,8 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             raise ValueError(f"job {j}: resume start {job.start} needs a saved state and must be inside its {P} prefix tokens")
         if (job.start or job.marks) and (job.positions is not None or job.offset or job.vision is not None):
             raise ValueError(f"job {j}: sessions take text-only prefixes")
+        if job.blocks and (job.start or job.marks):
+            raise ValueError(f"job {j}: block attention takes no session states")
         bounds.append([job.start] + sorted({m for m in job.marks if job.start < m < P}) + [P])
     split = any(len(b) > 2 or b[0] > 0 for b in bounds)
     ctx_start, at = [], 0
@@ -136,7 +142,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             segs[j].append((a, e, n))
             r = ranges[n: n + m]
             r[:, 0] = base
-            r[:, 1] = np.arange(base + a + 1, base + e + 1)
+            r[:, 1] = base + e if job.blocks else np.arange(base + a + 1, base + e + 1)
             r[:, 2:] = 0
             ids[n: n + m] = job.prefix[a:e]
             pos[n: n + m] = np.arange(a, e)
@@ -174,7 +180,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             r[:, 0] = p_lo
             r[:, 1] = p_lo + P
             r[:, 2] = start
-            r[:, 3] = np.arange(start + 1, start + m + 1)
+            r[:, 3] = start + m if job.blocks else np.arange(start + 1, start + m + 1)
             ids[n: n + m] = s
             pos[n: n + m] = np.arange(P, P + m)
             job_of[n: n + m] = j

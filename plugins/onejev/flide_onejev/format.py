@@ -2,6 +2,11 @@
 question, optional cyclic-shift debiasing, and chunking of choices with more options than slots.
 
 `plan` builds the branches of a request and `finish` turns their slot logits into typed answers.
+
+Checkpoints trained with OneJev's readout variants carry them in readout.json, the full-attention mask also under
+`modeling_overrides` in config.json. "noncausal" (block_bidirectional) attention: the prefix (system turn and state
+block) and each question read bidirectionally inside themselves and the question sees the prefix, the plan's
+attention "blocks"; such a checkpoint reads text only, as its release does. The learned "head" readout is not read.
 """
 from __future__ import annotations
 
@@ -29,6 +34,34 @@ NONE_DESCRIPTION = "The correct option is not among the options listed in this q
 PREFIX_MARK = "FLIDE_PREFIX_MARK"
 NAME_HINTS = ("onejev", "omnijev")
 SLOTS = Read("slots")
+READOUT_KEYS = {"attention", "readout", "head_dim", "n_slots"}
+FULL_ATTENTION_MASK = {"causal": "causal", "block_bidirectional": "noncausal"}
+
+
+def readout_config(model_dir: str) -> dict | None:
+    """The readout variant a checkpoint was trained with (readout.json, the attention also under `modeling_overrides`
+    in config.json, which must agree), or None when it carries neither."""
+    import json
+
+    path, cfg = Path(model_dir) / "readout.json", Path(model_dir) / "config.json"
+    fields = json.loads(path.read_text()) if path.is_file() else None
+    overrides = json.loads(cfg.read_text()).get("modeling_overrides") if cfg.is_file() else None
+    if fields is None and not overrides:
+        return None
+    fields = dict(fields or {})
+    if not set(fields) <= READOUT_KEYS:
+        return None
+    if overrides:
+        mask = overrides.get("attention", {}).get("full_attention")
+        attention = FULL_ATTENTION_MASK.get(mask)
+        if attention is None:
+            raise ValueError(f"unsupported full_attention mask {mask!r} in {cfg}")
+        if fields.get("attention", attention) != attention:
+            raise ValueError(f"{path} says attention {fields['attention']!r} but {cfg} says {mask!r}")
+        fields["attention"] = attention
+    fields.setdefault("attention", "causal")
+    fields.setdefault("readout", "slot_lm")
+    return fields
 
 
 class _DeferredResize:
@@ -158,7 +191,10 @@ class OneJev(Format):
         if getattr(config, "model_type", None) not in cls.backbones:
             return False
         path = str(Path(model_dir).resolve()).lower()
-        return any(h in path for h in NAME_HINTS)
+        if any(h in path for h in NAME_HINTS):
+            return True
+        rc = readout_config(model_dir)
+        return rc is not None and rc["readout"] in ("slot_lm", "head")
 
     def __init__(self, model_dir: str, tokenizer=None, calibration: Calibration | str | None = None,
                  style: PromptStyle = DEFAULT_STYLE, max_branch_tokens: int = 32768, max_request_tokens: int = 65536,
@@ -192,6 +228,13 @@ class OneJev(Format):
                            "vision_start_token_id", "vision_end_token_id", "boi_token_id", "eoi_token_id",
                            "audio_token_id")) if i is not None}
         self.has_vision = getattr(config, "vision_config", None) is not None
+        rc = readout_config(model_dir) or {"attention": "causal", "readout": "slot_lm"}
+        if rc["readout"] != "slot_lm":
+            raise ValueError(f"{model_dir} reads its answers with a learned {rc['readout']!r} readout; Flide reads "
+                             "the slot letters' output-head logits only (slot_lm)")
+        if rc["attention"] not in ("causal", "noncausal"):
+            raise ValueError(f"unknown attention {rc['attention']!r} in {model_dir}")
+        self.attention = "blocks" if rc["attention"] == "noncausal" else "causal"
         self._processor = None
         self._marker_checks = 0
         self._marker_ok = True
@@ -336,6 +379,12 @@ class OneJev(Format):
         n = len(prefix_ids)
         while n > 0 and not all(ids[:n] == prefix_ids[:n] for ids in full):
             n -= 1
+        if self.attention == "blocks" and n < len(prefix_ids):
+            for p in prompts:
+                ends = [e for _, e in self._encode_offsets(p)[1]]
+                k = bisect.bisect_right(ends, cut)
+                if k != n:
+                    raise ValueError(f"prefix block ends at token {k} but the shared cache at {n}")
         prefix_ids = prefix_ids[:n]
         suffixes = [ids[n:] for ids in full]
         if any(len(s) == 0 for s in suffixes):
@@ -516,6 +565,8 @@ class OneJev(Format):
         items = mmedia.check_items(getattr(request, "media", None))
         vision = None
         if items:
+            if self.attention == "blocks":
+                raise ValueError("this checkpoint reads text only; the request carries media")
             if not self.has_vision:
                 raise ValueError("this checkpoint has no vision tower; the request carries media")
             prefix_ids, suffixes, first_prompt, vision = self._prefix_and_suffix_media(request.state, rendered, items,
@@ -530,7 +581,7 @@ class OneJev(Format):
             raise ValueError(f"request is {total} tokens, limit is {self.max_request_tokens}")
         data = {"rendered": rendered, "owners": owners,
                 "prompt_sha256": hashlib.sha256(first_prompt.encode()).hexdigest()}
-        return Plan(prefix_ids, suffixes, (SLOTS,), data, vision=vision)
+        return Plan(prefix_ids, suffixes, (SLOTS,), data, vision=vision, attention=self.attention)
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs: list[list[Any]], debug: bool = False, **_):
         rendered: list[RenderedQuestion] = plan.data["rendered"]

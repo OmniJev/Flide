@@ -24,6 +24,7 @@ through the `/v1/systemone` API that vLLM and SGLang also serve.
 
 ## 🔥 News
 
+- 🔥 **2026-10-26** We added five decision model families in Flide 0.1.4 (cerno, JADE, Linne, mammoth, Sieve) and Quyet-1.0-Large. PRs welcome.
 - 🔥 **2026-10-26** We added eight decision model families in Flide 0.1.3 (AJev, Bespoke-Nimble, Darwin, jiwo, Lumma, mogan, Quyet, Senova), and LoRA adapters now serve as they are. PRs welcome.
 - 🔥 **2026-10-25** We added two decision model families in Flide 0.1.2 (Intern-Decision, torchcast) and up to 256 options per question. PRs welcome.
 - 🔥 **2026-10-24** We released Flide 0.1.0 on [PyPI](https://pypi.org/project/flide/). Welcome to have a try.
@@ -123,21 +124,26 @@ Every answer carries the probability of each option, ready for a threshold.
 |---|---|---|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | `andyzhang232/ajev-gemma4-12b-lora7` | text |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | `bespokelabs/Bespoke-Nimble-9B-v3` | text |
+| [cerno](https://huggingface.co/apertixai/cerno-27b) | `apertixai/cerno-4b`, `-9b`, `-27b` | text |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | `FINAL-Bench/Darwin-27B-ZTC` | text |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | text, images |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | text |
+| [JADE](https://huggingface.co/theunnecessarythings/JADE) | `theunnecessarythings/JADE` | text |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | `eljiwo/jiwo-0.8b`, `-4b` | text |
+| [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | `PNPM244/linne-fern-1-0` | text |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | `FrontiersMind/Lumma-fev-27B` | text |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | `baselabs/mammoth-1`, `baselabs/elephant-1` | text |
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | `moganai/mogan-decision-31B-it` | text |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | text, images, video |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | text |
-| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium` | text |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium`, `-Large` | text |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | text, images |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | `WangSenQWQ/Senova-4B` | text |
+| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | `sthanika-ai/Sieve-31B` | text |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | text |
 
 Any chat model on Qwen3.5 or Gemma 4 serves as it is; their rows name the official ones. The other rows are
-decision models, each read the way its release reads it. AJev, Bespoke-Nimble and mogan ship as LoRA adapters, which
+decision models, each read the way its release reads it. AJev, Bespoke-Nimble, JADE, mogan and Sieve ship as LoRA adapters, which
 Flide runs beside their base weights as peft does. A new family is one JSON file in `flide/formats/known/` when a
 prompt template describes it, else one folder in `plugins/` and one line in `pyproject.toml`; a separate package can
 also join through the `flide.formats` entry point.
