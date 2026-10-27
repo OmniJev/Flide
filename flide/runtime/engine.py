@@ -41,6 +41,29 @@ def _blocks(plan: Plan) -> bool:
     return plan.attention == "blocks"
 
 
+def _split(rows: list, counts: list[int] | None) -> list:
+    """Graph head outputs laid out per branch and read: a row per branch, or `counts[b]` rows in branch b's one read."""
+    if counts is None:
+        return [[[row]] for row in rows]
+    out, at = [], 0
+    for n in counts:
+        out.append([rows[at: at + n]])
+        at += n
+    return out
+
+
+class _Kept:
+    """Head outputs left on the device for a head with `on_device`: `tolist` hands back the tensor itself."""
+
+    __slots__ = ("y",)
+
+    def __init__(self, y):
+        self.y = y
+
+    def tolist(self):
+        return self.y
+
+
 def _gib() -> tuple[float, float, float]:
     """GPU memory in GiB: allocated by torch, reserved by its caching allocator (graph pools included), used on the
     device by every process."""
@@ -83,6 +106,8 @@ class Engine:
             raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
         options = dict(backbone_options or {})
+        if family.merge_lora:
+            options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
         if tp_size > 1:
             if session_cache_gb > 0:
@@ -202,7 +227,7 @@ class Engine:
             for g in batch.groups:
                 h = hidden[g.layer][g.start: g.end]
                 y = self.heads[g.head](h) if g.head is not None else h
-                ys.append(y.float().to("cpu", non_blocking=True))
+                ys.append(self._host(y, g.head))
             done_ev = None
             if self.backbone.device.type == "cuda":
                 done_ev = torch.cuda.Event()
@@ -253,6 +278,58 @@ class Engine:
         stats = {"tokens": tokens, "micro_batches": len(batches), "forward_s": time.perf_counter() - t_start}
         return outputs, stats
 
+    def _kept(self, head) -> bool:
+        return head is not None and getattr(self.heads[head], "on_device", False)
+
+    def _host(self, y, head):
+        """Head outputs copied to the host without waiting, or left on the device for a head with `on_device`."""
+        return _Kept(y) if self._kept(head) else y.float().to("cpu", non_blocking=True)
+
+    @staticmethod
+    def _spots(plan: Plan):
+        """Where a plan of one branch, read once after the final layer at positions other than its last token, is read:
+        positions in its one sequence (the prefix, then the branch); else None."""
+        if len(plan.suffixes) != 1:
+            return None
+        read = plan.branch_reads(0)
+        if len(read) != 1 or read[0].layer is not FINAL or read[0].positions == (-1,):
+            return None
+        L = len(plan.prefix) + len(plan.suffixes[0])
+        at = tuple(L + p if p < 0 else p for p in read[0].positions)
+        return at if all(0 <= a < L for a in at) else None
+
+    @staticmethod
+    def _branch_spots(plan: Plan):
+        """Where a plan of several branches, each read once after the final layer by the same head, is read when some
+        branch is read at positions other than its last token: per branch, positions in it; else None."""
+        if len(plan.suffixes) < 2:
+            return None
+        reads = [plan.branch_reads(b) for b in range(len(plan.suffixes))]
+        if any(len(r) != 1 or r[0].layer is not FINAL for r in reads) or len({r[0].head for r in reads}) != 1:
+            return None
+        if all(r[0].positions == (-1,) for r in reads):
+            return None
+        out = []
+        for s, r in zip(plan.suffixes, reads):
+            at = tuple(len(s) + p if p < 0 else p for p in r[0].positions)
+            if not all(0 <= a < len(s) for a in at):
+                return None
+            out.append(at)
+        return tuple(out)
+
+    def _counts(self, plan: Plan) -> list[int] | None:
+        """Graph head outputs per branch of a plan read at several positions (`_spots`, `_branch_spots`), else None."""
+        spots = self._spots(plan)
+        if spots is not None:
+            return [len(spots)]
+        spots = self._branch_spots(plan)
+        return None if spots is None else [len(s) for s in spots]
+
+    def _layout(self, plan: Plan, rows: list) -> list:
+        """Graph head outputs per branch and read: a row per branch, or every row of a branch in its one read when the
+        plan is read at several positions (`_counts`)."""
+        return _split(rows, self._counts(plan))
+
     def _session_ok(self, plan: Plan) -> bool:
         """Sessions take text-only plans whose reads all fall inside the branches."""
         if self.sessions is None or plan.vision is not None or plan.positions is not None or plan.offset:
@@ -288,18 +365,39 @@ class Engine:
         if graphs is None or (plan.vision is not None and not graphs.media):
             return None
         if not plan.prefix:
-            return None
+            items = self._alone_items(plan, graphs) if hasattr(graphs, "run_flat") else None
+            if items is None:
+                return None
+            hs = []
+            for sel in self._flat_rounds(graphs, items):
+                h = graphs.run_flat([items[k] for k in sel])
+                if h is None:
+                    return None
+                hs.append(h)
+            import torch
+
+            hidden = hs[0] if len(hs) == 1 else torch.cat(hs)
+            head = plan.branch_reads(0)[0].head
+            return self.heads[head](hidden) if head is not None else hidden
         blocks = _blocks(plan)
         if blocks and not getattr(graphs, "block_attention", False):
             return None
+        if self._branch_spots(plan) is not None:
+            item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
+            hidden = None if item is None else graphs.run_flat([item])
+            if hidden is None:
+                return None
+            head = plan.branch_reads(0)[0].head
+            return self.heads[head](hidden) if head is not None else hidden
         reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
         if len(reads) != 1:
             return None
         (read,) = reads
-        if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,):
+        spots = self._spots(plan)
+        if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,) and spots is None:
             return None
-        if (self.sessions is not None and hasattr(graphs, "run_session") and len(plan.prefix) >= self.sessions.min_tokens
-                and self._session_ok(plan)):
+        if (spots is None and self.sessions is not None and hasattr(graphs, "run_session")
+                and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan)):
             entry, start = self.sessions.match(plan.prefix)
             mark = self.sessions.mark(len(plan.prefix), start)
             out = None
@@ -324,7 +422,7 @@ class Engine:
             if hidden is not None:
                 head = read[0].head
                 return self.heads[head](hidden) if head is not None else hidden
-        if blocks or not graphs.fits(len(plan.prefix), [len(s) for s in plan.suffixes]):
+        if spots is not None or blocks or not graphs.fits(len(plan.prefix), [len(s) for s in plan.suffixes]):
             return None
         if plan.vision is not None:
             if not hasattr(graphs, "run_media"):
@@ -342,11 +440,49 @@ class Engine:
     def _flat_item(self, plan: Plan, graphs):
         """(prefix, branches, media) of a plan the flat graphs take, else None: every branch read at its last token
         after the final layer by the same head, text or media the backbone embeds, not one the session cache takes. A
-        plan with block attention gets a fourth field, True, on graphs with `block_attention`."""
+        plan with block attention gets a fourth field, True, on graphs with `block_attention`; a plan read at several
+        positions of its one branch (`_spots`) or of its branches (`_branch_spots`), on graphs with `read_spots`, a
+        fourth (block attention) and a fifth (the positions)."""
         if not plan.suffixes or not plan.prefix:
             return None
         blocks = _blocks(plan)
         if blocks and not getattr(graphs, "block_attention", False):
+            return None
+        bspots = self._branch_spots(plan)
+        if bspots is not None:
+            if not getattr(graphs, "read_spots", False):
+                return None
+            tail = (blocks, bspots)
+        else:
+            reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
+            if len(reads) != 1:
+                return None
+            (read,) = reads
+            spots = self._spots(plan)
+            if spots is not None and (settings.batch_invariant or not getattr(graphs, "read_spots", False)):
+                return None
+            if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,) and spots is None:
+                return None
+            if self.sessions is not None and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan):
+                return None
+            tail = (blocks, spots) if spots is not None else (True,) if blocks else ()
+        if plan.vision is None:
+            if plan.positions is not None or plan.offset:
+                return None
+            return (plan.prefix, plan.suffixes, None) + tail
+        if not graphs.media:
+            return None
+        if plan.positions is None:
+            plan.positions, plan.offset = self.backbone.vision_positions(plan.prefix, plan.vision)
+        return (plan.prefix, plan.suffixes, (plan.vision, plan.positions, plan.offset)) + tail
+
+    def _alone_items(self, plan: Plan, graphs):
+        """Flat graph items of a plan without a prefix under block attention, one per branch: its whole sequence as the
+        prefix, a copy of its last token as the branch, read at the sequence's last token (on graphs with
+        `read_spots`); None when the plan is not one of those or reads elsewhere."""
+        if plan.prefix or not _blocks(plan) or plan.vision is not None or settings.batch_invariant:
+            return None
+        if not (getattr(graphs, "read_spots", False) and getattr(graphs, "block_attention", False)):
             return None
         reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
         if len(reads) != 1:
@@ -354,50 +490,59 @@ class Engine:
         (read,) = reads
         if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,):
             return None
-        if self.sessions is not None and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan):
-            return None
-        if plan.vision is None:
-            if plan.positions is not None or plan.offset:
-                return None
-            return (plan.prefix, plan.suffixes, None) + ((True,) if blocks else ())
-        if not graphs.media:
-            return None
-        if plan.positions is None:
-            plan.positions, plan.offset = self.backbone.vision_positions(plan.prefix, plan.vision)
-        return (plan.prefix, plan.suffixes, (plan.vision, plan.positions, plan.offset)) + ((True,) if blocks else ())
+        return [(s, [s[-1:]], None, True, (len(s) - 1,)) for s in plan.suffixes]
 
-    def _run_flat(self, plans) -> dict:
-        """Plans of a round through flat graphs: as many per replay as fit, in order."""
-        graphs = getattr(self.backbone, "request_graphs", lambda: None)()
-        if graphs is None or not hasattr(graphs, "run_flat"):
-            return {}
-        items = {}
-        for i, p in enumerate(plans):
-            item = self._flat_item(p, graphs)
-            if item is not None:
-                items[i] = item
-        rounds, cur, size = [], [], (0, 0, 0)
-        for i in items:
-            cost = graphs.flat_cost(items[i])
-            grown = tuple(x + y for x, y in zip(size, cost))
-            if cur and graphs.flat_rung(len(cur) + 1, *grown) is None:
+    @staticmethod
+    def _flat_rounds(graphs, items) -> list[list[int]]:
+        """Indices of flat graph items cut into rounds, in order, as many per replay as fit."""
+        rounds, cur, size = [], [], None
+        whole = getattr(graphs, "whole", lambda item: False)
+        for k, item in enumerate(items):
+            cost = graphs.flat_cost(item)
+            grown = cost if size is None else tuple(x + y for x, y in zip(size, cost))
+            if cur and (graphs.flat_rung(len(cur) + 1, *grown) is None or whole(item) or whole(items[cur[0]])):
                 rounds.append(cur)
                 cur, grown = [], cost
-            cur.append(i)
+            cur.append(k)
             size = grown
         if cur:
             rounds.append(cur)
-        out = {}
-        for sel in rounds:
-            h = graphs.run_flat([items[i] for i in sel])
+        return rounds
+
+    def _run_flat(self, plans) -> dict:
+        """Plans of a round through flat graphs: as many per replay as fit, in order (a plan without a prefix under block
+        attention as one item per branch, `_alone_items`)."""
+        graphs = getattr(self.backbone, "request_graphs", lambda: None)()
+        if graphs is None or not hasattr(graphs, "run_flat"):
+            return {}
+        entries = []
+        for i, p in enumerate(plans):
+            item = self._flat_item(p, graphs)
+            if item is not None:
+                entries.append((i, item))
+            else:
+                entries.extend((i, it) for it in self._alone_items(p, graphs) or ())
+        parts, failed = {}, set()
+        for sel in self._flat_rounds(graphs, [it for _, it in entries]):
+            h = graphs.run_flat([entries[k][1] for k in sel])
             if h is None:
+                failed.update(entries[k][0] for k in sel)
                 continue
             at = 0
-            for i in sel:
-                n = len(plans[i].suffixes)
-                head = plans[i].branch_reads(0)[0].head
-                out[i] = self.heads[head](h[at: at + n]) if head is not None else h[at: at + n]
+            for k in sel:
+                i, item = entries[k]
+                n = len(plans[i].suffixes) if len(item) < 5 else len(item[4]) if len(item[1]) == 1 else sum(map(len, item[4]))
+                parts.setdefault(i, []).append(h[at: at + n])
                 at += n
+        import torch
+
+        out = {}
+        for i, hs in parts.items():
+            if i in failed:
+                continue
+            y = hs[0] if len(hs) == 1 else torch.cat(hs)
+            head = plans[i].branch_reads(0)[0].head
+            out[i] = self.heads[head](y) if head is not None else y
         return out
 
     def _run_sflat(self, plans, skip) -> dict:
@@ -447,7 +592,9 @@ class Engine:
 
     def _graph_outputs(self, plan: Plan):
         y = self._graph_hidden(plan)
-        return None if y is None else [[[row]] for row in y.float().cpu().tolist()]
+        if y is None:
+            return None
+        return self._layout(plan, y if self._kept(plan.branch_reads(0)[0].head) else y.float().cpu().tolist())
 
     def forward(self, plans: Sequence[Plan], mode: str = "graphs") -> tuple[list, list[str]]:
         """Head outputs of several plans in one round. "graphs" replays each plan's graphs back to back (one host sync
@@ -482,11 +629,11 @@ class Engine:
                 else:
                     ys[i] = y
             if ys:
-                copies = {i: y.float().to("cpu", non_blocking=True) for i, y in ys.items()}
+                copies = {i: self._host(y, plans[i].branch_reads(0)[0].head) for i, y in ys.items()}
                 done = torch.cuda.Event() if torch.cuda.is_available() else None
                 if done is not None:
                     done.record()
-                copies = (copies, done)
+                copies = (copies, done, {i: self._counts(plans[i]) for i in ys})
                 for i in ys:
                     paths[i] = "graph"
         if rest and mode == "alone":
@@ -503,11 +650,11 @@ class Engine:
         """The second half of `forward`: wait for the round's head outputs and lay them out per branch and read."""
         outs, paths, copies = launched
         if copies is not None:
-            host, done = copies
+            host, done, counts = copies
             if done is not None:
                 done.synchronize()
             for i, y in host.items():
-                outs[i] = [[[row]] for row in y.tolist()]
+                outs[i] = _split(y.tolist(), counts[i])
         return outs, paths
 
     def _run_one(self, plan):

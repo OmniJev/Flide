@@ -15,7 +15,8 @@ projections) is read back to 16 bits through its scale.
 
 A LoRA adapter under lora/ of the directory (flide/lora.py) is read with the checkpoint (modules saved whole and
 an embedding's LoRA go into the tensors as they are read) and its projections' LoRA attached to the modules after it,
-unmerged; with one, a failed read raises instead of falling back to transformers, which would drop it.
+unmerged, or with `merge` merged into their weights as they are read; with one, a failed read raises instead of
+falling back to transformers, which would drop it.
 """
 from __future__ import annotations
 
@@ -119,10 +120,10 @@ def blank(model, device=None, lean=None, fp8: dict | None = None) -> None:
 
 @torch.inference_mode()
 def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | None = None,
-              skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None) -> dict:
+              skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None, merge: bool = False) -> dict:
     from .. import lora
 
-    adapter = lora.load(model_dir, device)
+    adapter = lora.load(model_dir, device, merge)
     if adapter is None:
         return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None)
     try:
@@ -131,7 +132,7 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
         adapter.check()
     except (ValueError, FileNotFoundError) as exc:
         raise RuntimeError(f"{model_dir}: with its LoRA adapter: {exc}") from exc
-    log.info("a LoRA adapter beside the weights (%d tensors)", len(adapter))
+    log.info("a LoRA adapter %s the weights (%d tensors)", "merged into" if merge else "beside", len(adapter))
     return out
 
 

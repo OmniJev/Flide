@@ -6,7 +6,8 @@ question, optional cyclic-shift debiasing, and chunking of choices with more opt
 Checkpoints trained with OneJev's readout variants carry them in readout.json, the full-attention mask also under
 `modeling_overrides` in config.json. "noncausal" (block_bidirectional) attention: the prefix (system turn and state
 block) and each question read bidirectionally inside themselves and the question sees the prefix, the plan's
-attention "blocks"; such a checkpoint reads text only, as its release does. The learned "head" readout is not read.
+attention "blocks"; a request's images sit inside the prefix block, as its training reads them (train.common.batch_scores
+of OneJev's train package). The learned "head" readout is not read.
 """
 from __future__ import annotations
 
@@ -425,6 +426,12 @@ class OneJev(Format):
         n = len(prefix_u)
         while n > 0 and not all(ids[:n] == prefix_u[:n] for ids in full):
             n -= 1
+        if self.attention == "blocks" and n < len(prefix_u):
+            for p in prompts:
+                ends = [e for _, e in self._encode_offsets(p)[1]]
+                k = bisect.bisect_right(ends, cut)
+                if k != n:
+                    raise ValueError(f"prefix block ends at token {k} but the shared cache at {n}")
         suffixes = [ids[n:] for ids in full]
         if any(len(s) == 0 for s in suffixes):
             raise ValueError("a branch has an empty suffix; state block boundary mismatch")
@@ -565,8 +572,6 @@ class OneJev(Format):
         items = mmedia.check_items(getattr(request, "media", None))
         vision = None
         if items:
-            if self.attention == "blocks":
-                raise ValueError("this checkpoint reads text only; the request carries media")
             if not self.has_vision:
                 raise ValueError("this checkpoint has no vision tower; the request carries media")
             prefix_ids, suffixes, first_prompt, vision = self._prefix_and_suffix_media(request.state, rendered, items,

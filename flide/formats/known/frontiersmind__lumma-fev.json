@@ -39,6 +39,10 @@
     "false",
     "true"
   ],
+  "images": {
+    "min_pixels": 65536,
+    "max_pixels": 262144
+  },
   "max_options": 255,
   "max_prompt_tokens": 8192
 }

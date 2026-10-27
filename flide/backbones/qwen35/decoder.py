@@ -69,13 +69,14 @@ class Qwen35(Backbone):
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
              loader: str = "direct", quantize: str | None = None, tp: tuple[int, int] | None = None,
-             **options) -> "Qwen35":
+             merge_lora: bool = False, **options) -> "Qwen35":
         """`vision` None loads the vision tower when the checkpoint has one. `loader` "direct" reads the safetensors
         straight onto the device (flide.backbones.load); "hf" uses transformers' from_pretrained (needs accelerate);
         "none" reads no weights (zeros).
         `quantize` "fp8": the decoder's projections are read as float8 (quantized while read, or as an FP8 checkpoint
         stores them), never held in 16 bits. `tp` (rank, size): this rank's shard of a tensor parallel model
-        (runtime/tp.py; read in 16 bits, cut, then quantized)."""
+        (runtime/tp.py; read in 16 bits, cut, then quantized). `merge_lora`: a LoRA adapter merged into the weights as
+        they are read (flide/lora.py)."""
         import transformers
 
         config = transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
@@ -105,7 +106,7 @@ class Qwen35(Backbone):
 
             try:
                 model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
-                load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store)
+                load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store, merge=merge_lora)
             except (ValueError, FileNotFoundError) as exc:
                 import logging
 

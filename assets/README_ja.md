@@ -16,16 +16,16 @@
 
 <p align="center"><a href="#-ニュース">ニュース</a> · <a href="#速度">速度</a> · <a href="#正確な答え">正確な答え</a> · <a href="#クイックスタート">クイックスタート</a> · <a href="#モデル">モデル</a> · <a href="#オプション">オプション</a></p>
 
-[Flide](https://docs.flide.org) は意思決定モデルのための推論エンジンです。1 つのリクエストには、エージェントの軌跡や文書のような状態と、それについての型付きの質問が入ります。Flide は 1 回の順伝播の中で状態をすべての質問に分岐させるので、状態は一度だけ読まれ、どの質問も単独で聞いたときと同じ答えを受け取ります。答えは確率として、vLLM や SGLang も提供する
-`/v1/systemone` API で返ります。
+[Flide](https://docs.flide.org) は Jev 型の意思決定モデルのための高速な推論基盤です。厳密な状態分岐により vLLM や SGLang より最大 9.4 倍速く、どの答えもモデルがその質問だけに答えたときと同じです。API は Jev の `/v1/systemone` です。
 
 
 ## 🔥 ニュース
 
-- 🔥 **2026-10-26** Flide 0.1.4 で意思決定モデルのファミリーを 5 つ（cerno、JADE、Linne、mammoth、Sieve）追加し、Quyet-1.0-Large にも対応しました。PR を歓迎します。
-- 🔥 **2026-10-26** Flide 0.1.3 で意思決定モデルのファミリーを 8 つ（AJev、Bespoke-Nimble、Darwin、jiwo、Lumma、mogan、Quyet、Senova）追加し、LoRA アダプターもそのまま提供できるようになりました。PR を歓迎します。
-- 🔥 **2026-10-25** Flide 0.1.2 で意思決定モデルのファミリーを 2 つ（Intern-Decision、torchcast）追加し、1 問あたり最大 256 個の選択肢に対応しました。PR を歓迎します。
-- 🔥 **2026-10-24** Flide 0.1.0 を [PyPI](https://pypi.org/project/flide/) で公開しました。ぜひお試しください。
+- 🔥 **2026-10-28** Flide 0.1.5 で [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a)、[JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6)、[Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd)、[Lychee](https://huggingface.co/LycheeAI/Lychee-27B)、[pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2)、[StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) の 6 つの意思決定モデルファミリーを追加し、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) と [mammoth](https://huggingface.co/baselabs/mammoth-1) で画像入力にも対応しました。
+- 🔥 **2026-10-26** Flide 0.1.4 で [cerno](https://huggingface.co/apertixai/cerno-27b)、[JADE](https://huggingface.co/theunnecessarythings/JADE)、[Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8)、[mammoth](https://huggingface.co/baselabs/mammoth-1)、[Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) の 5 つの意思決定モデルファミリーを追加し、[Quyet-1.0-Large](https://huggingface.co/chinhnc/Quyet-1.0-Large) にも対応しました。
+- 🔥 **2026-10-26** Flide 0.1.3 で [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7)、[Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3)、[Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8)、[jiwo](https://huggingface.co/eljiwo/jiwo-4b)、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6)、[mogan](https://huggingface.co/moganai/mogan-decision-31B-it)、[Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6)、[Senova](https://huggingface.co/WangSenQWQ/Senova-4B) の 8 つの意思決定モデルファミリーを追加し、LoRA アダプターもそのまま提供できるようになりました。
+- 🔥 **2026-10-25** Flide 0.1.2 で [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004)、[torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) の 2 つの意思決定モデルファミリーを追加し、1 問あたり最大 256 個の選択肢に対応しました。
+- 🔥 **2026-10-24** Flide 0.1.0 を [PyPI](https://pypi.org/project/flide/) で公開しました。[Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) と [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) のチャットモデル、[OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) と [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) の意思決定モデルに対応しています。ぜひお試しください。
 
 
 <p align="center">
@@ -118,29 +118,37 @@ EOF
 
 ## モデル
 
-| モデル | チェックポイント | 入力 |
-|---|---|---|
-| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | `andyzhang232/ajev-gemma4-12b-lora7` | テキスト |
-| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | `bespokelabs/Bespoke-Nimble-9B-v3` | テキスト |
-| [cerno](https://huggingface.co/apertixai/cerno-27b) | `apertixai/cerno-4b`, `-9b`, `-27b` | テキスト |
-| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | `FINAL-Bench/Darwin-27B-ZTC` | テキスト |
-| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | テキスト、画像 |
-| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | テキスト |
-| [JADE](https://huggingface.co/theunnecessarythings/JADE) | `theunnecessarythings/JADE` | テキスト |
-| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | `eljiwo/jiwo-0.8b`, `-4b` | テキスト |
-| [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | `PNPM244/linne-fern-1-0` | テキスト |
-| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | `FrontiersMind/Lumma-fev-27B` | テキスト |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | `baselabs/mammoth-1`, `baselabs/elephant-1` | テキスト |
-| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | `moganai/mogan-decision-31B-it` | テキスト |
-| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | テキスト、画像、動画 |
-| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | テキスト |
-| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium`, `-Large` | テキスト |
-| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | テキスト、画像 |
-| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | `WangSenQWQ/Senova-4B` | テキスト |
-| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | `sthanika-ai/Sieve-31B` | テキスト |
-| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | テキスト |
+| モデル | 入力 | DI | MultiRC | QuALITY |
+|---|---|---:|---:|---:|
+| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | テキスト | 3.7× | 9.3× | 2.6× |
+| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | テキスト | 2.6× | 2.1× | 1.6× |
+| [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | 3.4 to 4.7× | 8.1 to 9.1× | 1.1× |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | 1.6× | 7.0× | 1.2× |
+| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | テキスト、画像 | 1.1 to 1.5× | 1.1 to 2.5× | 1.0 to 1.1× |
+| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | テキスト、画像 | 4.4× | 1.1× | 1.5× |
+| [JADE](https://huggingface.co/theunnecessarythings/JADE) | テキスト | 2.0× | 9.2× | 1.7× |
+| [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | テキスト | 3.1× | 2.6× | 1.9× |
+| [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | テキスト、画像 | 1.5× | 5.8× | 1.2× |
+| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | 1.7 to 2.1× | 5.0 to 6.9× | 1.8× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | 5.6 to 10.1× | 1.3 to 1.7× | 1.1 to 2.2× |
+| [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
+| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | テキスト、画像 | 1.7× | 7.1× | 1.2× |
+| [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | テキスト | 1.4× | 1.5× | 1.4× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | 3.3 to 5.3× | 2.3 to 3.4× | 1.6 to 2.0× |
+| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | テキスト | 1.6× | 8.5× | 1.8× |
+| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | テキスト、画像、動画 | 3.2 to 11.9× | 7.3× | 4.7× |
+| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | テキスト | 4.2× | 5.0× | 1.3 to 1.7× |
+| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | テキスト、画像 | 3.1× | 1.4× | 1.2× |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | テキスト | 1.9 to 5.9× | 7.0 to 7.2× | 1.4 to 1.9× |
+| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | テキスト、画像 | 1.2 to 3.3× | 2.4 to 7.7× | 1.0 to 2.0× |
+| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |
+| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | 3.0× | 14.3× | 2.6× |
+| [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.4× |
 
-Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。AJev、Bespoke-Nimble、JADE、mogan、Sieve は LoRA アダプターとして公開されており、Flide は peft と同じくアダプターをベースの重みの横で動かします。新しいモデルファミリーは、プロンプトテンプレートで書けるなら `flide/formats/known/` に JSON ファイルを 1 つ置くだけで、そうでなければ `plugins/` にディレクトリを 1 つ加え、
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev、Open-Jev は vllm-jev と比べており、範囲は試したサイズの幅です。
+
+Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。AJev、Bespoke-Nimble、JADE、mogan、Sieve と小さめの Kev は LoRA アダプターとして公開されており、Flide は peft と同じくアダプターをベースの重みの横で動かします。JevAny も LoRA アダプターとして公開されており、Flide はそのリリースと同じくアダプターをベースの重みに統合します。新しいモデルファミリーは、プロンプトテンプレートで書けるなら `flide/formats/known/` に JSON ファイルを 1 つ置くだけで、そうでなければ `plugins/` にディレクトリを 1 つ加え、
 `pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
 
 ## オプション

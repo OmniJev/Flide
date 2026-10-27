@@ -1,9 +1,11 @@
 """LoRA adapters (peft format): a model directory that holds an adapter and no checkpoint of its own runs from its base
 checkpoint with the adapter beside the weights, unmerged as peft runs it: each projection keeps its 16-bit weight and
 adds x A^T (scaling B)^T (`attach`; the fused decoders read it through `attached`, every other path through a forward
-hook), so the answers carry no rounding of a merged weight. modules_to_save replace their module's tensors and an
-embedding's LoRA is merged into its table as they are read. It serves as the full model it stands for, on every path,
-with the kernel bundles as they are.
+hook), so the answers carry no rounding of a merged weight. A family whose release serves its adapters merged
+(Format.merge_lora) gets them merged as the weights are read: W + scaling B A in float32, rounded once, as peft's
+merge_and_unload over a float32 product. modules_to_save replace their module's tensors and an embedding's LoRA is
+merged into its table as they are read. It serves as the full model it stands for, on every path, with the kernel
+bundles as they are.
 
 `view` makes the directory the engine loads: links to the base checkpoint's files, the adapter's own files over them
 (tokenizer, chat template, decision configuration, readout heads), the adapter itself under lora/. It sits under
@@ -102,7 +104,7 @@ class Adapter:
     projection's own weight, a module saved whole, an embedding with its LoRA merged); `attach(model)` gives the
     projections their LoRA; `check()` raises if a part of the adapter found no tensor or module of the checkpoint."""
 
-    def __init__(self, model_dir: str, device):
+    def __init__(self, model_dir: str, device, merge: bool = False):
         from safetensors import safe_open
 
         d = Path(model_dir) / SUB
@@ -133,6 +135,7 @@ class Adapter:
                 self.pairs[module + ".weight"] = (p["lora_embedding_A"], p["lora_embedding_B"], True)
             else:
                 raise ValueError(f"{d / WEIGHTS}: {module} has {sorted(p)}")
+        self.merge = merge
         self.applied = set()
         self.attached = set()
         self.embedding = None
@@ -162,7 +165,10 @@ class Adapter:
                 if (B.shape[0], A.shape[1]) != tuple(t.shape):
                     raise ValueError(f"adapter {name}: B A {(B.shape[0], A.shape[1])}, checkpoint {tuple(t.shape)}")
                 self.applied.add(name)
-                return t
+                if not self.merge:
+                    return t
+                delta = (B.float() @ A.float()).to(t.device) * self._scaling(name, A.shape[0])
+                return (t.float() + delta).to(t.dtype)
             delta = (B.float() @ A.float()).T
             self.embedding = t.clone()
             if tuple(delta.shape) != tuple(t.shape):
@@ -176,7 +182,7 @@ class Adapter:
         forward hook that adds x A^T B^T when the module itself runs."""
         for mname, mod in model.named_modules():
             name = canonical(mname + ".weight")
-            if name in self.pairs and not self.pairs[name][2] and isinstance(mod, torch.nn.Linear):
+            if name in self.pairs and not self.pairs[name][2] and not self.merge and isinstance(mod, torch.nn.Linear):
                 A, B, _ = self.pairs[name]
                 dt = mod.weight.dtype
                 mod.lora = (A.to(dt), (B.float() * self._scaling(name, A.shape[0])).to(dt))
@@ -187,7 +193,7 @@ class Adapter:
         missed = sorted((set(self.pairs) | set(self.full)) - self.applied)
         if missed:
             raise ValueError(f"{len(missed)} adapter tensors found no checkpoint tensor, e.g. {missed[:4]}")
-        loose = sorted(k for k, p in self.pairs.items() if not p[2] and k not in self.attached)
+        loose = sorted(k for k, p in self.pairs.items() if not p[2] and not self.merge and k not in self.attached)
         if loose:
             raise ValueError(f"{len(loose)} adapter projections found no linear module, e.g. {loose[:4]}")
 
@@ -285,5 +291,5 @@ def attached(base, mods):
     return LowRank(base, A, B)
 
 
-def load(model_dir: str, device) -> Adapter | None:
-    return Adapter(model_dir, device) if (Path(model_dir) / SUB / CONFIG).is_file() else None
+def load(model_dir: str, device, merge: bool = False) -> Adapter | None:
+    return Adapter(model_dir, device, merge) if (Path(model_dir) / SUB / CONFIG).is_file() else None

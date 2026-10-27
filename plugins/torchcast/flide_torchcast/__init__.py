@@ -406,3 +406,136 @@ class Torchcast(Format):
         usage = Usage(input_tokens=d["tokens"], output_tokens=len(answers))
         return SystemOneResponse(model="", answers=answers, usage=usage), {"format": "torchcast",
                                                                           "prefix_tokens": len(plan.prefix)}
+
+
+LODESTAR = "lodestar-letter-readout-v1"
+NONE_OPTION = "None of the above"
+
+
+def none_lines(opts: list[tuple[str, str | None]]) -> list[str]:
+    """Option lines of a choice with the extra last option NONE_OPTION: the bare-id rule looks at the listed options."""
+    lines = option_lines("choice", opts)
+    lines.append(f"{LETTERS[len(opts)]}) {NONE_OPTION}")
+    return lines
+
+
+@register("startlux")
+class StartLux(Torchcast):
+    """StartLux-Decision v1.1 Instant (format lodestar-letter-readout-v1) as its startlux-decide server reads it
+    (startlux_decide/pipeline.py with the serve defaults): the v1 prompt above, every choice with the extra last
+    option "None of the above" (none_check, on by default in serve), whose share is left out and the listed options
+    renormalised; a choice of one option is read too. A choice with more than 25 options is knocked out: groups of at
+    most `group` options without the extra one, the `keep` best of each (the 25 best overall when more qualify), then
+    one final read of those with the extra option; the others keep `residual` of the mass. The prompt attention is
+    bidirectional (decision_config prompt_attention): every question is a sequence of its own, read whole both ways in
+    the full-attention layers. Text only."""
+
+    attention = "blocks"
+
+    @classmethod
+    def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        return bool(decision_config) and decision_config.get("format") == LODESTAR
+
+    def __init__(self, model_dir: str, tokenizer=None, max_length: int = 131072):
+        super().__init__(model_dir, tokenizer, max_length)
+        if self.config.get("prompt_attention") != "bidirectional":
+            raise ValueError(f"{model_dir}: prompt_attention {self.config.get('prompt_attention')!r}; this family reads "
+                             "the bidirectional Instant folders")
+
+    def plan(self, request: SystemOneRequest, **_) -> Plan:
+        if getattr(request, "images", None):
+            raise ValueError("images: this model is read as text only")
+        wide, rows = {}, []
+        for qid, q in request.questions.items():
+            if q.type == "choice" and any(_norm(k) == _norm(NONE_OPTION) for k in q.criteria):
+                raise ValueError(f'question {qid!r}: the server adds the option "{NONE_OPTION}" itself')
+            if q.type == "choice" and len(q.criteria) > MAX_OPTIONS - 1:
+                groups = groups_of([str(k) for k in q.criteria], self.group)
+                wide[qid] = {"groups": groups, "first": None, "finalists": None, "final": None}
+                rows += [(qid, g, ("group", qid)) for g in groups]
+            else:
+                rows.append((qid, None, ("plain", qid)))
+        return self._plan(request, rows, {"fixed": {}, "wide": wide, "plain": {}, "tokens": 0})
+
+    def _plan(self, request: SystemOneRequest, rows: list[tuple], data: dict) -> Plan:
+        """rows: (question id, option keys or None, what the read stands for); each a sequence of its own."""
+        state = state_text(request.state)
+        texts = []
+        for qid, keys, ref in rows:
+            q = request.questions[qid]
+            opts = options_of(q, keys)
+            if q.type == "choice" and ref[0] != "group":
+                if not 1 <= len(opts) <= MAX_OPTIONS - 1:
+                    raise ValueError(f"{len(opts)} options, limit is {MAX_OPTIONS - 1} with the extra option")
+                lines = none_lines(opts)
+            else:
+                if not 2 <= len(opts) <= MAX_OPTIONS or (q.type == "score" and len(opts) > MAX_LEVELS):
+                    raise ValueError(f"{len(opts)} options, limit is 2 to {MAX_OPTIONS}")
+                lines = option_lines(q.type, opts)
+            user = ("Evidence:\n" + (state if state.strip() else "(none)") + "\n\nQuestion: " + question_text(q)
+                    + "\nOptions:\n" + "\n".join(lines))
+            texts.append(self._template(user))
+        seqs = [self.tokenizer.encode(t, add_special_tokens=False) for t in texts]
+        longest = max(len(s) for s in seqs)
+        if longest > self.max_length:
+            raise ValueError(f"prompt is {longest} tokens, limit is {self.max_length}")
+        return Plan([], seqs, (READ,), {**data, "rows": rows}, attention="blocks")
+
+    def _absorb(self, request: SystemOneRequest, plan: Plan, outputs) -> dict:
+        d = plan.data
+        firsts: dict = {}
+        for (qid, keys, ref), out in zip(d["rows"], outputs):
+            q = request.questions[qid]
+            listed = len(keys) if keys is not None else len(options_of(q))
+            none = q.type == "choice" and ref[0] != "group"
+            p = self._probs(out, q.type, listed + none)
+            if none:
+                s = sum(p[:-1])
+                p = [v / s for v in p[:-1]] if s > 0 else [1.0 / listed] * listed
+            if ref[0] == "plain":
+                d["plain"][qid] = p
+            elif ref[0] == "group":
+                firsts.setdefault(qid, {}).update(zip(keys, p))
+            else:
+                node = d["wide"][qid]
+                final = dict(zip(node["finalists"], p))
+                rest = [k for k in node["first"] if k not in final]
+                mass = sum(node["first"][k] for k in rest) or 1.0
+                dist = {k: v * (1 - self.residual) for k, v in final.items()}
+                dist.update({k: self.residual * node["first"][k] / mass for k in rest})
+                z = sum(dist.values())
+                node["final"] = {k: v / z for k, v in dist.items()}
+        for qid, first in firsts.items():
+            node = d["wide"][qid]
+            node["first"] = first
+            finalists = [k for g in node["groups"] for k, _ in sorted(((k, first[k]) for k in g),
+                                                                       key=lambda x: -x[1])[:self.keep]]
+            if len(finalists) > MAX_OPTIONS - 1:
+                finalists = sorted(finalists, key=lambda k: -first[k])[:MAX_OPTIONS - 1]
+            node["finalists"] = finalists
+        d["tokens"] += plan.tokens
+        return d
+
+    def follow_up(self, request: SystemOneRequest, plan: Plan, outputs, **_) -> Plan | None:
+        d = self._absorb(request, plan, outputs)
+        rows = [(qid, node["finalists"], ("final", qid)) for qid, node in d["wide"].items() if node["final"] is None]
+        if not rows:
+            d["done"] = True
+            return None
+        return self._plan(request, rows, d)
+
+    def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
+        d = plan.data if plan.data.get("done") else self._absorb(request, plan, outputs)
+        answers = {}
+        for qid, q in request.questions.items():
+            if qid in d["wide"]:
+                p = d["wide"][qid]["final"]
+                answers[qid] = make_choice(list(p), list(p.values()))
+            elif q.type == "noul":
+                answers[qid] = make_noul(d["plain"][qid][0])
+            elif q.type == "choice":
+                answers[qid] = make_choice([str(k) for k in q.criteria], d["plain"][qid])
+            else:
+                answers[qid] = make_score(list(q.criteria), d["plain"][qid])
+        usage = Usage(input_tokens=d["tokens"], output_tokens=len(answers))
+        return SystemOneResponse(model="", answers=answers, usage=usage), {"format": "startlux"}

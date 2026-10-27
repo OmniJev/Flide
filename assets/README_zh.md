@@ -16,15 +16,16 @@
 
 <p align="center"><a href="#-动态">动态</a> · <a href="#速度">速度</a> · <a href="#精确的答案">精确的答案</a> · <a href="#快速开始">快速开始</a> · <a href="#模型">模型</a> · <a href="#选项">选项</a></p>
 
-[Flide](https://docs.flide.org) 是决策模型的推理引擎。一个请求里有一个状态，比如智能体的轨迹或一篇文档，还有关于它的若干个问题。Flide 在一次前向传播里把状态分叉给所有问题，状态只读一遍，每个问题拿到的答案和单独问它时完全一样。答案以概率的形式返回，接口是 vLLM 和 SGLang 也在用的 `/v1/systemone`。
+[Flide](https://docs.flide.org) 是面向 Jev 类决策模型的高速推理基础设施。凭借精确状态分叉，它比 vLLM 和 SGLang 最高快 9.4 倍，每个答案都和模型单独回答这道题时完全一致。接口是 Jev 的 `/v1/systemone`。
 
 
 ## 🔥 动态
 
-- 🔥 **2026-10-26** Flide 0.1.4 新增五个决策模型家族（cerno、JADE、Linne、mammoth、Sieve），并支持 Quyet-1.0-Large。欢迎提 PR。
-- 🔥 **2026-10-26** Flide 0.1.3 新增八个决策模型家族（AJev、Bespoke-Nimble、Darwin、jiwo、Lumma、mogan、Quyet、Senova），LoRA 适配器也能直接服务。欢迎提 PR。
-- 🔥 **2026-10-25** Flide 0.1.2 新增两个决策模型家族（Intern-Decision、torchcast），每道题最多支持 256 个选项。欢迎提 PR。
-- 🔥 **2026-10-24** Flide 0.1.0 已发布到 [PyPI](https://pypi.org/project/flide/)，欢迎试用。
+- 🔥 **2026-10-28** Flide 0.1.5 新增六个决策模型家族，包括 [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a)、[JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6)、[Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd)、[Lychee](https://huggingface.co/LycheeAI/Lychee-27B)、[pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) 和 [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82)，[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) 和 [mammoth](https://huggingface.co/baselabs/mammoth-1) 也能读图片了。
+- 🔥 **2026-10-26** Flide 0.1.4 新增五个决策模型家族，包括 [cerno](https://huggingface.co/apertixai/cerno-27b)、[JADE](https://huggingface.co/theunnecessarythings/JADE)、[Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8)、[mammoth](https://huggingface.co/baselabs/mammoth-1) 和 [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586)，并支持 [Quyet-1.0-Large](https://huggingface.co/chinhnc/Quyet-1.0-Large)。
+- 🔥 **2026-10-26** Flide 0.1.3 新增八个决策模型家族，包括 [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7)、[Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3)、[Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8)、[jiwo](https://huggingface.co/eljiwo/jiwo-4b)、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6)、[mogan](https://huggingface.co/moganai/mogan-decision-31B-it)、[Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) 和 [Senova](https://huggingface.co/WangSenQWQ/Senova-4B)，LoRA 适配器也能直接服务。
+- 🔥 **2026-10-25** Flide 0.1.2 新增两个决策模型家族，包括 [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) 和 [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b)，每道题最多支持 256 个选项。
+- 🔥 **2026-10-24** Flide 0.1.0 已发布到 [PyPI](https://pypi.org/project/flide/)，支持 [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) 和 [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) 对话模型，以及 [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) 和 [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) 决策模型，欢迎试用。
 
 
 <p align="center">
@@ -117,29 +118,37 @@ EOF
 
 ## 模型
 
-| 模型 | 检查点 | 输入 |
-|---|---|---|
-| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | `andyzhang232/ajev-gemma4-12b-lora7` | 文本 |
-| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | `bespokelabs/Bespoke-Nimble-9B-v3` | 文本 |
-| [cerno](https://huggingface.co/apertixai/cerno-27b) | `apertixai/cerno-4b`, `-9b`, `-27b` | 文本 |
-| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | `FINAL-Bench/Darwin-27B-ZTC` | 文本 |
-| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | `google/gemma-4-E2B-it`, `-E4B-it`, `-12B-it`, `-31B-it` | 文本、图片 |
-| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | `internlm/Intern-Decision-4B`, `-2B`, `-0.8B` | 文本 |
-| [JADE](https://huggingface.co/theunnecessarythings/JADE) | `theunnecessarythings/JADE` | 文本 |
-| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | `eljiwo/jiwo-0.8b`, `-4b` | 文本 |
-| [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | `PNPM244/linne-fern-1-0` | 文本 |
-| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | `FrontiersMind/Lumma-fev-27B` | 文本 |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | `baselabs/mammoth-1`, `baselabs/elephant-1` | 文本 |
-| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | `moganai/mogan-decision-31B-it` | 文本 |
-| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | `OmniJev/OneJev1.6-0.8B`, `-4B`, `-9B`, `-27B` | 文本、图片、视频 |
-| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | `ZefanCai/Open-Jev-2B`, `-9B` | 文本 |
-| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | `chinhnc/Quyet-1.0-Medium`, `-Large` | 文本 |
-| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | `Qwen/Qwen3.5-0.8B`, `-2B`, `-4B`, `-9B`, `-27B` | 文本、图片 |
-| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | `WangSenQWQ/Senova-4B` | 文本 |
-| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | `sthanika-ai/Sieve-31B` | 文本 |
-| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | `torchcast-ai/torchcast-decision-27b` | 文本 |
+| 模型 | 输入 | DI | MultiRC | QuALITY |
+|---|---|---:|---:|---:|
+| [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | 文本 | 3.7× | 9.3× | 2.6× |
+| [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | 文本 | 2.6× | 2.1× | 1.6× |
+| [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | 3.4 to 4.7× | 8.1 to 9.1× | 1.1× |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | 1.6× | 7.0× | 1.2× |
+| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 文本、图片 | 1.1 to 1.5× | 1.1 to 2.5× | 1.0 to 1.1× |
+| [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | 文本、图片 | 4.4× | 1.1× | 1.5× |
+| [JADE](https://huggingface.co/theunnecessarythings/JADE) | 文本 | 2.0× | 9.2× | 1.7× |
+| [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | 文本 | 3.1× | 2.6× | 1.9× |
+| [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 文本、图片 | 1.5× | 5.8× | 1.2× |
+| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | 1.7 to 2.1× | 5.0 to 6.9× | 1.8× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | 5.6 to 10.1× | 1.3 to 1.7× | 1.1 to 2.2× |
+| [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
+| [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | 文本、图片 | 1.7× | 7.1× | 1.2× |
+| [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | 文本 | 1.4× | 1.5× | 1.4× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | 文本、图片 | 3.3 to 5.3× | 2.3 to 3.4× | 1.6 to 2.0× |
+| [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | 文本 | 1.6× | 8.5× | 1.8× |
+| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | 文本、图片、视频 | 3.2 to 11.9× | 7.3× | 4.7× |
+| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | 文本 | 4.2× | 5.0× | 1.3 to 1.7× |
+| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 文本、图片 | 3.1× | 1.4× | 1.2× |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 文本 | 1.9 to 5.9× | 7.0 to 7.2× | 1.4 to 1.9× |
+| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 文本、图片 | 1.2 to 3.3× | 2.4 to 7.7× | 1.0 to 2.0× |
+| [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 文本 | 3.1× | 28.1× | 1.2× |
+| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 文本 | 3.0× | 14.3× | 2.6× |
+| [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 文本 | 2.6× | 1.1× | 1.2× |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.4× |
 
-基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。AJev、Bespoke-Nimble、JADE、mogan 和 Sieve 以 LoRA 适配器发布，Flide 像 peft 一样把适配器放在底座权重旁边运行。新增一个模型族，能用提示词模板描述的只需在 `flide/formats/known/` 里加一个 JSON 文件，否则在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，Open-Jev 对比的是 vllm-jev，写成范围的是测过的几个尺寸。
+
+基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。AJev、Bespoke-Nimble、JADE、mogan、Sieve 和较小的几个 Kev 以 LoRA 适配器发布，Flide 像 peft 一样把适配器放在底座权重旁边运行。JevAny 也以 LoRA 适配器发布，Flide 照它发布版的做法把适配器合并进底座权重。新增一个模型族，能用提示词模板描述的只需在 `flide/formats/known/` 里加一个 JSON 文件，否则在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
 `flide.formats` 入口点接入。
 
 ## 选项

@@ -74,6 +74,21 @@ BRANCH_TOKENS = 16384
 _OFF = -1.0e4
 
 
+def _causal(q, k, v, scale: float):
+    """Causal attention over one sequence from position 0, q [T, H, D], k and v [T, Hkv, D] -> [T, H, D]: PyTorch's
+    flash attention, which needs no key metadata (a round of one sequence has no other request to mask)."""
+    import torch.nn.functional as F
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    G = q.shape[1] // k.shape[1]
+    heads = lambda x: x.transpose(0, 1)[None]
+    with sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],
+                     set_priority=True):
+        o = F.scaled_dot_product_attention(heads(q), heads(k.repeat_interleave(G, 1)), heads(v.repeat_interleave(G, 1)),
+                                           is_causal=True, scale=scale)
+    return o[0].transpose(0, 1)
+
+
 def _rung(ladder, n: int) -> int | None:
     i = bisect.bisect_left(ladder, n)
     return ladder[i] if i < len(ladder) else None
@@ -128,6 +143,7 @@ def _flat_layout(T: int, sess: bool = False) -> dict:
 
 class RequestGraphs:
     block_attention = True
+    read_spots = True
 
     def __init__(self, bb, sequence_ladder=SEQUENCE_LADDER, width_ladder=WIDTH_LADDER, batch_ladder=BATCH_LADDER,
                  kmax: int = KMAX, branch_tokens: int = BRANCH_TOKENS, cont_ladder=CONT_LADDER,
@@ -192,6 +208,7 @@ class RequestGraphs:
         P, B, _ = flat_dims(FLAT_LADDER[-1])
         self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=dt)
         self.flat_max = FLAT_LADDER[-1]
+        self.out_whole = None
         self.emb_flat = torch.zeros(FLAT_LADDER[-1], cfg.hidden_size, device=dev, dtype=dt)
         self.sess = None
         self.pool = torch.cuda.graph_pool_handle()
@@ -336,11 +353,12 @@ class RequestGraphs:
             self.sess = sb
         return self.sess
 
-    def _flat(self, T: int, sess: bool = False):
+    def _flat(self, T: int, sess: bool = False, whole: bool = False):
         """Flat graph body: the round staged by `_stage_flat` (prefixes, branches, padding in one stream of T tokens).
-        Leaves the final-norm hidden state at every read in `out_flat`. Session flat graphs (`sess`, staged by
-        `_stage_sflat`) run prefixes in two levels from saved states, read prefix keys from the context buffer and
-        leave the states at the save points."""
+        Leaves the final-norm hidden state at every read in `out_flat`, or with `whole` (a round of one request) at
+        every token of the stream in `out_whole`. Session flat graphs (`sess`, staged by `_stage_sflat`) run prefixes
+        in two levels from saved states, read prefix keys from the context buffer and leave the states at the save
+        points."""
         bb, lm = self.bb, self.lm
         P, B, C = (sflat_dims if sess else flat_dims)(T)
         f = self._flat_inputs(T, sess)
@@ -349,8 +367,9 @@ class RequestGraphs:
         cos, sin = cos[0], sin[0]
         tok = (f["job"], f["branch"], f["pos"])
         r = f["ranges"].view(4, T)
-        R = attn_kernel.block_ranges(r[0], r[1], r[2], r[3], self.attn_cfg["BLOCK_M"], self.attn_cfg["BLOCK_N"],
-                                     exact=True, groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
+        R = None if whole else attn_kernel.block_ranges(r[0], r[1], r[2], r[3], self.attn_cfg["BLOCK_M"],
+                                                        self.attn_cfg["BLOCK_N"], exact=True,
+                                                        groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
         src = f["src"].view(3, T)
         slots = (f["cu"], f["chunks"].view(C, 2), (P // 2, P // 2) if sess else (P,), f["h0"])
         if sess:
@@ -361,13 +380,14 @@ class RequestGraphs:
                 sb["conv"][i][: 3 * SESSION_REQUESTS].view(SESSION_REQUESTS, 3, -1).copy_(
                     sb["convT"][i][:, :, 1:].flip(2).transpose(1, 2))
         reads = f["reads"]
-        top = self._last_layer()
+        top = -1 if whole else self._last_layer()
         n0 = bb.layers[0].input_layernorm
         x = rms(h, n0.weight, n0.eps)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
-                d = self._gdn_flat(layer.linear_attn, w, x, src, slots, i, f if sess else None)
+                d = (self._gdn(layer.linear_attn, w, x, i, None, False) if whole
+                     else self._gdn_flat(layer.linear_attn, w, x, src, slots, i, f if sess else None))
             else:
                 m = layer.self_attn
                 if i == top:
@@ -384,13 +404,18 @@ class RequestGraphs:
                     Vc.index_copy_(0, ctx_idx, v)
                     o = attn_kernel.attention(q, Kc, Vc, k, v, tq, ctx_meta, tok, Rq, m.scaling, 0, self.attn_cfg,
                                               qranges=rq)
+                elif whole:
+                    o = _causal(q, k, v, m.scaling)
                 else:
                     o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, Rq, m.scaling, 0, self.attn_cfg, qranges=rq)
                 d = mm(gate_out(o, gate), w["o"])
                 if i == top:
                     h = h.index_select(0, reads)
             h, x = self._mlp(i, layer, w, h, d)
-        self.out_flat[: reads.shape[0]].copy_(final_norm(lm.norm, h if top >= 0 else h[reads]))
+        if whole:
+            self.out_whole[:T].copy_(final_norm(lm.norm, h))
+        else:
+            self.out_flat[: reads.shape[0]].copy_(final_norm(lm.norm, h if top >= 0 else h[reads]))
 
     def _gdn_flat(self, m, w, x, src, slots, i: int = -1, sess=None):
         from ...kernels import gdn
@@ -627,6 +652,11 @@ class RequestGraphs:
             return lambda: self._continue(shape[1], shape[2])
         if shape[0] == "flat":
             return lambda: self._flat(shape[1])
+        if shape[0] == "flatw":
+            if self.out_whole is None:
+                self.out_whole = torch.zeros(FLAT_LADDER[-1], self.out_flat.shape[1], device=self.device,
+                                             dtype=self.dtype)
+            return lambda: self._flat(shape[1], whole=True)
         if shape[0] == "sflat":
             return lambda: self._flat(shape[1], sess=True)
         return lambda: self._sequence(shape[1], media=shape[0] == "mseq")
@@ -647,7 +677,7 @@ class RequestGraphs:
             self.lens.fill_(1)
             self.clen.fill_(1)
             self.clen2.fill_(1)
-            if shape[0] == "flat":
+            if shape[0] in ("flat", "flatw"):
                 self._stage_flat([(list(range(shape[1])), [])], shape[1])
                 torch.cuda.synchronize()
             if shape[0] == "sflat":
@@ -755,19 +785,29 @@ class RequestGraphs:
 
 
     @staticmethod
-    def flat_cost(req) -> tuple[int, int, int]:
-        """(tokens, branch slots, chunks) a (prefix, branches[, media]) request takes in a flat stream; one branch runs
-        with its prefix as one sequence (with the batch-invariant products a branch of its own, as when it has
-        siblings)."""
+    def whole(req) -> bool:
+        """Whether a request is one sequence read at every position in order (the whole-stream flat graphs)."""
+        return (len(req) > 4 and len(req[1]) == 1 and not settings.batch_invariant
+                and len(req[4]) == len(req[0]) + len(req[1][0]) and req[4] == tuple(range(len(req[4]))))
+
+    @staticmethod
+    def flat_cost(req) -> tuple[int, int, int, int]:
+        """(tokens, branch slots, chunks, reads) a (prefix, branches[, media]) request takes in a flat stream; one
+        branch runs with its prefix as one sequence (with the batch-invariant products a branch of its own, as when it
+        has siblings), and its reads past the first take branch slots; a request read at every position takes none
+        (`whole`)."""
         pre, sufs = req[0], req[1]
         if not sufs or len(sufs) == 1 and not settings.batch_invariant:
             n = len(pre) + sum(map(len, sufs))
-            return n, 0, -(-n // CHUNK)
+            if RequestGraphs.whole(req):
+                return n, 0, -(-n // CHUNK), 0
+            return n, len(req[4]) - 1 if len(req) > 4 else 0, -(-n // CHUNK), len(req[4]) if len(req) > 4 else 1
         return (len(pre) + sum(map(len, sufs)), len(sufs),
-                -(-len(pre) // CHUNK) + sum(-(-len(x) // CHUNK) for x in sufs))
+                -(-len(pre) // CHUNK) + sum(-(-len(x) // CHUNK) for x in sufs),
+                sum(map(len, req[4])) if len(req) > 4 else len(sufs))
 
     @staticmethod
-    def flat_rung(requests: int, tokens: int, branches: int, chunks: int) -> int | None:
+    def flat_rung(requests: int, tokens: int, branches: int, chunks: int, reads: int = 0) -> int | None:
         """Length of the flat graph a round of that size fits, or None."""
         if not requests or requests > FLAT_REQUESTS:
             return None
@@ -777,14 +817,14 @@ class RequestGraphs:
             if T > 2 * tokens + 256:
                 return None
             P, B, C = flat_dims(T)
-            if requests <= P and branches + 2 <= B and chunks + -(-(T - tokens) // CHUNK) <= C:
+            if requests <= P and branches + 2 <= B and chunks + -(-(T - tokens) // CHUNK) <= C and reads <= P + B:
                 return T
         return None
 
     def flat_shape(self, reqs) -> int | None:
         """Length of the flat graph a round of (prefix, branches[, media]) requests fits, or None."""
         cost = [self.flat_cost(r) for r in reqs]
-        return self.flat_rung(len(reqs), *(sum(c[k] for c in cost) for k in range(3)))
+        return self.flat_rung(len(reqs), *(sum(c[k] for c in cost) for k in range(4)))
 
     def _stage_flat(self, reqs, T: int) -> None:
         """Write a round into the flat graph's inputs: per-token ids, positions (sequence order for attention, M-RoPE for
@@ -811,11 +851,12 @@ class RequestGraphs:
             pre, sufs = req[0], req[1]
             media = req[2] if len(req) > 2 else None
             blk = len(req) > 3 and req[3]
-            items.append((pre + sufs[0], [], media, len(pre), blk) if len(sufs) == 1 and not settings.batch_invariant
-                         else (pre, sufs, media, len(pre), blk))
+            spots = req[4] if len(req) > 4 else None
+            items.append((pre + sufs[0], [], media, len(pre), blk, spots) if len(sufs) == 1 and not settings.batch_invariant
+                         else (pre, sufs, media, len(pre), blk, spots if len(sufs) > 1 else None))
         at = 0
         starts = []
-        for j, (seq, _, media, p, blk) in enumerate(items):
+        for j, (seq, _, media, p, blk, _) in enumerate(items):
             n = len(seq)
             s = slice(at, at + n)
             ar = np.arange(n)
@@ -839,13 +880,14 @@ class RequestGraphs:
             at += n
         nread = 0
         b = 0
-        for j, (seq, sufs, media, _, blk) in enumerate(items):
+        for j, (seq, sufs, media, _, blk, spots) in enumerate(items):
             n, p0 = len(seq), starts[j]
             if not sufs:
-                reads[nread] = p0 + n - 1
-                nread += 1
+                for a in spots or (n - 1,):
+                    reads[nread] = p0 + a
+                    nread += 1
             off = media[2] if media is not None else 0
-            for sfx in sufs:
+            for k, sfx in enumerate(sufs):
                 m = len(sfx)
                 s = slice(at, at + m)
                 ar = np.arange(m)
@@ -863,8 +905,9 @@ class RequestGraphs:
                     src[d - 1, s] = np.where(back >= 0, at + back, np.where(n + back >= 0, p0 + n + back, -1))
                 lens[P + b] = m
                 h0[b] = j
-                reads[nread] = at + m - 1
-                nread += 1
+                for a in spots[k] if spots else (m - 1,):
+                    reads[nread] = at + a
+                    nread += 1
                 at += m
                 b += 1
         if at < T:
@@ -900,7 +943,7 @@ class RequestGraphs:
         self.staged.record()
         dev_ids = self.flat_in[lay["ids"][0]: lay["ids"][1]]
         torch.index_select(self.lm.embed_tokens.weight, 0, dev_ids, out=self.emb_flat[:T])
-        for j, (seq, _, media, _, _) in enumerate(items):
+        for j, (seq, _, media, _, _, _) in enumerate(items):
             if media is not None:
                 s = slice(starts[j], starts[j] + len(seq))
                 self.emb_flat[s] = self.bb.encode_vision(dev_ids[s], self.emb_flat[s], [media[0]],
@@ -909,13 +952,21 @@ class RequestGraphs:
     @torch.inference_mode()
     def run_flat(self, reqs):
         """Final-norm hidden states at the reads of a round of (prefix, branches[, media]) requests, one replay: per
-        request in order, the last token of each branch. None when it does not fit."""
+        request in order, the last token of each branch, or the positions its fifth field lists (in its one sequence
+        for a one-branch request, else per branch in that branch). None when it does not fit."""
         T = self.flat_shape(reqs)
+        whole = [self.whole(r) for r in reqs]
+        if any(whole):
+            if T is None or len(reqs) > 1 or not self.capture(("flatw", T)):
+                return None
+            self._stage_flat([r[:4] for r in reqs], T)
+            self.graphs[("flatw", T)].replay()
+            return self.out_whole[: sum(len(r[0]) + len(r[1][0]) for r in reqs)].clone()
         if T is None or not self.capture(("flat", T)):
             return None
         self._stage_flat(reqs, T)
         self.graphs[("flat", T)].replay()
-        n = sum(max(1, len(r[1])) for r in reqs)
+        n = sum(max(1, len(r[1])) if len(r) < 5 else len(r[4]) if len(r[1]) == 1 else sum(map(len, r[4])) for r in reqs)
         return self.out_flat[:n].clone()
 
 

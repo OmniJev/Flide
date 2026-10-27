@@ -23,6 +23,12 @@ the model is asked and read:
                {"a", "b"} makes it depend on the number of options n: log T = a + b ln n
   noul         the order of a noul's two options in the prompt, of "false" and "true" (["false", "true"])
   noul_text    their descriptions when a request gives none
+  attention    "bidirectional": the checkpoint reads each question's whole prompt both ways in its full-attention layers
+               (recurrent and sliding-window layers stay causal), so every question is a sequence of its own and nothing is
+               shared; "causal" (the default) shares the state between questions
+  images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
+               the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
+               without it images are refused. max_prompt_tokens counts the images' tokens
   types, max_options, max_prompt_tokens
   state        the state as the prompt shows it, cut to a token budget: "text" (a Jinja template of state, the prompt
                reads it as state_text), "max_tokens", "min_tokens", "keep" ("head" or "tail", or one per state shape
@@ -54,7 +60,7 @@ from ..api.answers import make_choice, make_noul, make_score
 from ..api.schema import ChoiceQuestion, NoulQuestion, SystemOneRequest, SystemOneResponse, Usage
 from . import register
 from .base import Format, Plan, Read
-from .next_token import TokenRows
+from .next_token import NextToken, TokenRows
 
 FORMAT_ID = "flide-template-v1"
 KNOWN = Path(__file__).resolve().parent / "known"
@@ -174,6 +180,14 @@ class Template(Format):
         self.noul_text = dict(spec.get("noul_text", {}))
         self.types = tuple(spec.get("types", TYPES))
         self.max_prompt_tokens = int(spec.get("max_prompt_tokens", 32768))
+        self.images = spec.get("images")
+        if self.images is not None and self.prompt is not None:
+            raise ValueError("images go in a user turn: a configuration with images has messages")
+        if spec.get("attention", "causal") not in ("causal", "bidirectional"):
+            raise ValueError("attention is causal or bidirectional")
+        self.attention = "blocks" if spec.get("attention") == "bidirectional" else "causal"
+        if self.attention == "blocks" and self.images is not None:
+            raise ValueError("images are read with causal attention only")
         st = spec.get("state")
         self.state_text = env.from_string(st["text"]) if st else None
         if st:
@@ -192,7 +206,8 @@ class Template(Format):
         self.max_score_levels = min(len(self.sets["score"][-1][1]), int(spec.get("max_options", 256)))
 
     def _render(self, request_state: Any, kind: str, q: Any, keys: list[str], descs: list[Any], labels: list[str],
-                state_text: str | None = None, qid: str | None = None, questions: list | None = None) -> str:
+                state_text: str | None = None, qid: str | None = None, questions: list | None = None,
+                images: int = 0) -> str:
         ctx = {"state": request_state, "state_text": state_text, "questions": questions or [],
                "question": {"key": qid, "type": kind, "instructions": q.instructions if q is not None else "s",
                             "given": sorted(q.model_fields_set) if q is not None else ["criteria", "instructions", "type"],
@@ -202,8 +217,26 @@ class Template(Format):
         if self.prompt is not None:
             return self.prompt.render(**ctx)
         msgs = [{"role": role, "content": tpl.render(**ctx)} for role, tpl in self.messages]
+        if images:
+            last = max(i for i, m in enumerate(msgs) if m["role"] == "user")
+            msgs[last]["content"] = [{"type": "image"}] * images + [{"type": "text", "text": msgs[last]["content"]}]
+            return self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
+                                                      enable_thinking=self.thinking) + self.reply
         return self.tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
                                                   enable_thinking=self.thinking) + self.reply
+
+    _vision = NextToken._vision
+    _open = staticmethod(NextToken._open)
+
+    @property
+    def processor(self):
+        """The checkpoint's processor with this configuration's image bounds (images only)."""
+        p = getattr(self, "_processor", None)
+        if p is None:
+            p = NextToken.processor.fget(self)
+            p.image_processor.size = {"shortest_edge": int(self.images["min_pixels"]),
+                                      "longest_edge": int(self.images["max_pixels"])}
+        return p
 
     def _encode(self, texts: list[str]) -> list[list[int]]:
         """Token ids of rendered prompts; the pieces between boundaries are tokenized apart and joined."""
@@ -347,8 +380,9 @@ class Template(Format):
         return before + self.tokenizer.decode(ids[-budget:] if side == "tail" else ids[:budget]) + after, len(ids)
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
-        if getattr(request, "images", None):
-            raise ValueError("images: this template family reads text only")
+        refs = getattr(request, "images", None) or []
+        if refs and self.images is None:
+            raise ValueError("images: this model reads text only")
         questions = []
         for qid, q in request.questions.items():
             kind, keys, descs = self._question(q)
@@ -362,7 +396,7 @@ class Template(Format):
         budget, floor, slack, tries = self.state_budget if self.state_text is not None else (0, 0, 0, 1)
         for _ in range(tries):
             state_text, n = self._cut_state(request.state, budget) if self.state_text is not None else (None, 0)
-            texts = [self._render(request.state, kind, q, keys, descs, labels, state_text, qid, everyone)
+            texts = [self._render(request.state, kind, q, keys, descs, labels, state_text, qid, everyone, len(refs))
                      for qid, q, kind, keys, descs, labels in questions]
             rows = self._encode(texts)
             over = max(len(r) for r in rows) - self.max_prompt_tokens
@@ -375,12 +409,21 @@ class Template(Format):
                 raise ValueError(f"the questions leave no room for the state within {self.max_prompt_tokens} tokens")
         else:
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
+        if self.attention == "blocks":
+            return Plan([], rows, (READ,), data, attention="blocks")
         m = min(len(r) for r in rows) - 1
         for i in range(m):
             if any(r[i] != rows[0][i] for r in rows):
                 m = i
                 break
-        return Plan(rows[0][:m], [r[m:] for r in rows], (READ,), data)
+        if not refs:
+            return Plan(rows[0][:m], [r[m:] for r in rows], (READ,), data)
+        suffixes = [r[m:] for r in rows]
+        prefix, vision = self._vision(rows[0][:m], [self._open(r) for r in refs], texts[0], suffixes[0])
+        longest = len(prefix) + max(len(x) for x in suffixes)
+        if longest > self.max_prompt_tokens:
+            raise ValueError(f"prompt is {longest} tokens with its images, limit is {self.max_prompt_tokens}")
+        return Plan(prefix, suffixes, (READ,), data, vision=vision)
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         answers = {}

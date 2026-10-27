@@ -142,11 +142,12 @@ class Gemma4(Backbone):
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
-             loader: str = "direct", **options) -> "Gemma4":
+             loader: str = "direct", merge_lora: bool = False, **options) -> "Gemma4":
         """Checkpoints with a vision tower load it (`vision` None) unless `vision` is False; then only the decoder
         loads (vision and audio towers stay on disk).
         `loader` "direct" reads the safetensors straight onto the device (flide.backbones.load); "hf" uses
-        transformers' from_pretrained (needs accelerate); "none" reads no weights (zeros)."""
+        transformers' from_pretrained (needs accelerate); "none" reads no weights (zeros). `merge_lora`: a LoRA adapter
+        merged into the weights as they are read (flide/lora.py)."""
         import transformers
 
         _register()
@@ -177,7 +178,7 @@ class Gemma4(Backbone):
 
             try:
                 model = build(arch, cfg, torch.device(device), getattr(torch, dtype))
-                load_into(model, model_dir, device, key_map=key_map)
+                load_into(model, model_dir, device, key_map=key_map, merge=merge_lora)
             except (ValueError, FileNotFoundError) as exc:
                 import logging
 

@@ -39,11 +39,12 @@ class Plan:
     `positions` are the prefix's rotary positions [3, P] when they are not 0..P-1, and suffix tokens start
     at position P + `offset`. The backbone fills both from `vision` when the family leaves them empty.
 
-    An empty `prefix` makes every suffix a sequence of its own (nothing shared).
+    An empty `prefix` makes every suffix a sequence of its own (nothing shared); with attention "blocks" each such
+    sequence is one block, read bidirectionally whole in the full-attention layers.
 
     `attention` "blocks": in the full-attention layers the prefix sees all of itself and each suffix sees the prefix
     and all of itself (the block-bidirectional mask some checkpoints are trained with); recurrent layers stay causal,
-    and the prefix still never sees a suffix, so it is shared exactly. Such a plan needs a prefix and a backbone with
+    and the prefix still never sees a suffix, so it is shared exactly. Such a plan needs a backbone with
     `block_attention`, and takes no session states."""
 
     prefix: list[int]
@@ -74,6 +75,7 @@ class Format:
     aliases: ClassVar[tuple[str, ...]] = ()
     max_choice_options: ClassVar[int] = 255
     max_score_levels: ClassVar[int] = 10
+    merge_lora: ClassVar[bool] = False
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -91,7 +93,8 @@ class Format:
         return twin
 
     def load_heads(self, backbone) -> dict[str, Any]:
-        """Heads by name; each maps hidden states [rows, hidden] to outputs [rows, ...]."""
+        """Heads by name; each maps hidden states [rows, hidden] to outputs [rows, ...]. A head with `on_device` true
+        keeps its outputs on the device, for a family that reads them there again (`finish`)."""
         raise NotImplementedError
 
     def plan(self, request, **options) -> Plan:
@@ -104,7 +107,8 @@ class Format:
         return None
 
     def finish(self, request, plan: Plan, outputs: Sequence[Sequence[Any]], **options):
-        """`outputs[b][r]` is the head output of read r of branch b: one row per position, as lists."""
+        """`outputs[b][r]` is the head output of read r of branch b: one row per position, as lists (a tensor of
+        those rows on the device for a head with `on_device`)."""
         raise NotImplementedError
 
 

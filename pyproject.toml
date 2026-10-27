@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.4"
+version = "0.1.5"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -34,10 +34,16 @@ onejev = "flide_onejev:OneJev"
 open_jev = "flide_open_jev:OpenJev"
 intern_decision = "flide_intern_decision:InternDecision"
 torchcast = "flide_torchcast:Torchcast"
+pplx = "flide_pplx:Pplx"
+jeffan = "flide_jeffan:Jeffan"
+kev = "flide_kev:Kev"
+jevany = "flide_kev:JevAny"
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
 
 [tool.setuptools.packages.find]
-where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast"]
-include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*", "flide_intern_decision*", "flide_torchcast*"]
+where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast", "plugins/pplx",
+         "plugins/jeffan", "plugins/kev"]
+include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*", "flide_intern_decision*",
+           "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*"]

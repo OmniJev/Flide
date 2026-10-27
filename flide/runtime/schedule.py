@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from ..formats.base import Plan
+from ..formats.base import Plan, Read
 from .pack import Job
 
 
@@ -42,13 +42,17 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
     if not plan.prefix:
         if plan.vision is not None:
             raise ValueError("a plan without a prefix takes no media")
-        if plan.attention != "causal":
-            raise ValueError("block attention needs a prefix")
+        blocks = plan.attention == "blocks"
         out = []
         for b, s in enumerate(plan.suffixes):
             if len(s) < 2:
                 raise ValueError("a sequence of its own needs at least two tokens")
-            out.append(Piece(i, [b], Job(s[:-1], [s[-1:]], [plan.branch_reads(b)])))
+            if blocks:
+                reads = tuple(Read(r.head, r.layer, tuple(p - 1 if p < 0 else p for p in r.positions))
+                              for r in plan.branch_reads(b))
+                out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], blocks=True)))
+            else:
+                out.append(Piece(i, [b], Job(s[:-1], [s[-1:]], [plan.branch_reads(b)])))
         return out
     if plan.tokens - (session or {}).get("start", 0) <= budget:
         return [_piece(i, plan, list(range(len(plan.suffixes))), session)]
