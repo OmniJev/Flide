@@ -1,6 +1,6 @@
-"""Kev family (jaredpalmer/kev-0.8b, kev-4b, kev-9b, kev-27b) and JevAny (SimpleJev/JevAny-Qwen3.5-4B-LoRA and
-JevAny-Qwen3.8-27B-LoRA) on Qwen3.5: a pointer readout over the state and a branch per question, as kev.serve and
-jevany.serve read them.
+"""Kev family (jaredpalmer/kev-0.8b, kev-4b, kev-9b, kev-27b), JevAny (SimpleJev/JevAny-Qwen3.5-4B-LoRA and
+JevAny-Qwen3.8-27B-LoRA) and Drex (nace-ai/drex-v1.5 on Qwen3.5-9B, drex-v2.0 on Qwen3.6-35B-A3B) on Qwen3.5: a pointer readout over the state and a branch per
+question, as kev.serve, jevany.serve and Drex's inference.py read them.
 
 A request has no chat template. The prefix is <|fim_prefix|> and the state; each question is a branch of its own,
 <|fim_middle|> and its instructions, every option between <|box_start|> and <|box_end|>, then <|fim_suffix|>, with
@@ -20,6 +20,11 @@ up to 32 images (data URLs or base64) with one question: then the whole request 
 between <|vision_start|> and <|vision_end|> ahead of it, through the checkpoint's processor, the images sharing a
 budget of 512 x 512 pixels as the release sizes them (each at least 128 x 128), and special tokens left in the text
 get the brackets ‹ and ［.
+
+Drex is Kev's readout on merged weights, read through Nace's fork of Kev's code: the checkpoint's own tokenizer, states
+and rows of up to 16,384 tokens each (`context` raises both, to at most 131,072, as KEV_CONTEXT does), refused past
+them, and a score's confidence 1 - E|level - mode| / (L - 1). Its head.pt carries `state_bidir`, which Kev's does not;
+the release refuses it true on a hybrid backbone, and so does Flide.
 """
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from flide.api.answers import make_choice, make_noul, make_score
+from flide.api.answers import _round, make_choice, make_noul, make_score
 from flide.api.schema import ChoiceQuestion, NoulQuestion, SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import register
 from flide.formats.base import Format, Plan, Read
@@ -139,7 +144,8 @@ class Kev(Format):
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
         meta = _meta(model_dir)
-        return meta is not None and "decision_mode" not in meta and "head_type" not in meta
+        return (meta is not None and "decision_mode" not in meta and "head_type" not in meta
+                and "state_bidir" not in meta)
 
     @staticmethod
     def _alphabet(tok) -> list[str]:
@@ -216,9 +222,46 @@ class Kev(Format):
             elif kind == "choice":
                 answers[name] = make_choice([str(k) for k in q.criteria], probs)
             else:
-                answers[name] = make_score(list(q.criteria), probs)
+                answers[name] = self._score(list(q.criteria), probs)
         usage = Usage(input_tokens=plan.tokens, output_tokens=len(plan.data))
         return SystemOneResponse(model="", answers=answers, usage=usage), {"format": self.name, "tokens": plan.tokens}
+
+    def _score(self, levels: list, probs: list[float]):
+        return make_score(levels, probs)
+
+
+@register("drex")
+class Drex(Kev):
+    backbones = ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
+    max_state = 16384
+    max_row = 16384
+    max_context = 131072
+
+    def __init__(self, model_dir: str, tokenizer=None, temperature: float | None = None, context: int = 16384):
+        context = int(context)
+        if not 1 <= context <= self.max_context:
+            raise ValueError(f"context must be between 1 and {self.max_context}")
+        self.max_state = self.max_row = context
+        if tokenizer is None:
+            import transformers
+
+            tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        super().__init__(model_dir, tokenizer=tokenizer, temperature=temperature)
+        if self.meta.get("state_bidir"):
+            raise ValueError("state_bidir needs attention masks; hybrid backbones ignore them")
+
+    @classmethod
+    def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        meta = _meta(model_dir)
+        return (meta is not None and "state_bidir" in meta and "decision_mode" not in meta
+                and "head_type" not in meta)
+
+    def _score(self, levels: list, probs: list[float]):
+        a = make_score(levels, probs)
+        L = len(probs)
+        mode = max(range(L), key=probs.__getitem__)
+        conf = 1.0 if L == 1 else 1.0 - sum(p * abs(i - mode) for i, p in enumerate(probs)) / (L - 1)
+        return a.model_copy(update={"confidence": _round(conf)})
 
 
 @register("jevany")

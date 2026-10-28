@@ -51,7 +51,7 @@ from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
 from ..base import capture_progress
-from .ops import add_rms, final_norm, gated_rms, last_qkv, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, qk_norm_rope, rms, rows_ranges, swiglu
 from .ops import gate as gate_out
 
 log = logging.getLogger("flide.graphs")
@@ -558,7 +558,7 @@ class RequestGraphs:
         bb = self.bb
         n2 = layer.post_attention_layernorm
         h, x = add_rms(h, d, n2.weight, n2.eps)
-        d = mm(swiglu(mm(x, w["gate_up"]), w["inter"]), w["down"])
+        d = ffn(w, x)
         if i + 1 < len(bb.layers):
             n1 = bb.layers[i + 1].input_layernorm
             return add_rms(h, d, n1.weight, n1.eps)

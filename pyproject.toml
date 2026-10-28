@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.5"
+version = "0.1.6"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.12",
+    "torch>=2.12,<2.15",
     "transformers>=5.0",
     "flash-linear-attention>=0.5.2,<0.6",
     "accelerate",
@@ -38,12 +38,14 @@ pplx = "flide_pplx:Pplx"
 jeffan = "flide_jeffan:Jeffan"
 kev = "flide_kev:Kev"
 jevany = "flide_kev:JevAny"
+drex = "flide_kev:Drex"
+knowline = "flide_knowline:KnowLine"
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
 
 [tool.setuptools.packages.find]
 where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast", "plugins/pplx",
-         "plugins/jeffan", "plugins/kev"]
+         "plugins/jeffan", "plugins/kev", "plugins/knowline"]
 include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*", "flide_intern_decision*",
-           "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*"]
+           "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*", "flide_knowline*"]

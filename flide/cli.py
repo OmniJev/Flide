@@ -1,4 +1,4 @@
-"""Command line: flide run | serve | kernels | formats."""
+"""Command line: flide run | serve | kernels | verify | formats."""
 from __future__ import annotations
 
 import argparse
@@ -14,6 +14,7 @@ def _formats(args) -> None:
 
 
 def main(argv=None) -> None:
+    from . import verify
     from .api import serve
     from .runtime import kcache, offline
 
@@ -22,6 +23,7 @@ def main(argv=None) -> None:
     offline.add_parser(sub)
     serve.add_parser(sub)
     kcache.add_parser(sub)
+    verify.add_parser(sub)
     f = sub.add_parser("formats", help="list installed model families")
     f.set_defaults(func=_formats)
     args = p.parse_args(argv)

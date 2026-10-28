@@ -44,6 +44,17 @@ def swiglu(gu, n: int):
     return torch.cat([pw.swiglu(gu[i: i + step], n) for i in range(0, gu.shape[0], step)])
 
 
+def ffn(w: dict, x):
+    """A layer's feed-forward on rows x: its dense MLP, or its mixture of experts (kernels/moe.py)."""
+    from ...kernels.fp8 import mm
+
+    if "experts" in w:
+        from ...kernels.moe import moe
+
+        return moe(x, w, mm, swiglu)
+    return mm(swiglu(mm(x, w["gate_up"]), w["inter"]), w["down"])
+
+
 def gated_rms(o, z, w, eps: float):
     return pw.gated_rms(o, z, w, eps)
 

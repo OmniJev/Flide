@@ -21,6 +21,7 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-10-29** Flide 0.1.6 で [Drex](https://huggingface.co/nace-ai/drex-v2.0)、[KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) の 2 つの意思決定モデルファミリーを追加し、新しい `flide verify` で自分のモデルとリクエストの正確な分岐を確認できるようになりました。
 - 🔥 **2026-10-28** Flide 0.1.5 で [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a)、[JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6)、[Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd)、[Lychee](https://huggingface.co/LycheeAI/Lychee-27B)、[pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2)、[StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) の 6 つの意思決定モデルファミリーを追加し、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) と [mammoth](https://huggingface.co/baselabs/mammoth-1) で画像入力にも対応しました。
 - 🔥 **2026-10-26** Flide 0.1.4 で [cerno](https://huggingface.co/apertixai/cerno-27b)、[JADE](https://huggingface.co/theunnecessarythings/JADE)、[Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8)、[mammoth](https://huggingface.co/baselabs/mammoth-1)、[Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) の 5 つの意思決定モデルファミリーを追加し、[Quyet-1.0-Large](https://huggingface.co/chinhnc/Quyet-1.0-Large) にも対応しました。
 - 🔥 **2026-10-26** Flide 0.1.3 で [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7)、[Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3)、[Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8)、[jiwo](https://huggingface.co/eljiwo/jiwo-4b)、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6)、[mogan](https://huggingface.co/moganai/mogan-decision-31B-it)、[Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6)、[Senova](https://huggingface.co/WangSenQWQ/Senova-4B) の 8 つの意思決定モデルファミリーを追加し、LoRA アダプターもそのまま提供できるようになりました。
@@ -118,31 +119,33 @@ EOF
 
 ## モデル
 
-最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べており、範囲は試したサイズの幅です。
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
 
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | テキスト | 3.7× | 9.3× | 2.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | テキスト | 2.6× | 2.1× | 1.6× |
-| [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | 3.4 to 4.7× | 8.1 to 9.1× | 1.1× |
+| [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | 1.6× | 7.0× | 1.2× |
-| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | テキスト、画像 | 1.1 to 1.5× | 1.1 to 2.5× | 1.0 to 1.1× |
+| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト | ~3.4× | ~7.9× | ~1.7× |
+| [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | テキスト、画像 | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | テキスト、画像 | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | テキスト | 2.0× | 9.2× | 1.7× |
 | [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | テキスト | 3.1× | 2.6× | 1.9× |
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | テキスト、画像 | 1.5× | 5.8× | 1.2× |
-| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | 1.7 to 2.1× | 5.0 to 6.9× | 1.8× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | 5.6 to 10.1× | 1.3 to 1.7× | 1.1 to 2.2× |
+| [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | ~1.9× | ~5.9× | 1.8× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~7.9× | ~1.5× | ~1.7× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト | 1.3× | 5.4× | 1.2× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | テキスト、画像 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | テキスト | 1.4× | 1.5× | 1.4× |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | 3.3 to 5.3× | 2.3 to 3.4× | 1.6 to 2.0× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | ~4.3× | ~2.8× | ~1.8× |
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | テキスト | 1.6× | 8.5× | 1.8× |
-| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | テキスト、画像、動画 | 3.2 to 11.9× | 7.3× | 4.7× |
-| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | テキスト | 4.2× | 5.0× | 1.3 to 1.7× |
+| [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | テキスト、画像、動画 | ~6.8× | 7.3× | 4.7× |
+| [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | テキスト | 4.2× | 5.0× | ~1.5× |
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | テキスト、画像 | 3.1× | 1.4× | 1.2× |
-| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | テキスト | 1.9 to 5.9× | 7.0 to 7.2× | 1.4 to 1.9× |
-| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | テキスト、画像 | 1.2 to 3.3× | 2.4 to 7.7× | 1.0 to 2.0× |
+| [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | テキスト | ~3.9× | ~7.1× | ~1.6× |
+| [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | テキスト、画像 | ~2.1× | ~4.8× | ~1.3× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |

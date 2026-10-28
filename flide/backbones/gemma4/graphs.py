@@ -2,14 +2,15 @@
 
 Gemma 4 keeps no recurrent state, so a round of requests (prefixes and branches) is one packed stream, and one graph
 per length rung serves every round: every prefix, then every branch, then padding, and the attention metadata (job,
-branch, position per token, key ranges) is staged next to the tokens. A one-branch request runs as one sequence. The
-interface is the flat graphs' of qwen3_5 (flat_cost, flat_rung, run_flat), so the engine batches both the same way. The kernel's two key
-ranges per query tile must not overlap: the first covers the prefix, the second the branches and the padding. Branching lives in
-that metadata alone. Padding tokens are jobs of their own that attend to themselves only, so they never touch a real
-token. The graph runs the checkpoint's own transformers decoder with flide's attention and gathers the
-final-norm hidden state at every branch's last token. Rounds of requests with block attention (formats.base.Plan)
-replay graphs of their own, captured when first needed: the global layers read the staged block ranges with a block
-number per token, the sliding layers the same queries causally.
+branch, position per token, key ranges) is staged next to the tokens. A one-branch request runs as one sequence (a
+prefix and a branch with the batch-invariant products). The interface is the flat graphs' of qwen3_5 (flat_cost,
+flat_rung, run_flat), so the engine batches both the same way. The kernel's two key ranges per query tile must not
+overlap: the first covers the prefix, the second the branches and the padding. Branching lives in that metadata alone.
+Padding tokens are jobs of their own that attend to themselves only, so they never touch a real token. The graph runs
+the checkpoint's own transformers decoder with flide's attention and gathers the final-norm hidden state at every
+branch's last token. Rounds of requests with block attention (formats.base.Plan) replay graphs of their own, captured
+when first needed: the global layers read the staged block ranges with a block number per token, the sliding layers the
+same queries causally.
 """
 from __future__ import annotations
 
@@ -228,7 +229,8 @@ class GemmaGraphs:
         items = []
         for req in reqs:
             media = req[2] if len(req) > 2 else None
-            items.append((req[0] + req[1][0], [], media) if len(req[1]) == 1 else (req[0], req[1], media))
+            one = len(req[1]) == 1 and not (settings.batch_invariant and req[0])
+            items.append((req[0] + req[1][0], [], media) if one else (req[0], req[1], media))
         blocks = [len(req) > 3 and bool(req[3]) for req in reqs]
         blk[:] = -1
         if any(blocks):

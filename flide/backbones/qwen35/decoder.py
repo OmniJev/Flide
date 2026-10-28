@@ -32,7 +32,7 @@ from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm, mm_into
-from .ops import add_rms, final_norm, gated_rms, last_qkv, merge, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, merge, qk_norm_rope, rms, rows_ranges, swiglu
 from .ops import gate as gate_out
 
 
@@ -63,7 +63,7 @@ class _Headless(torch.nn.Module):
 
 
 class Qwen35(Backbone):
-    model_types = ("qwen3_5", "qwen3_5_text")
+    model_types = ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
     block_attention = True
 
     @classmethod
@@ -83,17 +83,21 @@ class Qwen35(Backbone):
         if vision is None:
             vision = getattr(config, "vision_config", None) is not None
         archs = getattr(config, "architectures", None) or []
-        headless = "Qwen3_5Model" in archs or "Qwen3_5TextModel" in archs
+        moe = config.model_type.startswith("qwen3_5_moe")
+        if moe and tp is not None:
+            raise ValueError("Qwen3.5 MoE: no tensor parallelism yet")
+        pre = "Qwen3_5Moe" if moe else "Qwen3_5"
+        headless = f"{pre}Model" in archs or f"{pre}TextModel" in archs
         if headless:
-            arch = transformers.Qwen3_5Model if "Qwen3_5Model" in archs else transformers.Qwen3_5TextModel
+            arch = getattr(transformers, f"{pre}Model" if f"{pre}Model" in archs else f"{pre}TextModel")
             cfg, key_map, skip = config, [], ("mtp.",)
         elif vision:
-            arch, cfg, key_map, skip = transformers.Qwen3_5ForConditionalGeneration, config, [], ("mtp.",)
+            arch, cfg, key_map, skip = getattr(transformers, f"{pre}ForConditionalGeneration"), config, [], ("mtp.",)
         else:
-            arch, cfg = transformers.Qwen3_5ForCausalLM, config.get_text_config()
+            arch, cfg = getattr(transformers, f"{pre}ForCausalLM"), config.get_text_config()
             key_map, skip = [(r"^model\.language_model\.", "model.")], ("model.visual.", "mtp.")
         model = None
-        lean_fp8 = quantize == "fp8" and tp is None
+        lean_fp8 = quantize == "fp8" and tp is None and not moe
         store = {} if lean_fp8 else None
         lean = _fp8_target if lean_fp8 else None
         if loader == "none":
@@ -349,8 +353,15 @@ class Qwen35(Backbone):
         self._w = []
         for i, layer in enumerate(self.layers):
             mlp = layer.mlp
-            w = {"gate_up": merged([mlp.gate_proj, mlp.up_proj]), "inter": mlp.gate_proj.weight.shape[0],
-                 "down": single(mlp.down_proj)}
+            if hasattr(mlp, "experts"):
+                se = mlp.shared_expert
+                w = {"router": single(mlp.gate), "topk": mlp.gate.top_k, "experts": mlp.experts.gate_up_proj,
+                     "experts_down": mlp.experts.down_proj, "inter": mlp.experts.intermediate_dim,
+                     "shared_gate_up": merged([se.gate_proj, se.up_proj]), "shared_inter": se.gate_proj.weight.shape[0],
+                     "shared_down": single(se.down_proj), "shared_gate": single(mlp.shared_expert_gate)}
+            else:
+                w = {"gate_up": merged([mlp.gate_proj, mlp.up_proj]), "inter": mlp.gate_proj.weight.shape[0],
+                     "down": single(mlp.down_proj)}
             if self.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
                 w["in"] = merged([m.in_proj_qkv, m.in_proj_z, m.in_proj_b, m.in_proj_a])
@@ -391,11 +402,13 @@ class Qwen35(Backbone):
         store.clear()
         self.fp8 = True
 
+    @torch.no_grad()
     def quantize_fp8(self) -> int:
         """Every decoder matrix product to float8 weights (kernels/fp8.py): the merged projections, the
         output projections and the MLP; the small gate projections of Gated DeltaNet (the last rows of its merged
-        input projection), the embedding, the output head and the vision tower stay in 16 bits. The 16-bit copies
-        are freed. Returns the number of weights converted."""
+        input projection), the embedding, the output head and the vision tower stay in 16 bits. In a mixture of experts
+        only the routed experts go to float8 (kernels/moe.py). The 16-bit copies are freed. Returns the number of
+        weights converted."""
         from ...kernels import fp8
 
         if not fp8.supported(self.device):
@@ -403,6 +416,16 @@ class Qwen35(Backbone):
         n = 0
         for i, layer in enumerate(self.layers):
             w = self._w[i]
+            if "experts" in w:
+                from ...kernels.moe import quantize_experts
+
+                for key in ("experts", "experts_down"):
+                    w[key], w[key + "_scale"] = quantize_experts(w[key])
+                    n += 1
+                ex = layer.mlp.experts
+                ex.gate_up_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+                ex.down_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+                continue
             for key in ("gate_up", "down", "in", "out", "qkv", "o"):
                 if key in w:
                     tail = 2 * layer.linear_attn.num_v_heads if key == "in" else 0
@@ -453,13 +476,13 @@ class Qwen35(Backbone):
                     d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i, rows=rows)
                     n2 = layer.post_attention_layernorm
                     h, x = add_rms(h.index_select(0, rows), d, n2.weight, n2.eps)
-                    h = h + mm(swiglu(mm(x, w["gate_up"]), w["inter"]), w["down"])
+                    h = h + ffn(w, x)
                     out[FINAL] = final_norm(self.lm.norm, h)
                     return out
                 d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i)
             n2 = layer.post_attention_layernorm
             h, x = add_rms(h, d, n2.weight, n2.eps)
-            d = mm(swiglu(mm(x, w["gate_up"]), w["inter"]), w["down"])
+            d = ffn(w, x)
             if i + 1 < top:
                 n1 = self.layers[i + 1].input_layernorm
                 h, x = add_rms(h, d, n1.weight, n1.eps)

@@ -64,6 +64,19 @@ class _Kept:
         return self.y
 
 
+def eager_tokens(model_type: str, backbone) -> int | None:
+    """The length from which a request runs faster packed, at its exact length, than from the CUDA graphs, which pad it
+    to their ladder and run its recurrence in fewer, longer programs (bench/path_cross.py on an H200: the dense Qwen3.5
+    models of 9B and more); None where the graphs stay ahead at every length served."""
+    if model_type not in ("qwen3_5", "qwen3_5_text"):
+        return None
+    layers = getattr(backbone, "layers", None)
+    if layers is None:
+        return None
+    params = sum(p.numel() for p in layers.parameters())
+    return 3072 if params >= 20e9 else 4096 if params >= 6e9 else None
+
+
 def _gib() -> tuple[float, float, float]:
     """GPU memory in GiB: allocated by torch, reserved by its caching allocator (graph pools included), used on the
     device by every process."""
@@ -123,6 +136,7 @@ class Engine:
             raise ValueError(f"{self.model_dir} reads with block attention, which the {config.model_type} backbone "
                              "does not run")
         self.heads = self.format.load_heads(self.backbone)
+        self.eager_tokens = eager_tokens(config.model_type, self.backbone) if tp_size == 1 else None
         mem = _gib()
         self.budget = budget
         self.sessions = None
@@ -330,6 +344,14 @@ class Engine:
         plan is read at several positions (`_counts`)."""
         return _split(rows, self._counts(plan))
 
+    def _eager(self, plan: Plan) -> bool:
+        """A plan run packed rather than from the graphs: a state and its branches of `eager_tokens` or more that the
+        session cache does not take (the session graphs resume it, which saves far more), not under the batch-invariant
+        products. Sequences of their own (no prefix) keep the graphs: each is short however many there are."""
+        if self.eager_tokens is None or settings.batch_invariant or not plan.prefix or plan.tokens < self.eager_tokens:
+            return False
+        return not (self.sessions is not None and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan))
+
     def _session_ok(self, plan: Plan) -> bool:
         """Sessions take text-only plans whose reads all fall inside the branches."""
         if self.sessions is None or plan.vision is not None or plan.positions is not None or plan.offset:
@@ -362,7 +384,7 @@ class Engine:
         the plan or its shape does not fit them (reads other than the last token after the final layer, or lengths
         beyond the graph ladders). `lazy=False` uses sequence and branch graphs only when they were captured already."""
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
-        if graphs is None or (plan.vision is not None and not graphs.media):
+        if graphs is None or (plan.vision is not None and not graphs.media) or self._eager(plan):
             return None
         if not plan.prefix:
             items = self._alone_items(plan, graphs) if hasattr(graphs, "run_flat") else None
@@ -443,7 +465,7 @@ class Engine:
         plan with block attention gets a fourth field, True, on graphs with `block_attention`; a plan read at several
         positions of its one branch (`_spots`) or of its branches (`_branch_spots`), on graphs with `read_spots`, a
         fourth (block attention) and a fifth (the positions)."""
-        if not plan.suffixes or not plan.prefix:
+        if not plan.suffixes or not plan.prefix or self._eager(plan):
             return None
         blocks = _blocks(plan)
         if blocks and not getattr(graphs, "block_attention", False):
