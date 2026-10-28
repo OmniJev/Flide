@@ -118,6 +118,8 @@ Every answer carries the probability of each option, ready for a threshold.
 
 ## Models
 
+The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. A range spans the sizes tested.
+
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | text | 3.7× | 9.3× | 2.6× |
@@ -145,15 +147,6 @@ Every answer carries the probability of each option, ready for a threshold.
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | text | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | text | 2.6× | 1.1× | 1.2× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | text, images | 1.6× | 8.4× | 1.4× |
-
-The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, OneJev against qev, the engine it used before Flide, and Open-Jev against vllm-jev, and a range spans the sizes tested.
-
-Any chat model on Qwen3.5 or Gemma 4 serves as it is; their rows name the official ones. The other rows are
-decision models, each read the way its release reads it. AJev, Bespoke-Nimble, JADE, mogan, Sieve and the smaller Kev models ship as LoRA adapters, which
-Flide runs beside their base weights as peft does. JevAny ships as LoRA adapters too, and Flide merges them into the base
-weights as its release does. A new family is one JSON file in `flide/formats/known/` when a
-prompt template describes it, else one folder in `plugins/` and one line in `pyproject.toml`; a separate package can
-also join through the `flide.formats` entry point.
 
 ## Options
 

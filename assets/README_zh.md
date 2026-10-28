@@ -118,6 +118,8 @@ EOF
 
 ## 模型
 
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，写成范围的是测过的几个尺寸。
+
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | 文本 | 3.7× | 9.3× | 2.6× |
@@ -145,11 +147,6 @@ EOF
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 文本 | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 文本 | 2.6× | 1.1× | 1.2× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.4× |
-
-后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，Open-Jev 对比的是 vllm-jev，写成范围的是测过的几个尺寸。
-
-基于 Qwen3.5 或 Gemma 4 的聊天模型都能直接使用，表中列的是官方版本。其余几行是决策模型，各自按其发布版的方式读答案。AJev、Bespoke-Nimble、JADE、mogan、Sieve 和较小的几个 Kev 以 LoRA 适配器发布，Flide 像 peft 一样把适配器放在底座权重旁边运行。JevAny 也以 LoRA 适配器发布，Flide 照它发布版的做法把适配器合并进底座权重。新增一个模型族，能用提示词模板描述的只需在 `flide/formats/known/` 里加一个 JSON 文件，否则在 `plugins/` 里加一个目录，再在 `pyproject.toml` 里登记一行；单独发布的包也可以通过
-`flide.formats` 入口点接入。
 
 ## 选项
 

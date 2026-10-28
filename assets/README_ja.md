@@ -118,6 +118,8 @@ EOF
 
 ## モデル
 
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べており、範囲は試したサイズの幅です。
+
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | テキスト | 3.7× | 9.3× | 2.6× |
@@ -145,11 +147,6 @@ EOF
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.4× |
-
-最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev、Open-Jev は vllm-jev と比べており、範囲は試したサイズの幅です。
-
-Qwen3.5 か Gemma 4 をベースにしたチャットモデルはそのまま使えます。表にあるのは公式版です。ほかの行は意思決定モデルで、それぞれのリリースと同じ方法で答えを読みます。AJev、Bespoke-Nimble、JADE、mogan、Sieve と小さめの Kev は LoRA アダプターとして公開されており、Flide は peft と同じくアダプターをベースの重みの横で動かします。JevAny も LoRA アダプターとして公開されており、Flide はそのリリースと同じくアダプターをベースの重みに統合します。新しいモデルファミリーは、プロンプトテンプレートで書けるなら `flide/formats/known/` に JSON ファイルを 1 つ置くだけで、そうでなければ `plugins/` にディレクトリを 1 つ加え、
-`pyproject.toml` に 1 行登録するだけです。別パッケージとして `flide.formats` エントリポイントから加えることもできます。
 
 ## オプション
 
