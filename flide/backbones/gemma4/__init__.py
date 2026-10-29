@@ -231,11 +231,11 @@ class Gemma4(Backbone):
         self.decoder()
 
     def decoder(self):
-        """The fused decoder (fused.py) at the weights' current dtype; None for transformers' modules (mixture of
-        experts)."""
+        """The fused decoder (fused.py) at the weights' current dtype; None for transformers' modules (a mixture of
+        experts in float32, whose grouped products would sum in TF32)."""
         from .fused import FusedDecoder
 
-        if self.moe:
+        if self.moe and self.lm.layers[0].mlp.gate_proj.weight.dtype == torch.float32:
             return None
         if self._fused is None or self._fused.dtype != self.lm.layers[0].mlp.gate_proj.weight.dtype:
             self._fused = FusedDecoder(self.lm)

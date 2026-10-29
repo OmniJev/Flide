@@ -21,6 +21,7 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-10-29** Flide 0.1.7 新增三个决策模型家族，包括 [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald) 和 [Xor](https://huggingface.co/juspay/Xor-26B-A4B)，并支持 Gemma 4 混合专家模型，比如 [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5)。
 - 🔥 **2026-10-29** Flide 0.1.6 新增两个决策模型家族，包括 [Drex](https://huggingface.co/nace-ai/drex-v2.0) 和 [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5)，新的 `flide verify` 可以在你自己的模型和请求上检查精确分叉。
 - 🔥 **2026-10-28** Flide 0.1.5 新增六个决策模型家族，包括 [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a)、[JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6)、[Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd)、[Lychee](https://huggingface.co/LycheeAI/Lychee-27B)、[pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) 和 [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82)，[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) 和 [mammoth](https://huggingface.co/baselabs/mammoth-1) 也能读图片了。
 - 🔥 **2026-10-26** Flide 0.1.4 新增五个决策模型家族，包括 [cerno](https://huggingface.co/apertixai/cerno-27b)、[JADE](https://huggingface.co/theunnecessarythings/JADE)、[Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8)、[mammoth](https://huggingface.co/baselabs/mammoth-1) 和 [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586)，并支持 [Quyet-1.0-Large](https://huggingface.co/chinhnc/Quyet-1.0-Large)。
@@ -119,7 +120,7 @@ EOF
 
 ## 模型
 
-后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 和它的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 35B 和它的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
 
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -135,7 +136,7 @@ EOF
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 文本、图片 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | ~1.9× | ~5.9× | 1.8× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本 | 1.3× | 5.4× | 1.2× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本 | ~1.4× | ~5.6× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | 文本、图片 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | 文本 | 1.4× | 1.5× | 1.4× |
@@ -149,7 +150,10 @@ EOF
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 文本 | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 文本 | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 文本 | 2.6× | 1.1× | 1.2× |
+| [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | 文本 | 3.3× | 11.9× | 3.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.4× |
+| [Wald](https://huggingface.co/collections/org2ai/wald) | 文本 | 1.6× | 12.7× | 1.5× |
+| [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | 文本、图片、视频 | 2.5× | 6.2× | 2.8× |
 
 ## 选项
 

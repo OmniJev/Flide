@@ -21,6 +21,7 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-10-29** Flide 0.1.7 で [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald)、[Xor](https://huggingface.co/juspay/Xor-26B-A4B) の 3 つの意思決定モデルファミリーを追加し、[KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5) などの Gemma 4 の混合エキスパートモデルに対応しました。
 - 🔥 **2026-10-29** Flide 0.1.6 で [Drex](https://huggingface.co/nace-ai/drex-v2.0)、[KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) の 2 つの意思決定モデルファミリーを追加し、新しい `flide verify` で自分のモデルとリクエストの正確な分岐を確認できるようになりました。
 - 🔥 **2026-10-28** Flide 0.1.5 で [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a)、[JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6)、[Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd)、[Lychee](https://huggingface.co/LycheeAI/Lychee-27B)、[pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2)、[StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) の 6 つの意思決定モデルファミリーを追加し、[Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) と [mammoth](https://huggingface.co/baselabs/mammoth-1) で画像入力にも対応しました。
 - 🔥 **2026-10-26** Flide 0.1.4 で [cerno](https://huggingface.co/apertixai/cerno-27b)、[JADE](https://huggingface.co/theunnecessarythings/JADE)、[Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8)、[mammoth](https://huggingface.co/baselabs/mammoth-1)、[Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) の 5 つの意思決定モデルファミリーを追加し、[Quyet-1.0-Large](https://huggingface.co/chinhnc/Quyet-1.0-Large) にも対応しました。
@@ -119,7 +120,7 @@ EOF
 
 ## モデル
 
-最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine 35B はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
 
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -135,7 +136,7 @@ EOF
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | テキスト、画像 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | ~1.9× | ~5.9× | 1.8× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト | 1.3× | 5.4× | 1.2× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト | ~1.4× | ~5.6× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | テキスト、画像 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | テキスト | 1.4× | 1.5× | 1.4× |
@@ -149,7 +150,10 @@ EOF
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | 3.0× | 14.3× | 2.6× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
+| [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | テキスト | 3.3× | 11.9× | 3.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.4× |
+| [Wald](https://huggingface.co/collections/org2ai/wald) | テキスト | 1.6× | 12.7× | 1.5× |
+| [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | テキスト、画像、動画 | 2.5× | 6.2× | 2.8× |
 
 ## オプション
 

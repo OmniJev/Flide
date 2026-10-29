@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.6"
+version = "0.1.7"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -40,12 +40,16 @@ kev = "flide_kev:Kev"
 jevany = "flide_kev:JevAny"
 drex = "flide_kev:Drex"
 knowline = "flide_knowline:KnowLine"
+wald = "flide_wald:Wald"
+xor = "flide_xor:Xor"
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
 
 [tool.setuptools.packages.find]
 where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast", "plugins/pplx",
-         "plugins/jeffan", "plugins/kev", "plugins/knowline"]
+         "plugins/jeffan", "plugins/kev", "plugins/knowline", "plugins/wald",
+         "plugins/xor"]
 include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*", "flide_intern_decision*",
-           "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*", "flide_knowline*"]
+           "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*", "flide_knowline*",
+           "flide_wald*", "flide_xor*"]

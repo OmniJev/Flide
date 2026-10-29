@@ -6,9 +6,11 @@ memory is added. Between the products run the kernels of kernels/pointwise.py: p
 embedding over the whole head (q, k) and the value norm, then after the attention and after the MLP (and the per-layer
 input) one pass for the post-norm, the residual add, the layer scalar and the next pre-norm, and GELU-tanh times the
 up projection. Each kernel computes in float32 and rounds once at its output; the rotary tables are float32.
-Keys-shared layers read the keys and values of the layer they share with, as transformers does. The mixture-of-experts
-blocks (26B-A4B) keep transformers' modules. A LoRA adapter's projections run unmerged beside their weights
-(lora.attached).
+Keys-shared layers read the keys and values of the layer they share with, as transformers does. A mixture-of-experts
+layer (26B-A4B) runs its dense MLP and its experts side by side as transformers does: the router reads the layer's
+input normed and scaled, its top k weights renormalized and scaled per expert, the experts (kernels/moe.py) read
+the second pre-norm, and the two branches are normed, added and normed again. A LoRA adapter's projections run unmerged
+beside their weights (lora.attached).
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import torch
 
 from ... import lora, settings
 from ...kernels import attention as attn_kernel
+from ...kernels import moe as moe_kernel
 from ...kernels import pointwise as pw
 from ...kernels.fp8 import mm
 
@@ -75,6 +78,11 @@ class FusedDecoder:
             if self.ple:
                 w["ple_gate"] = lora.attached(layer.per_layer_input_gate.weight, [layer.per_layer_input_gate])
                 w["ple_proj"] = lora.attached(layer.per_layer_projection.weight, [layer.per_layer_projection])
+            if getattr(layer, "enable_moe_block", False):
+                r, ex = layer.router, layer.experts
+                w["moe"] = {"router": r.proj.weight, "router_norm": (r.scale.float() * r.scalar_root_size).contiguous(),
+                            "expert_scale": r.per_expert_scale, "experts": ex.gate_up_proj,
+                            "experts_down": ex.down_proj, "inter": ex.intermediate_dim, "topk": self.cfg.top_k_experts}
             self.w.append(w)
 
     def tables(self, pos: torch.Tensor) -> dict:
@@ -159,6 +167,8 @@ class FusedDecoder:
             n = w["inter"]
             gu = m_(x, w["gate_up"])
             d = m_(_geglu(gu[:, :n], gu[:, n:]), w["down"])
+            if "moe" in w:
+                d = self._moe(layer, w["moe"], h, d, eps)
             nxt = layers[i + 1].input_layernorm.weight if i + 1 < top else None
             if self.ple:
                 h, _ = pw.sandwich(d, h, layer.post_feedforward_layernorm.weight, eps)
@@ -171,6 +181,18 @@ class FusedDecoder:
             if reads and i + 1 in reads:
                 out[i + 1] = h[reads[i + 1]]
         return h, out
+
+    @staticmethod
+    def _moe(layer, w: dict, h: torch.Tensor, dense: torch.Tensor, eps: float) -> torch.Tensor:
+        """The feed-forward of a mixture-of-experts layer from its input h (the residual stream after attention) and
+        its dense MLP's output: the two branches normed and added (moe.combine_norm)."""
+        r = pw.rms_norm(h, w["router_norm"], eps, offset=False)
+        logits, _ = moe_kernel.router(r, w["router"])
+        top, ids = moe_kernel.route(logits, w["topk"], w["expert_scale"])
+        x2 = pw.rms_norm(h, layer.pre_feedforward_layernorm_2.weight, eps, offset=False)
+        y = moe_kernel.experts(x2, w, top, ids, lambda gu, n: _geglu(gu[:, :n], gu[:, n:]))
+        return moe_kernel.combine_norm(y, dense, layer.post_feedforward_layernorm_1.weight,
+                                       layer.post_feedforward_layernorm_2.weight, w["topk"], eps)
 
     def final(self, h: torch.Tensor) -> torch.Tensor:
         norm = self.lm.norm
