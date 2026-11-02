@@ -167,3 +167,16 @@ EOF
 ## ライセンス
 
 Apache-2.0。`flide/kernels/gdn.py` には [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）の 2 つのカーネルから派生したカーネルが含まれます。THIRD_PARTY_NOTICES に、それと Flide が利用しているほかのコードを記載しています。
+
+## 引用
+
+研究で Flide を使われた場合は、[論文](https://arxiv.org/abs/2610.42148)を引用してください。
+
+```bibtex
+@article{li2026flide,
+  title   = {Flide: Accelerating Decision Inference with Exact State Forking},
+  author  = {Li, Bobo and Song, Jiajia and Fei, Hao and Hsu, Wynne and Lee, Mong Li},
+  journal = {arXiv preprint arXiv:2610.42148},
+  year    = {2026}
+}
+```

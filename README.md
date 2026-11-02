@@ -169,3 +169,16 @@ The last three columns say how much faster Flide answers one request than the en
 Apache-2.0. `flide/kernels/gdn.py` holds a kernel derived from two kernels of
 [flash-linear-attention](https://github.com/fla-org/flash-linear-attention) (MIT); THIRD_PARTY_NOTICES lists it with
 the other code Flide builds on.
+
+## Citation
+
+If you use Flide in your research, please cite our [paper](https://arxiv.org/abs/2610.42148).
+
+```bibtex
+@article{li2026flide,
+  title   = {Flide: Accelerating Decision Inference with Exact State Forking},
+  author  = {Li, Bobo and Song, Jiajia and Fei, Hao and Hsu, Wynne and Lee, Mong Li},
+  journal = {arXiv preprint arXiv:2610.42148},
+  year    = {2026}
+}
+```

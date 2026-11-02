@@ -167,3 +167,16 @@ EOF
 ## 许可证
 
 Apache-2.0。`flide/kernels/gdn.py` 中有一个内核改写自 [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)（MIT）的两个内核，THIRD_PARTY_NOTICES 列出了它和 Flide 用到的其他代码。
+
+## 引用
+
+如果 Flide 对你的研究有帮助，请引用我们的[论文](https://arxiv.org/abs/2610.42148)。
+
+```bibtex
+@article{li2026flide,
+  title   = {Flide: Accelerating Decision Inference with Exact State Forking},
+  author  = {Li, Bobo and Song, Jiajia and Fei, Hao and Hsu, Wynne and Lee, Mong Li},
+  journal = {arXiv preprint arXiv:2610.42148},
+  year    = {2026}
+}
+```
