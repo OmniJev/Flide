@@ -8,18 +8,22 @@ request is seen exactly as training rows were:
     {"type": "image", "path" | "url" | "data": ...}
     {"type": "video", "frames": [ref, ...], "fps": 2.0}
 
-A reference is a local path (relative to the engine's media root), an http(s) URL, base64 data (a `data:` URI or the
-bare string under "data"), or, from Python, a PIL image. Video frames are pre-extracted stills; `fps` sets the
-timestamps the model sees (default 1.0, as in training).
+A reference is base64 data (a `data:` URI or the bare string under "data"), a local path (relative to the engine's
+media root, when it has one), an http(s) URL (when the engine allows them, `--allow-media-urls`: the server then fetches
+any address it can reach), or, from Python, a PIL image. Each is at most `settings.max_media_bytes`. Video frames are
+pre-extracted stills; `fps` sets the timestamps the model sees (default 1.0, as in training).
 """
 from __future__ import annotations
 
-import base64
 import io
+import math
 import re
 import urllib.request
 from pathlib import Path
 from typing import Any, Sequence
+
+from flide import settings
+from flide.formats.base import media_bytes
 
 PLACEHOLDER = re.compile(r"<(image|video):(\d+)>")
 VIDEOS_KWARGS = {"do_sample_frames": False, "cap_pixels_per_frame": True}
@@ -74,61 +78,79 @@ def check_items(media: Any) -> list[dict]:
     return out
 
 
-def _decode_data(s: str) -> bytes:
-    if s.startswith("data:"):
-        s = s.split(",", 1)[1]
-    return base64.b64decode(s)
-
-
-def open_image(ref: Any, root: str | Path | None = None, allow_paths: bool = True, timeout: float = 20.0):
-    """One RGB PIL image from a path, URL, base64 string or PIL image (or a dict holding one of those)."""
+def _decode(raw: bytes):
     from PIL import Image
 
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            return im.convert("RGB")
+    except Exception as exc:
+        raise MediaError(f"not a readable image ({type(exc).__name__})") from None
+
+
+def open_image(ref: Any, root: str | Path | None = None, allow_paths: bool = True, timeout: float = 20.0,
+               allow_urls: bool = False):
+    """One RGB PIL image from base64 data, a path, a URL or a PIL image (or a dict holding one of those)."""
     if isinstance(ref, dict):
         if "data" in ref:
-            with Image.open(io.BytesIO(_decode_data(str(ref["data"])))) as im:
-                return im.convert("RGB")
+            return _decode(media_bytes(str(ref["data"])))
         for key in ("image", "url", "path"):
             if key in ref:
-                return open_image(ref[key], root, allow_paths, timeout)
+                return open_image(ref[key], root, allow_paths, timeout, allow_urls)
         raise MediaError("image reference needs one of path, url or data")
     if hasattr(ref, "convert"):
         return ref.convert("RGB")
     if not isinstance(ref, str):
         raise MediaError(f"unsupported image reference of type {type(ref).__name__}")
+    cap = settings.max_media_bytes
     if ref.startswith("data:"):
-        raw = _decode_data(ref)
-    elif ref.startswith(("http://", "https://")):
+        return _decode(media_bytes(ref))
+    if ref.startswith(("http://", "https://")):
+        if not allow_urls:
+            raise MediaError("media URLs are not fetched by this server; send base64 data")
         req = urllib.request.Request(ref, headers={"User-Agent": "flide"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-    else:
-        if not allow_paths:
-            raise MediaError("local paths are not accepted by this server; send a URL or base64 data")
-        p = Path(ref)
-        if root is not None:
-            base = Path(root).resolve()
-            p = (p if p.is_absolute() else base / p).resolve()
-            if base not in p.parents:
-                raise MediaError(f"path {ref!r} is outside the media root")
-        with Image.open(p) as im:
-            return im.convert("RGB")
-    with Image.open(io.BytesIO(raw)) as im:
-        return im.convert("RGB")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read(cap + 1)
+        except OSError as exc:
+            raise MediaError(f"could not fetch {ref!r}: {exc}") from None
+        if len(raw) > cap:
+            raise MediaError(f"{ref!r} is larger than {cap / 2 ** 20:g} MiB")
+        return _decode(raw)
+    if not allow_paths:
+        raise MediaError("local paths are not accepted by this server; send base64 data")
+    p = Path(ref)
+    if root is not None:
+        base = Path(root).resolve()
+        p = (p if p.is_absolute() else base / p).resolve()
+        if base not in p.parents:
+            raise MediaError(f"path {ref!r} is outside the media root")
+    try:
+        if p.stat().st_size > cap:
+            raise MediaError(f"{ref!r} is larger than {cap / 2 ** 20:g} MiB")
+        raw = p.read_bytes()
+    except OSError as exc:
+        raise MediaError(f"could not read {ref!r}: {exc.strerror or exc}") from None
+    return _decode(raw)
 
 
-def load(media: Sequence[dict], root: str | Path | None = None, allow_paths: bool = True):
+def load(media: Sequence[dict], root: str | Path | None = None, allow_paths: bool = True, allow_urls: bool = False):
     """(images, videos, video metadata) in media order, the way training built them."""
     from transformers.video_utils import VideoMetadata
 
     images, videos, metas = [], [], []
     for m in media:
         if m["type"] == "image":
-            images.append(open_image(m, root, allow_paths))
+            images.append(open_image(m, root, allow_paths, allow_urls=allow_urls))
         else:
-            frames = [open_image(f, root, allow_paths) for f in m["frames"]]
+            frames = [open_image(f, root, allow_paths, allow_urls=allow_urls) for f in m["frames"]]
             n = len(frames)
-            fps = float(m.get("fps") or 1.0)
+            try:
+                fps = float(m.get("fps") or 1.0)
+            except (TypeError, ValueError):
+                fps = math.nan
+            if not (math.isfinite(fps) and fps > 0):
+                raise MediaError(f"video fps {m.get('fps')!r} is not a positive number")
             videos.append(frames)
             metas.append(VideoMetadata(total_num_frames=n, fps=fps, frames_indices=list(range(n)), duration=n / fps))
     return images, videos, metas

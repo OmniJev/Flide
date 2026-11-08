@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger("flide.serve")
@@ -47,15 +48,21 @@ def freeze_heap() -> None:
 def run(args) -> None:
     import uvicorn
 
-    from .. import formats
+    from .. import formats, settings
     from ..runtime.engine import Engine, model_config, resolve_model
     from ..runtime.offline import parse_kv
     from .server import create_app
 
+    if args.max_media_mb is not None:
+        if not args.max_media_mb > 0:
+            raise SystemExit("--max-media-mb is a positive number")
+        os.environ["FLIDE_MAX_MEDIA_MB"] = str(args.max_media_mb)
+        settings.max_media_bytes = int(args.max_media_mb * 2 ** 20)
     model_dir = resolve_model(args.model)
     family = formats.detect(model_dir, model_config(model_dir), args.format)
     options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
                "max_request_tokens": args.max_request_tokens, "media_root": args.media_root,
+               "allow_media_urls": args.allow_media_urls or None,
                **parse_kv(args.format_arg)}
     options = {k: v for k, v in options.items() if v is not None}
     name = args.name or default_name(args.model)
@@ -89,7 +96,11 @@ def add_parser(sub) -> None:
     s.add_argument("--device", default="cuda:0")
     s.add_argument("--dtype", default="bfloat16")
     s.add_argument("--media-root", default=None,
-                   help="directory that local media paths in requests resolve against (without it, only URLs and base64)")
+                   help="directory that local media paths in requests resolve against (without it, only base64)")
+    s.add_argument("--allow-media-urls", action="store_true",
+                   help="fetch media that requests give as http(s) URLs; the server then reaches any address it can")
+    s.add_argument("--max-media-mb", type=float, default=None,
+                   help="largest image or video a request may carry, in MiB once decoded (default 64)")
     s.add_argument("--no-cuda-graphs", action="store_true", help="run every request eagerly")
     s.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits at any load (slower)")

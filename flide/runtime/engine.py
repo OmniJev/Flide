@@ -115,6 +115,7 @@ class Engine:
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
         family = formats.detect(self.model_dir, config, format)
+        self.model_dir = family.run_dir(self.model_dir)
         if family.backbones and config.model_type not in family.backbones:
             raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
@@ -217,7 +218,7 @@ class Engine:
             if p is not None and _blocks(p) and not getattr(self.backbone, "block_attention", False):
                 raise ValueError("this backbone does not run block attention")
             if p is not None and p.vision is not None and p.positions is None:
-                p.positions, p.offset = self.backbone.vision_positions(p.prefix, p.vision)
+                p.positions, p.offset = self._media_positions(p)
         outputs: list[Any] = [None if p is None else [None] * len(p.suffixes) for p in plans]
         sessions = self._sessions_for(plans)
         batches = schedule(plans, budget, sessions)
@@ -502,9 +503,11 @@ class Engine:
         """Flat graph items of a plan without a prefix under block attention, one per branch: its whole sequence as the
         prefix, a copy of its last token as the branch, read at the sequence's last token (on graphs with
         `read_spots`); None when the plan is not one of those or reads elsewhere."""
-        if plan.prefix or not _blocks(plan) or plan.vision is not None or settings.batch_invariant:
+        if plan.prefix or not _blocks(plan) or settings.batch_invariant:
             return None
         if not (getattr(graphs, "read_spots", False) and getattr(graphs, "block_attention", False)):
+            return None
+        if plan.vision is not None and not graphs.media:
             return None
         reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
         if len(reads) != 1:
@@ -512,7 +515,31 @@ class Engine:
         (read,) = reads
         if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,):
             return None
-        return [(s, [s[-1:]], None, True, (len(s) - 1,)) for s in plan.suffixes]
+        if plan.vision is None:
+            return [(s, [s[-1:]], None, True, (len(s) - 1,)) for s in plan.suffixes]
+        if plan.positions is None:
+            plan.positions, plan.offset = self._media_positions(plan)
+        return [(s, [s[-1:]], (plan.vision, pos, off), True, (len(s) - 1,))
+                for s, pos, off in zip(plan.suffixes, plan.positions, plan.offset)]
+
+    def _media_positions(self, plan: Plan):
+        """Rotary positions of a plan holding media: its prefix's [3, P] and the offset after it; for a plan without a
+        prefix, a list of each per sequence, the media in the head they share (the token types `vision` gives cover
+        that head, the rest is text)."""
+        if plan.prefix:
+            return self.backbone.vision_positions(plan.prefix, plan.vision)
+        types = plan.vision.get("mm_token_type_ids")
+        pos, off = [], []
+        for s in plan.suffixes:
+            v = plan.vision
+            if types is not None:
+                head = types.reshape(1, -1)
+                v = dict(v, mm_token_type_ids=head.new_zeros(1, len(s)))
+                v["mm_token_type_ids"][:, :head.shape[1]] = head
+            p, o = self.backbone.vision_positions(s, v)
+            pos.append(p)
+            off.append(o)
+        return pos, off
 
     @staticmethod
     def _flat_rounds(graphs, items) -> list[list[int]]:

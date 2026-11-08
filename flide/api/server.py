@@ -59,6 +59,18 @@ class _Stamp:
         await self.app(scope, receive, stamped)
 
 
+def _query_options(params, debias: int) -> dict:
+    """`debias` (a whole number) and `debug` (1, true, yes or on; 0, false, no or off) from the query string;
+    ValueError for anything else."""
+    flag = params.get("debug", "0").lower()
+    if flag not in ("1", "true", "yes", "on", "0", "false", "no", "off", ""):
+        raise ValueError(f"debug is true or false, not {params.get('debug')!r}")
+    raw = params.get("debias", str(debias))
+    if not raw.isascii() or not raw.isdigit():
+        raise ValueError(f"debias is a whole number, not {raw!r}")
+    return {"debias": int(raw), "debug": flag in ("1", "true", "yes", "on")}
+
+
 def create_app(engine, model_name: str, description: str = "", release_date: str = "", batcher=None,
                ready=None) -> FastAPI:
     """`ready`, when given, is asked by /health (503 "loading" until it says yes): front ends start before the model
@@ -130,8 +142,11 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         if requested not in aliases and requested != model_name:
             return JSONResponse(status_code=404, content={
                 "detail": f"model {requested!r} is not served; available: {model_name} plus aliases {sorted(aliases)}"})
-        options = {"debias": int(request.query_params.get("debias", app.state.debias)),
-                   "debug": bool(request.query_params.get("debug"))}
+        try:
+            options = _query_options(request.query_params, app.state.debias)
+        except ValueError as exc:
+            return JSONResponse(status_code=422,
+                                content={"detail": [{"loc": ["query"], "msg": str(exc), "type": "value_error"}]})
         try:
             check_limits(family, req)
             response, meta = await answer(req, **options)

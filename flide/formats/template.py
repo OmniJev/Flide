@@ -25,7 +25,8 @@ the model is asked and read:
   noul_text    their descriptions when a request gives none
   attention    "bidirectional": the checkpoint reads each question's whole prompt both ways in its full-attention layers
                (recurrent and sliding-window layers stay causal), so every question is a sequence of its own and nothing is
-               shared; "causal" (the default) shares the state between questions
+               shared (a request's images are read again in each); "causal" (the default) shares the state between
+               questions
   images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
                the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
                without it images are refused. max_prompt_tokens counts the images' tokens
@@ -186,8 +187,6 @@ class Template(Format):
         if spec.get("attention", "causal") not in ("causal", "bidirectional"):
             raise ValueError("attention is causal or bidirectional")
         self.attention = "blocks" if spec.get("attention") == "bidirectional" else "causal"
-        if self.attention == "blocks" and self.images is not None:
-            raise ValueError("images are read with causal attention only")
         st = spec.get("state")
         self.state_text = env.from_string(st["text"]) if st else None
         if st:
@@ -409,7 +408,7 @@ class Template(Format):
                 raise ValueError(f"the questions leave no room for the state within {self.max_prompt_tokens} tokens")
         else:
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
-        if self.attention == "blocks":
+        if self.attention == "blocks" and not refs:
             return Plan([], rows, (READ,), data, attention="blocks")
         m = min(len(r) for r in rows) - 1
         for i in range(m):
@@ -423,6 +422,8 @@ class Template(Format):
         longest = len(prefix) + max(len(x) for x in suffixes)
         if longest > self.max_prompt_tokens:
             raise ValueError(f"prompt is {longest} tokens with its images, limit is {self.max_prompt_tokens}")
+        if self.attention == "blocks":
+            return Plan([], [prefix + s for s in suffixes], (READ,), data, vision=vision, attention="blocks")
         return Plan(prefix, suffixes, (READ,), data, vision=vision)
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):

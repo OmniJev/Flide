@@ -40,9 +40,9 @@ def _piece(i: int, plan: Plan, branches: list[int], session: dict | None = None,
 
 def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> list[Piece]:
     if not plan.prefix:
-        if plan.vision is not None:
-            raise ValueError("a plan without a prefix takes no media")
         blocks = plan.attention == "blocks"
+        if plan.vision is not None and not blocks:
+            raise ValueError("a plan without a prefix takes media under block attention only")
         out = []
         for b, s in enumerate(plan.suffixes):
             if len(s) < 2:
@@ -50,7 +50,9 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
             if blocks:
                 reads = tuple(Read(r.head, r.layer, tuple(p - 1 if p < 0 else p for p in r.positions))
                               for r in plan.branch_reads(b))
-                out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], blocks=True)))
+                media = {} if plan.vision is None else {"vision": plan.vision, "positions": plan.positions[b],
+                                                        "offset": plan.offset[b]}
+                out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], blocks=True, **media)))
             else:
                 out.append(Piece(i, [b], Job(s[:-1], [s[-1:]], [plan.branch_reads(b)])))
         return out

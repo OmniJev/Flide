@@ -21,6 +21,7 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-08** Flide 0.1.8 新增两个决策模型家族，包括 [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) 和 [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6)，并支持 [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1)。
 - 🔥 **2026-11-02** 我们的论文 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) 已发布到 arXiv。
 - 🔥 **2026-10-29** Flide 0.1.7 新增三个决策模型家族，包括 [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald) 和 [Xor](https://huggingface.co/juspay/Xor-26B-A4B)，并支持 Gemma 4 混合专家模型，比如 [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5)。
 - 🔥 **2026-10-29** Flide 0.1.6 新增两个决策模型家族，包括 [Drex](https://huggingface.co/nace-ai/drex-v2.0) 和 [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5)，新的 `flide verify` 可以在你自己的模型和请求上检查精确分叉。
@@ -126,10 +127,12 @@ EOF
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | 文本 | 3.7× | 9.3× | 2.6× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 文本、图片 | ~3.1× | ~7.5× | ~1.3× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | 文本 | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | 1.3× | 1.0× | 1.0× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | 1.6× | 7.0× | 1.2× |
-| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本 | ~3.4× | ~7.9× | ~1.7× |
+| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 文本、图片 | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | 文本、图片 | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | 文本 | 2.0× | 9.2× | 1.7× |

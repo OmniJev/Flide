@@ -40,7 +40,9 @@ class Plan:
     at position P + `offset`. The backbone fills both from `vision` when the family leaves them empty.
 
     An empty `prefix` makes every suffix a sequence of its own (nothing shared); with attention "blocks" each such
-    sequence is one block, read bidirectionally whole in the full-attention layers.
+    sequence is one block, read bidirectionally whole in the full-attention layers. Such sequences may hold media under
+    attention "blocks": the same media in each, inside the head every sequence starts with, which `vision`'s token types
+    (when it has them) cover; `positions` and `offset` are then lists, one per sequence.
 
     `attention` "blocks": in the full-attention layers the prefix sees all of itself and each suffix sees the prefix
     and all of itself (the block-bidirectional mask some checkpoints are trained with); recurrent layers stay causal,
@@ -82,6 +84,12 @@ class Format:
         """Whether this family claims a checkpoint that does not name its format in decision_config.json."""
         return False
 
+    @classmethod
+    def run_dir(cls, model_dir: str) -> str:
+        """The directory the engine loads the checkpoint from: its own, unless the family's release keeps the weights'
+        LoRA adapter where the loader does not look (the family then links it under lora/ of a directory it makes)."""
+        return model_dir
+
     def for_thread(self) -> "Format":
         """A twin that plans and finishes on another thread. It shares everything except the tokenizer, which keeps
         mutable truncation and padding state and fails ("Already borrowed") when two threads encode at once."""
@@ -110,6 +118,23 @@ class Format:
         """`outputs[b][r]` is the head output of read r of branch b: one row per position, as lists (a tensor of
         those rows on the device for a head with `on_device`)."""
         raise NotImplementedError
+
+
+def media_bytes(ref: str, what: str = "image") -> bytes:
+    """The bytes of a base64 data URL or bare base64 string; ValueError (a 422) when it is not base64 or is larger than
+    `settings.max_media_bytes`."""
+    import base64
+    import binascii
+
+    from .. import settings
+
+    s = ref.split(",", 1)[1] if ref.startswith("data:") else ref
+    if len(s) // 4 * 3 > settings.max_media_bytes:
+        raise ValueError(f"{what} is larger than {settings.max_media_bytes / 2 ** 20:g} MiB")
+    try:
+        return base64.b64decode(s)
+    except (binascii.Error, ValueError):
+        raise ValueError(f"{what} is not valid base64") from None
 
 
 def check_limits(family: Format, request) -> None:

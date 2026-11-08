@@ -21,7 +21,6 @@ turn, as vLLM places them, at the image processor's own resolution; they belong 
 """
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -31,7 +30,7 @@ from typing import Any
 from ..api.answers import make_choice, make_noul, make_score
 from ..api.schema import ChoiceQuestion, NoulQuestion, ScoreQuestion, SystemOneRequest, SystemOneResponse, Usage
 from . import register
-from .base import Format, Plan, Read
+from .base import Format, Plan, Read, media_bytes
 from .tokens import Pieces
 
 log = logging.getLogger("flide.next_token")
@@ -294,9 +293,12 @@ class NextToken(Format):
 
         if not isinstance(ref, str):
             raise ValueError("images: each image is a data URL or base64 string")
-        raw = base64.b64decode(ref.split(",", 1)[1] if ref.startswith("data:") else ref)
-        with Image.open(io.BytesIO(raw)) as im:
-            return im.convert("RGB")
+        raw = media_bytes(ref)
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                return im.convert("RGB")
+        except Exception as exc:
+            raise ValueError(f"images: not a readable image ({type(exc).__name__})") from None
 
     def _vision(self, prefix: list[int], images: list, text: str, suffix: list[int]) -> tuple[list[int], dict]:
         """The prefix with each image placeholder repeated once per merged patch, and the pixel tensors. Processors

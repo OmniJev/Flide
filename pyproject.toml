@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.7"
+version = "0.1.8"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,6 +42,8 @@ drex = "flide_kev:Drex"
 knowline = "flide_knowline:KnowLine"
 wald = "flide_wald:Wald"
 xor = "flide_xor:Xor"
+autotrust = "flide_autotrust:AutoTrust"
+clef = "flide_clef:Clef"
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
@@ -49,7 +51,7 @@ flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/pr
 [tool.setuptools.packages.find]
 where = [".", "plugins/onejev", "plugins/open_jev", "plugins/intern_decision", "plugins/torchcast", "plugins/pplx",
          "plugins/jeffan", "plugins/kev", "plugins/knowline", "plugins/wald",
-         "plugins/xor"]
+         "plugins/xor", "plugins/autotrust", "plugins/clef"]
 include = ["flide", "flide.*", "flide_onejev*", "flide_open_jev*", "flide_intern_decision*",
            "flide_torchcast*", "flide_pplx*", "flide_jeffan*", "flide_kev*", "flide_knowline*",
-           "flide_wald*", "flide_xor*"]
+           "flide_wald*", "flide_xor*", "flide_autotrust*", "flide_clef*"]

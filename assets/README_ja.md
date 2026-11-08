@@ -21,6 +21,7 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-08** Flide 0.1.8 で [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98)、[Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) の 2 つの意思決定モデルファミリーを追加し、[drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1) にも対応しました。
 - 🔥 **2026-11-02** 論文 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) を arXiv で公開しました。
 - 🔥 **2026-10-29** Flide 0.1.7 で [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald)、[Xor](https://huggingface.co/juspay/Xor-26B-A4B) の 3 つの意思決定モデルファミリーを追加し、[KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5) などの Gemma 4 の混合エキスパートモデルに対応しました。
 - 🔥 **2026-10-29** Flide 0.1.6 で [Drex](https://huggingface.co/nace-ai/drex-v2.0)、[KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) の 2 つの意思決定モデルファミリーを追加し、新しい `flide verify` で自分のモデルとリクエストの正確な分岐を確認できるようになりました。
@@ -126,10 +127,12 @@ EOF
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | テキスト | 3.7× | 9.3× | 2.6× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | テキスト、画像 | ~3.1× | ~7.5× | ~1.3× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | テキスト | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | 1.3× | 1.0× | 1.0× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | 1.6× | 7.0× | 1.2× |
-| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト | ~3.4× | ~7.9× | ~1.7× |
+| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト、画像 | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | テキスト、画像 | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | テキスト、画像 | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | テキスト | 2.0× | 9.2× | 1.7× |

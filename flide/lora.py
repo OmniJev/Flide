@@ -179,18 +179,21 @@ class Adapter:
 
     def attach(self, model) -> None:
         """Every projection with a LoRA gets `lora` = (A [r, in], scaling B [out, r]) in its weight's dtype, and a
-        forward hook that adds x A^T B^T when the module itself runs."""
+        forward hook that adds x A^T B^T when the module itself runs. An output head tied to the embedding has no tensor
+        of its own in the checkpoint; its LoRA is checked against the module here."""
         for mname, mod in model.named_modules():
             name = canonical(mname + ".weight")
             if name in self.pairs and not self.pairs[name][2] and not self.merge and isinstance(mod, torch.nn.Linear):
                 A, B, _ = self.pairs[name]
+                if name not in self.applied and (B.shape[0], A.shape[1]) != tuple(mod.weight.shape):
+                    raise ValueError(f"adapter {name}: B A {(B.shape[0], A.shape[1])}, model {tuple(mod.weight.shape)}")
                 dt = mod.weight.dtype
                 mod.lora = (A.to(dt), (B.float() * self._scaling(name, A.shape[0])).to(dt))
                 mod.register_forward_hook(_hook)
                 self.attached.add(name)
 
     def check(self) -> None:
-        missed = sorted((set(self.pairs) | set(self.full)) - self.applied)
+        missed = sorted((set(self.pairs) | set(self.full)) - self.applied - self.attached)
         if missed:
             raise ValueError(f"{len(missed)} adapter tensors found no checkpoint tensor, e.g. {missed[:4]}")
         loose = sorted(k for k, p in self.pairs.items() if not p[2] and not self.merge and k not in self.attached)

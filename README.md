@@ -21,6 +21,7 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
 - 🔥 **2026-11-02** We released our paper [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) on arXiv.
 - 🔥 **2026-10-29** We added three decision model families in Flide 0.1.7, including [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b), [Wald](https://huggingface.co/collections/org2ai/wald) and [Xor](https://huggingface.co/juspay/Xor-26B-A4B), and Gemma 4 mixture-of-experts models such as [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5).
 - 🔥 **2026-10-29** We added two decision model families in Flide 0.1.6, including [Drex](https://huggingface.co/nace-ai/drex-v2.0) and [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5), and `flide verify` checks exact forking on your own model and requests.
@@ -126,10 +127,12 @@ The last three columns say how much faster Flide answers one request than the en
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | text | 3.7× | 9.3× | 2.6× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | text, images | ~3.1× | ~7.5× | ~1.3× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | text | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | 1.3× | 1.0× | 1.0× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | 1.6× | 7.0× | 1.2× |
-| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text | ~3.4× | ~7.9× | ~1.7× |
+| [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | text, images | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | text, images | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | text | 2.0× | 9.2× | 1.7× |

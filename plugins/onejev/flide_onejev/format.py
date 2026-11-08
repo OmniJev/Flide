@@ -199,7 +199,8 @@ class OneJev(Format):
 
     def __init__(self, model_dir: str, tokenizer=None, calibration: Calibration | str | None = None,
                  style: PromptStyle = DEFAULT_STYLE, max_branch_tokens: int = 32768, max_request_tokens: int = 65536,
-                 media_root: str | None = None, allow_local_paths: bool | None = None):
+                 media_root: str | None = None, allow_local_paths: bool | None = None,
+                 allow_media_urls: bool | str = False):
         if tokenizer is None:
             import transformers
 
@@ -225,6 +226,7 @@ class OneJev(Format):
         self.model_dir = model_dir
         self.media_root = media_root
         self.allow_local_paths = media_root is not None if allow_local_paths is None else allow_local_paths
+        self.allow_media_urls = str(allow_media_urls).lower() in ("1", "true", "yes", "on")
         self.vision_ids = {i for i in (getattr(config, k, None) for k in ("image_token_id", "video_token_id",
                            "vision_start_token_id", "vision_end_token_id", "boi_token_id", "eoi_token_id",
                            "audio_token_id")) if i is not None}
@@ -417,7 +419,8 @@ class OneJev(Format):
                 if start_vision is not None:
                     start_vision(vision)
         else:
-            images, videos, metas = mmedia.load(items, self.media_root, self.allow_local_paths)
+            images, videos, metas = mmedia.load(items, self.media_root, self.allow_local_paths,
+                                                self.allow_media_urls)
         render = lambda suffix: mmedia.render_prompt(proc, self.template_kwargs, build_messages(state, suffix, self.style),
                                                      items)
         prompts, prefix_text, cut = self._branch_prompts(render, [r.suffix for r in rendered])
@@ -483,7 +486,7 @@ class OneJev(Format):
         it resizes them to; grids [n, 3]; the decoded images)."""
         import torch
 
-        images, _, _ = mmedia.load(items, self.media_root, self.allow_local_paths)
+        images, _, _ = mmedia.load(items, self.media_root, self.allow_local_paths, self.allow_media_urls)
         imgs, grids, sizes = [], [], []
         for im in images:
             fast = self._rgb_image(im, raw) if getattr(self, "_rgb_fast", True) else None

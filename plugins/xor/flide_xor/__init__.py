@@ -27,6 +27,7 @@ import string
 from pathlib import Path
 from typing import Any
 
+from flide import settings
 from flide.api.answers import _round, make_choice, make_noul, make_score
 from flide.api.schema import SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import register
@@ -95,6 +96,8 @@ def _data_url(ref: Any, kind: str) -> bytes:
     header, sep, encoded = ref.partition(",")
     if not sep or not header.endswith(";base64") or not encoded:
         raise ValueError(f"{kind} must be a non-empty base64 data URL")
+    if len(encoded) // 4 * 3 > settings.max_media_bytes:
+        raise ValueError(f"{kind} is larger than {settings.max_media_bytes / 2 ** 20:g} MiB")
     try:
         return base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error):
