@@ -1,6 +1,6 @@
 """HTTP server for the TypeSafe-compatible System One API.
 
-    POST /v1/systemone   answer typed questions about a state
+    POST /v1/systemone   answer typed questions about a state; {"requests": [...]} answers several in one body
     GET  /v1/models      served model and its aliases
     GET  /health
     POST /flush_cache    empty the session cache
@@ -29,9 +29,16 @@ from .schema import ModelMetadata, ModelMetadataList, SystemOneRequest
 log = logging.getLogger("flide.server")
 
 
-def _validation_error(exc: ValidationError) -> JSONResponse:
-    detail = [{"loc": ["body", *[str(x) for x in e["loc"]]], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
+MAX_BATCH = 1024
+
+
+def _validation_error(exc: ValidationError, loc: tuple = ("body",)) -> JSONResponse:
+    detail = [{"loc": [*loc, *[str(x) for x in e["loc"]]], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
     return JSONResponse(status_code=422, content={"detail": detail})
+
+
+def _value_error(loc: list, msg: str) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": [{"loc": loc, "msg": msg, "type": "value_error"}]})
 
 
 class _Stamp:
@@ -110,6 +117,67 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
             meta["replica"] = info["replica"]
         return response, meta
 
+    def served(requested) -> bool:
+        return isinstance(requested, str) and (requested in aliases or requested == model_name)
+
+    def not_served(requested) -> JSONResponse:
+        return JSONResponse(status_code=404, content={
+            "detail": f"model {requested!r} is not served; available: {model_name} plus aliases {sorted(aliases)}"})
+
+    def payload_of(response, meta) -> dict:
+        response.model = model_name
+        payload = response.model_dump()
+        payload[family.meta_key] = meta
+        return payload
+
+    async def batch(request: Request, body: dict) -> JSONResponse:
+        """Several requests in one body, `{"requests": [...]}` with an optional `model`, as Nace's drex serve.py takes
+        them: every item is checked before any runs, the items share GPU rounds as concurrent requests do, and one
+        that fails fails the whole batch. `results` holds each item's answer as a single request gets it, without
+        `model`."""
+        items = body["requests"]
+        if "state" in body or "questions" in body:
+            return _value_error(["body"], "a batch cannot also contain state or questions")
+        if not isinstance(items, list) or not items:
+            return _value_error(["body", "requests"], "requests must be a non-empty list")
+        if len(items) > MAX_BATCH:
+            return _value_error(["body", "requests"], f"requests exceeds {MAX_BATCH} items")
+        requested = body.get("model") or "jev-latest"
+        if not served(requested):
+            return not_served(requested)
+        try:
+            options = _query_options(request.query_params, app.state.debias)
+        except ValueError as exc:
+            return _value_error(["query"], str(exc))
+        reqs = []
+        for i, item in enumerate(items):
+            loc = ["body", "requests", i]
+            try:
+                req = SystemOneRequest.model_validate(item)
+            except ValidationError as exc:
+                return _validation_error(exc, tuple(loc))
+            if "model" in item and not served(req.model):
+                return not_served(req.model)
+            try:
+                check_limits(family, req)
+            except ValueError as exc:
+                return _value_error(loc, str(exc))
+            reqs.append(req)
+        outs = await asyncio.gather(*(answer(r, **options) for r in reqs), return_exceptions=True)
+        for i, out in enumerate(outs):
+            if isinstance(out, ValueError):
+                return _value_error(["body", "requests", i], str(out))
+            if isinstance(out, ImportError):
+                return JSONResponse(status_code=500, content={"detail": str(out)})
+            if isinstance(out, BaseException):
+                raise out
+        results = []
+        for response, meta in outs:
+            item = payload_of(response, meta)
+            item.pop("model", None)
+            results.append(item)
+        return JSONResponse(content={"model": model_name, "results": results})
+
     app.add_middleware(_Stamp)
 
     @app.get("/health")
@@ -134,6 +202,8 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         except Exception:
             return JSONResponse(status_code=422,
                                 content={"detail": [{"loc": ["body"], "msg": "invalid JSON", "type": "json_invalid"}]})
+        if isinstance(body, dict) and "requests" in body:
+            return await batch(request, body)
         try:
             req = SystemOneRequest.model_validate(body)
         except ValidationError as exc:

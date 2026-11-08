@@ -2,7 +2,8 @@
 
 Plans are sorted by token count so a micro-batch holds plans of similar size. A plan larger than the
 budget is split by its suffixes into pieces that each carry the full prefix; a piece that still exceeds
-the budget (one long branch) gets a micro-batch of its own.
+the budget (one long branch, or a prefix longer than the budget with up to a budget of branches on it)
+gets a micro-batch of its own.
 """
 from __future__ import annotations
 
@@ -59,11 +60,12 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
     if plan.tokens - (session or {}).get("start", 0) <= budget:
         return [_piece(i, plan, list(range(len(plan.suffixes))), session)]
     P = len(plan.prefix) - (session or {}).get("start", 0)
-    pieces, cur, size = [], [], P
+    room = budget if P >= budget else budget - P
+    pieces, cur, size = [], [], 0
     for b, s in enumerate(plan.suffixes):
-        if cur and size + len(s) > budget:
+        if cur and size + len(s) > room:
             pieces.append(_piece(i, plan, cur, session, first=not pieces))
-            cur, size = [], P
+            cur, size = [], 0
         cur.append(b)
         size += len(s)
     pieces.append(_piece(i, plan, cur, session, first=not pieces))

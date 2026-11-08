@@ -21,6 +21,7 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-09** Flide 0.1.9 で [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b)、[JEV-35B](https://huggingface.co/autotrust/JEV-35B) に対応し、`/v1/systemone` が 1 つのリクエスト本文で複数のリクエストを受け付けるようになりました。
 - 🔥 **2026-11-08** Flide 0.1.8 で [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98)、[Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) の 2 つの意思決定モデルファミリーを追加し、[drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1) にも対応しました。
 - 🔥 **2026-11-02** 論文 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) を arXiv で公開しました。
 - 🔥 **2026-10-29** Flide 0.1.7 で [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald)、[Xor](https://huggingface.co/juspay/Xor-26B-A4B) の 3 つの意思決定モデルファミリーを追加し、[KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5) などの Gemma 4 の混合エキスパートモデルに対応しました。
@@ -127,7 +128,7 @@ EOF
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | テキスト | 3.7× | 9.3× | 2.6× |
-| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | テキスト、画像 | ~3.1× | ~7.5× | ~1.3× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | テキスト、画像 | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | テキスト | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | 1.3× | 1.0× | 1.0× |
@@ -148,7 +149,7 @@ EOF
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | テキスト | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | テキスト、画像、動画 | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | テキスト | 4.2× | 5.0× | ~1.5× |
-| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | テキスト、画像 | 3.1× | 1.4× | 1.2× |
+| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | テキスト、画像 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | テキスト | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | テキスト、画像 | ~2.1× | ~4.8× | ~1.3× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |

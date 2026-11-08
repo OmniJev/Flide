@@ -21,6 +21,7 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-09** Flide 0.1.9 支持 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) 和 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)，`/v1/systemone` 也能在一个请求体里接收多个请求。
 - 🔥 **2026-11-08** Flide 0.1.8 新增两个决策模型家族，包括 [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) 和 [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6)，并支持 [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1)。
 - 🔥 **2026-11-02** 我们的论文 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) 已发布到 arXiv。
 - 🔥 **2026-10-29** Flide 0.1.7 新增三个决策模型家族，包括 [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald) 和 [Xor](https://huggingface.co/juspay/Xor-26B-A4B)，并支持 Gemma 4 混合专家模型，比如 [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5)。
@@ -127,7 +128,7 @@ EOF
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | 文本 | 3.7× | 9.3× | 2.6× |
-| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 文本、图片 | ~3.1× | ~7.5× | ~1.3× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 文本、图片 | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | 文本 | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | 1.3× | 1.0× | 1.0× |
@@ -148,7 +149,7 @@ EOF
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | 文本 | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | 文本、图片、视频 | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | 文本 | 4.2× | 5.0× | ~1.5× |
-| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 文本、图片 | 3.1× | 1.4× | 1.2× |
+| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 文本、图片 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 文本 | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 文本、图片 | ~2.1× | ~4.8× | ~1.3× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 文本 | 3.1× | 28.1× | 1.2× |

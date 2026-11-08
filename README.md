@@ -21,6 +21,7 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-09** We added [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) and [JEV-35B](https://huggingface.co/autotrust/JEV-35B) in Flide 0.1.9, and `/v1/systemone` now takes several requests in one body.
 - 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
 - 🔥 **2026-11-02** We released our paper [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) on arXiv.
 - 🔥 **2026-10-29** We added three decision model families in Flide 0.1.7, including [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b), [Wald](https://huggingface.co/collections/org2ai/wald) and [Xor](https://huggingface.co/juspay/Xor-26B-A4B), and Gemma 4 mixture-of-experts models such as [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5).
@@ -127,7 +128,7 @@ The last three columns say how much faster Flide answers one request than the en
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | text | 3.7× | 9.3× | 2.6× |
-| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | text, images | ~3.1× | ~7.5× | ~1.3× |
+| [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | text, images | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | text | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | 1.3× | 1.0× | 1.0× |
@@ -148,7 +149,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | text | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | text, images, video | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | text | 4.2× | 5.0× | ~1.5× |
-| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | text, images | 3.1× | 1.4× | 1.2× |
+| [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | text, images | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | text | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | text, images | ~2.1× | ~4.8× | ~1.3× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | text | 3.1× | 28.1× | 1.2× |
