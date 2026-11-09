@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
 from .. import backbones, formats, settings
@@ -31,7 +32,14 @@ def resolve_model(name: str) -> str:
 def model_config(model_dir: str):
     import transformers
 
-    return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
+    try:
+        return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
+    except ValueError:
+        config, _ = transformers.PretrainedConfig.get_config_dict(model_dir, local_files_only=True)
+        if "AutoConfig" not in (config.get("auto_map") or {}):
+            raise
+        # Inspect custom checkpoints for dispatch before opting in to their code.
+        return SimpleNamespace(**config)
 
 
 def _blocks(plan: Plan) -> bool:
@@ -97,12 +105,40 @@ class Engine:
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
+        from .env import check_cuda
+
+        cuda_checked = str(device).startswith("cuda")
+        if cuda_checked:
+            check_cuda()
+        t0 = time.perf_counter()
+        self.model_dir = resolve_model(model)
+        config = model_config(self.model_dir)
+        family = formats.detect(self.model_dir, config, format)
+        self.model_dir = family.run_dir(self.model_dir)
+        if family.backbones and config.model_type not in family.backbones:
+            raise ValueError(
+                f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}"
+            )
+        self.budget = budget
+        self.runner = None
+        self.sessions = None
+        options = dict(backbone_options or {})
+        if family.load_runner is not None:
+            if session_cache_gb > 0 or batch_invariant or options.get("quantize") or int(options.get("tp") or 1) > 1:
+                raise ValueError(
+                    f"format {family.name!r} does not support session caching, batch-invariant kernels, "
+                    "quantization or tensor parallelism"
+                )
+            self.format = family(self.model_dir, **format_options)
+            self.runner = self.format.load_runner(device, dtype)
+            self.backbone = None
+            log.info("loaded %s as %s on %s in %.1fs", self.model_dir, family.name, device, time.perf_counter() - t0)
+            return
         if batch_invariant:
             settings.batch_invariant = True
         from ..kernels import launcher
-        from .env import check_cuda
 
-        if str(device).startswith("cuda"):
+        if not cuda_checked and str(device).startswith("cuda"):
             check_cuda()
         launcher.install()
         from .kcache import cache_dir, first_compile, seed, tune
@@ -111,15 +147,7 @@ class Engine:
         if first_compile():
             log.info("no precompiled kernels ship for this GPU and Triton version, so they compile now; only the first "
                      "start takes these minutes, later ones read them from %s", cache_dir())
-        t0 = time.perf_counter()
-        self.model_dir = resolve_model(model)
-        config = model_config(self.model_dir)
-        family = formats.detect(self.model_dir, config, format)
-        self.model_dir = family.run_dir(self.model_dir)
-        if family.backbones and config.model_type not in family.backbones:
-            raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
-        options = dict(backbone_options or {})
         if family.merge_lora:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
@@ -139,8 +167,6 @@ class Engine:
         self.heads = self.format.load_heads(self.backbone)
         self.eager_tokens = eager_tokens(config.model_type, self.backbone) if tp_size == 1 else None
         mem = _gib()
-        self.budget = budget
-        self.sessions = None
         if session_cache_gb > 0:
             from .session import SessionCache
 
@@ -176,6 +202,8 @@ class Engine:
     def warmup(self) -> None:
         """One packed forward over made-up requests, so the kernels of the packed path (requests the graphs do not
         take, rounds of several requests) are compiled before the first real one instead of stalling it."""
+        if self.runner is not None:
+            return
         import random
 
         import torch
@@ -214,6 +242,8 @@ class Engine:
         import torch
 
         budget = budget or self.budget
+        if self.runner is not None:
+            return self.runner(plans, budget)
         for p in plans:
             if p is not None and _blocks(p) and not getattr(self.backbone, "block_attention", False):
                 raise ValueError("this backbone does not run block attention")
@@ -657,6 +687,12 @@ class Engine:
         """The first half of `forward`: the round's graphs are queued on the GPU and their head outputs start coming
         back to the host, without waiting (plans that do not fit the graphs are computed here, packed). The online
         batcher queues the next round before collecting this one, so the GPU does not wait for the host."""
+        if self.runner is not None:
+            if mode == "alone":
+                outs = [self.run_plans([plan])[0][0] for plan in plans]
+            else:
+                outs, _ = self.run_plans(plans)
+            return outs, ["runner"] * len(plans), None
         import torch
 
         outs: list[Any] = [None] * len(plans)
@@ -707,6 +743,8 @@ class Engine:
         return outs, paths
 
     def _run_one(self, plan):
+        if self.runner is not None:
+            return self.run_plans([plan])[0][0], "runner"
         if settings.batch_invariant:
             outs, paths = self.forward([plan], "batch")
             return outs[0], paths[0]

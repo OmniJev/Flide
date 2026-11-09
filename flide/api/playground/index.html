@@ -20,6 +20,7 @@
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; }
   .ans { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
   .ans h3 { margin:0 0 6px; font-size:14px; } .ans .kind { color:var(--muted); font-weight:400; margin-left:6px; }
+  .ans pre { white-space:pre-wrap; overflow-wrap:anywhere; }
   .bar { display:grid; grid-template-columns: 180px 1fr 56px; gap:8px; align-items:center; margin:3px 0; }
   .bar .track { height:12px; background:var(--line); border-radius:6px; overflow:hidden; } .bar .fill { height:100%; background:var(--bar); }
   .bar .lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -77,8 +78,9 @@ async function run() {
     let html = "";
     for (const [id, a] of Object.entries(data.answers)) {
       if (a.type === "noul") html += `<div class="ans"><h3>${esc(id)}<span class="kind">noul</span></h3>${bars({ yes: a.noul, no: 1 - a.noul })}</div>`;
-      else if (a.type === "choice") html += `<div class="ans"><h3>${esc(id)}<span class="kind">choice: <b>${esc(a.choice)}</b>, confidence ${a.confidence.toFixed(3)}</span></h3>${bars(a.probabilities)}</div>`;
-      else html += `<div class="ans"><h3>${esc(id)}<span class="kind">score: <b>${a.score.toFixed(3)}</b>, confidence ${a.confidence.toFixed(3)}</span></h3>${bars(Object.fromEntries(Object.entries(a.probabilities).map(([k, v]) => [`${k}: ${typeof a.legend[k] === "string" ? a.legend[k] : JSON.stringify(a.legend[k])}`, v])))}</div>`;
+      else if (a.type === "choice" && typeof a.choice === "string") html += `<div class="ans"><h3>${esc(id)}<span class="kind">choice: <b>${esc(a.choice)}</b>, confidence ${a.confidence.toFixed(3)}</span></h3>${bars(a.probabilities)}</div>`;
+      else if (a.type === "score") html += `<div class="ans"><h3>${esc(id)}<span class="kind">score: <b>${a.score.toFixed(3)}</b>, confidence ${a.confidence.toFixed(3)}</span></h3>${bars(Object.fromEntries(Object.entries(a.probabilities).map(([k, v]) => [`${k}: ${typeof a.legend[k] === "string" ? a.legend[k] : JSON.stringify(a.legend[k])}`, v])))}</div>`;
+      else html += `<div class="ans"><h3>${esc(id)}<span class="kind">${esc(a.type)}</span></h3><pre>${esc(JSON.stringify(a, null, 2))}</pre></div>`;
     }
     const m = data.onejev || data.meta || {};
     html += `<div class="meta">model ${esc(data.model)}, ${data.usage.input_tokens} input tokens, ${m.branches || "?"} branches, forward ${m.timing ? (m.timing.forward_s * 1000).toFixed(0) : "?"} ms, round trip ${(performance.now() - t0).toFixed(0)} ms</div>`;

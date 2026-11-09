@@ -87,6 +87,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | text | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | 1.3× | 1.0× | 1.0× |
+| [d1-2B](https://huggingface.co/LiquidAI/d1-2B) | text, images, video | | | |
+| [d1-Omni-2B](https://huggingface.co/LiquidAI/d1-Omni-2B) | text, images, video, audio | | | |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | text, images | ~1.3× | ~1.7× | ~1.0× |
@@ -114,6 +116,29 @@ The last three columns say how much faster Flide answers one request than the en
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | text, images | 1.6× | 8.4× | 1.4× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
+
+### LiquidAI d1
+
+```bash
+uv pip install 'transformers>=5.19' torchvision
+flide serve --model LiquidAI/d1-2B --format-arg trust_remote_code=true
+```
+
+Use `LiquidAI/d1-Omni-2B` for audio. Both models use the decision runner and calibration
+shipped with the checkpoint. Set `trust_remote_code=true` to let Flide run the Python
+that comes with the checkpoint.
+The runner handles batching and attention for these models.
+
+Send media alongside `state` and `questions`. The model reads each item in list order before
+the state. Use `{"type":"image","data":"<base64>"}` for an image and
+`{"type":"video","frames":[{"data":"<base64>"}],"fps":2}` for a video.
+For Omni, use `{"type":"audio","data":"<base64>"}` for a 16-bit PCM WAV clip. You can also
+use it as a question's `instructions`. For images, video frames, and WAV clips,
+`--media-root` enables `path`, and `--allow-media-urls` enables `url`.
+
+Both models support `noul`, `choice` (including `"multiple": true`), `score`, `text`,
+`number` (extraction or estimation with `range`), `date`, `box`, and `boxes` questions.
+Supply `instructions` for every question.
 
 ## Options
 

@@ -78,6 +78,9 @@ class Format:
     max_choice_options: ClassVar[int] = 255
     max_score_levels: ClassVar[int] = 10
     merge_lora: ClassVar[bool] = False
+    extended_answers: ClassVar[bool] = False
+    # A format with its own inference path can load a callable taking (plans, budget).
+    load_runner = None
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -128,7 +131,11 @@ def media_bytes(ref: str, what: str = "image") -> bytes:
 
     from .. import settings
 
-    s = ref.split(",", 1)[1] if ref.startswith("data:") else ref
+    if ref.startswith("data:"):
+        _, sep, ref = ref.partition(",")
+        if not sep:
+            raise ValueError(f"{what} is not valid base64")
+    s = ref
     if len(s) // 4 * 3 > settings.max_media_bytes:
         raise ValueError(f"{what} is larger than {settings.max_media_bytes / 2 ** 20:g} MiB")
     try:
@@ -138,8 +145,11 @@ def media_bytes(ref: str, what: str = "image") -> bytes:
 
 
 def check_limits(family: Format, request) -> None:
-    """Refuses a request with a choice or a score larger than the family reads."""
+    """Refuse question types and sizes the family cannot read."""
     for q in request.questions.values():
+        kind = "multiple choice" if q.type == "choice" and getattr(q, "multiple", False) else q.type
+        if not family.extended_answers and kind not in ("noul", "choice", "score"):
+            raise ValueError(f"format {family.name!r} does not support {kind} questions")
         if q.type == "choice" and len(q.criteria) > family.max_choice_options:
             raise ValueError(f"choice question has {len(q.criteria)} options, maximum is {family.max_choice_options}")
         if q.type == "score" and len(q.criteria) > family.max_score_levels:

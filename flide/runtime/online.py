@@ -134,7 +134,9 @@ class Batcher:
     def _loop(self):
         import torch
 
-        torch.cuda.set_device(self.engine.backbone.device)
+        device = getattr(self.engine.backbone, "device", None)
+        if device is not None and device.type == "cuda":
+            torch.cuda.set_device(device)
         inflight = None
         while True:
             if inflight is not None and self._carry is None and self.q.empty():

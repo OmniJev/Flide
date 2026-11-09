@@ -44,10 +44,11 @@ wald = "flide_wald:Wald"
 xor = "flide_xor:Xor"
 autotrust = "flide_autotrust:AutoTrust"
 clef = "flide_clef:Clef"
+d1 = "flide_d1:D1"
 
 [tool.setuptools]
 package-dir = {"" = "plugins", "flide" = "flide"}
-py-modules = ["flide_autotrust", "flide_clef", "flide_intern_decision", "flide_jeffan", "flide_kev", "flide_knowline", "flide_pplx", "flide_torchcast", "flide_wald", "flide_xor"]
+py-modules = ["flide_autotrust", "flide_clef", "flide_d1", "flide_intern_decision", "flide_jeffan", "flide_kev", "flide_knowline", "flide_pplx", "flide_torchcast", "flide_wald", "flide_xor"]
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]

@@ -24,8 +24,19 @@ from .. import formats
 from ..formats.base import check_limits
 
 _worker = None
-_DROP = ("payload", "response", "raw_output", "status", "error", "started_utc", "completed_utc", "total_wall_ms",
-         "model_request_wall_ms", "engine")
+_DROP = (
+    "payload",
+    "media",
+    "response",
+    "raw_output",
+    "status",
+    "error",
+    "started_utc",
+    "completed_utc",
+    "total_wall_ms",
+    "model_request_wall_ms",
+    "engine",
+)
 
 
 def stamp() -> str:
@@ -44,7 +55,10 @@ def read_rows(paths, every: int = 1, limit: int | None = None) -> list[dict]:
                     r = json.loads(line)
                     if "_evaluation" not in r and "payload" in r:
                         ev = {k: v for k, v in r.items() if k not in _DROP}
-                        r = {"state": r["payload"]["state"], "questions": r["payload"]["questions"], "_evaluation": ev}
+                        payload = r["payload"]
+                        r = {"state": payload.get("state"), "questions": payload["questions"], "_evaluation": ev}
+                        if "media" in payload:
+                            r["media"] = payload["media"]
                     rows.append(r)
                     if limit and len(rows) >= limit:
                         return rows
@@ -67,7 +81,7 @@ def _request(row):
     from ..api.schema import SystemOneRequest
 
     req = {"model": "flide", "state": row.get("state"), "questions": row["questions"]}
-    if row.get("media"):
+    if "media" in row:
         req["media"] = row["media"]
     return SystemOneRequest.model_validate(req)
 
@@ -128,7 +142,7 @@ def plan_all(rows, name, model_dir, workers, format_args, plan_args, log):
 
 
 def _result(row, st, err, plan, output, engine, args, plan_args, ms):
-    result = {k: v for k, v in row.items() if k not in ("state", "questions", "_evaluation")}
+    result = {k: v for k, v in row.items() if k not in ("state", "questions", "media", "_evaluation")}
     result.update(row.get("_evaluation", {}))
     result.update(started_utc=stamp(), engine="flide")
     if st == "ok":
@@ -283,7 +297,7 @@ def run(args) -> None:
     counts: dict[str, int] = {}
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         for i, row in enumerate(rows):
-            result = {k: v for k, v in row.items() if k not in ("state", "questions", "_evaluation")}
+            result = {k: v for k, v in row.items() if k not in ("state", "questions", "media", "_evaluation")}
             result.update(row.get("_evaluation", {}))
             result.update(started_utc=stamp(), engine="flide")
             st, err = status[i]

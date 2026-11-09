@@ -100,11 +100,23 @@ def open_image(ref: Any, root: str | Path | None = None, allow_paths: bool = Tru
         raise MediaError("image reference needs one of path, url or data")
     if hasattr(ref, "convert"):
         return ref.convert("RGB")
+    return _decode(read_bytes(ref, root, allow_paths, timeout, allow_urls))
+
+
+def read_bytes(
+    ref: str,
+    root: str | Path | None = None,
+    allow_paths: bool = True,
+    timeout: float = 20.0,
+    allow_urls: bool = False,
+    what: str = "image",
+) -> bytes:
+    """Read a data URI or a bounded file/URL under the server's media policy."""
     if not isinstance(ref, str):
-        raise MediaError(f"unsupported image reference of type {type(ref).__name__}")
+        raise MediaError(f"unsupported {what} reference of type {type(ref).__name__}")
     cap = settings.max_media_bytes
     if ref.startswith("data:"):
-        return _decode(media_bytes(ref))
+        return media_bytes(ref, what)
     if ref.startswith(("http://", "https://")):
         if not allow_urls:
             raise MediaError("media URLs are not fetched by this server; send base64 data")
@@ -114,24 +126,25 @@ def open_image(ref: Any, root: str | Path | None = None, allow_paths: bool = Tru
                 raw = r.read(cap + 1)
         except OSError as exc:
             raise MediaError(f"could not fetch {ref!r}: {exc}") from None
-        if len(raw) > cap:
-            raise MediaError(f"{ref!r} is larger than {cap / 2 ** 20:g} MiB")
-        return _decode(raw)
-    if not allow_paths:
-        raise MediaError("local paths are not accepted by this server; send base64 data")
-    p = Path(ref)
-    if root is not None:
-        base = Path(root).resolve()
-        p = (p if p.is_absolute() else base / p).resolve()
-        if base not in p.parents:
-            raise MediaError(f"path {ref!r} is outside the media root")
-    try:
-        if p.stat().st_size > cap:
-            raise MediaError(f"{ref!r} is larger than {cap / 2 ** 20:g} MiB")
-        raw = p.read_bytes()
-    except OSError as exc:
-        raise MediaError(f"could not read {ref!r}: {exc.strerror or exc}") from None
-    return _decode(raw)
+    else:
+        if not allow_paths:
+            raise MediaError("local paths are not accepted by this server; send base64 data")
+        p = Path(ref)
+        if root is not None:
+            base = Path(root).resolve()
+            p = (p if p.is_absolute() else base / p).resolve()
+            if base not in p.parents:
+                raise MediaError(f"path {ref!r} is outside the media root")
+        try:
+            if not p.is_file():
+                raise MediaError(f"path {ref!r} is not a file")
+            with p.open("rb") as f:
+                raw = f.read(cap + 1)
+        except OSError as exc:
+            raise MediaError(f"could not read {ref!r}: {exc.strerror or exc}") from None
+    if len(raw) > cap:
+        raise MediaError(f"{ref!r} is larger than {cap / 2**20:g} MiB")
+    return raw
 
 
 def load(media: Sequence[dict], root: str | Path | None = None, allow_paths: bool = True, allow_urls: bool = False):

@@ -48,7 +48,7 @@ def _same(a, b) -> bool:
 
 def _probs(answer) -> list[float]:
     a = answer.model_dump()
-    return [1 - a["noul"], a["noul"]] if a["type"] == "noul" else list(a["probabilities"].values())
+    return [1 - a["noul"], a["noul"]] if a["type"] == "noul" else list(a.get("probabilities", {}).values())
 
 
 def _gap(a: list[float], b: list[float]) -> float:
@@ -82,6 +82,7 @@ def run(args) -> None:
     from . import formats
     from .api.schema import SystemOneRequest
     from .api.serve import _family_options
+    from .formats.base import check_limits
     from .runtime.engine import Engine, model_config, resolve_model
     from .runtime.offline import parse_kv
 
@@ -94,22 +95,25 @@ def run(args) -> None:
     for r in _requests(args.requests, args.limit):
         req = SystemOneRequest.model_validate(r)
         try:
+            check_limits(eng.format, req)
             plans.append(eng.format.plan(req))
         except ValueError:
             continue
         reqs.append(req)
-    if not reqs:
+    alone = [eng.forward([p], "batch")[0][0] for p in plans]
+    accepted = [(r, p, out) for r, p, out in zip(reqs, plans, alone) if not isinstance(out, ValueError)]
+    if not accepted:
         raise SystemExit("no request the model takes")
+    reqs, plans, alone = zip(*accepted)
     invariant = args.batch_invariant
     print(f"{family.name} on {model_dir}: {len(reqs)} requests, {sum(len(r.questions) for r in reqs)} questions, "
           f"batch-invariant {'on' if invariant else 'off'}", flush=True)
 
-    alone = [eng.forward([p], "batch")[0][0] for p in plans]
     lines, failed = [], False
 
     fork = _Check("fork")
     for req, plan, outs in zip(reqs, plans, alone):
-        if len(plan.suffixes) != len(req.questions):
+        if len(getattr(plan, "suffixes", ())) != len(req.questions):
             continue
         full = _answers(eng, req, plan, outs)
         for b, (name, q) in enumerate(req.questions.items()):
@@ -139,7 +143,8 @@ def run(args) -> None:
                 ref = _answers(eng, reqs[k], plans[k], alone[k])
                 got = _answers(eng, reqs[k], plans[k], o)
                 for name in ref:
-                    load.add(_probs(ref[name]), _probs(got[name]), _same(o, alone[k]))
+                    if probs := _probs(ref[name]):
+                        load.add(probs, _probs(got[name]), _same(o, alone[k]))
     if load.n:
         bad = load.moved or (invariant and load.same_bits < load.n)
         failed |= bool(bad)
@@ -147,6 +152,8 @@ def run(args) -> None:
                      f"{', '.join(str(s) for s in ROUNDS if s <= len(plans))} against each request alone: largest "
                      f"probability gap {load.gap:.2e}, {load.n - load.moved}/{load.n} top answers kept, "
                      f"{load.same_bits}/{load.n} the same bits")
+    elif len(plans) >= ROUNDS[0]:
+        lines.append("load     skip  no answers with probability distributions")
 
     cache = eng.sessions
     if cache is None:
