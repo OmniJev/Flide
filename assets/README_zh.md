@@ -27,7 +27,6 @@
 </p>
 
 
-
 ## 🔥 动态
 
 - 🔥 **2026-11-09** Flide 0.1.10 支持 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) 和 [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)，KnowLine 系列也能读图片了。
@@ -48,6 +47,8 @@
 </details>
 
 ## 快速开始
+
+每个模型的用法、图片、接口和全部选项见[文档](https://docs.flide.org)。
 
 ```bash
 uv venv -p 3.12 && source .venv/bin/activate
@@ -73,8 +74,6 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
   }
 }'
 ```
-
-每个模型的用法、图片、接口和全部选项见[文档](https://docs.flide.org)。
 
 ## 模型
 

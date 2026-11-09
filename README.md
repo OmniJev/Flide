@@ -27,7 +27,6 @@
 </p>
 
 
-
 ## 🔥 News
 
 - 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
@@ -48,6 +47,8 @@
 </details>
 
 ## Quick start
+
+See the [docs](https://docs.flide.org) for every model, images, the API and all options.
 
 ```bash
 uv venv -p 3.12 && source .venv/bin/activate
@@ -73,8 +74,6 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
   }
 }'
 ```
-
-See the [docs](https://docs.flide.org) for every model, images, the API and all options.
 
 ## Models
 
