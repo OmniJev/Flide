@@ -5,11 +5,9 @@ from __future__ import annotations
 class _PinnedNB:
     """A Triton kernel whose `NB` argument is replaced by a constant at launch.
 
-    fla's causal conv and l2norm kernels take NB = cdiv(length, bucket) as a constexpr that the
-    kernel body never reads; it only keys the autotuner. A packed micro-batch has a new length every
-    time, so every new NB recompiles and re-autotunes 16 configs, which takes far longer than the
-    forward itself. Pinning NB
-    keeps the arithmetic identical and compiles each kernel once."""
+    Some FLA kernels use NB = cdiv(length, bucket) only as an autotune key.
+    Packed micro-batches vary in length. Pinning NB avoids tuning and compiling
+    for each bucket without changing the arithmetic."""
 
     def __init__(self, kernel, nb: int = 1):
         self.kernel = kernel
@@ -31,6 +29,6 @@ def pin_fla_size_buckets() -> None:
 
     for module, name in ((conv_ops, "causal_conv1d_fwd_kernel"), (l2norm, "l2norm_fwd_kernel")):
         kernel = getattr(module, name)
-        if not isinstance(kernel, _PinnedNB):
+        if not isinstance(kernel, _PinnedNB) and "NB" in getattr(kernel, "arg_names", ()):
             setattr(module, name, _PinnedNB(kernel))
 
