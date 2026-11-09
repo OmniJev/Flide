@@ -1,9 +1,12 @@
 """Startup checks that turn the usual CUDA setup failures into one line the user can act on."""
 from __future__ import annotations
 
+import re
+from importlib.metadata import PackageNotFoundError, requires
 from pathlib import Path
+from shlex import quote
 
-CUDA12_INDEX = "https://download.pytorch.org/whl/cu126"
+TORCH_WHEEL_INDEX = "https://download.pytorch.org/whl"
 
 
 def driver_version() -> str | None:
@@ -31,6 +34,29 @@ def driver_cuda() -> tuple[int, int] | None:
     return v.value // 1000, v.value % 1000 // 10
 
 
+def _install_hint(have: tuple[int, int] | None) -> str:
+    have = have or (12, 0)
+    if have < (12, 0):
+        return "Update the NVIDIA driver to 525 or newer."
+    major, minor = (12, 6)
+    if have >= (13, 0):
+        major, minor = (13, 2) if have >= (13, 2) else (13, 0)
+    try:
+        deps = requires("flide") or ()
+    except PackageNotFoundError:
+        deps = ()
+    torch_req = next((dep for dep in deps if re.match(r"torch(?![\w.-])", dep, re.IGNORECASE)), None)
+    index = f"{TORCH_WHEEL_INDEX}/cu{major}{minor}"
+    hint = f"Install the CUDA {major}.{minor} build"
+    if torch_req:
+        hint += f": pip install --force-reinstall {quote(torch_req)} --index-url {index}"
+    else:
+        hint += f" from {index}"
+    if major == 13:
+        hint += f". For older GPUs, use the CUDA 12.6 index at {TORCH_WHEEL_INDEX}/cu126."
+    return hint
+
+
 def check_cuda() -> None:
     import torch
 
@@ -39,20 +65,17 @@ def check_cuda() -> None:
     drv = driver_version()
     if drv is None:
         raise RuntimeError("No NVIDIA driver is loaded, and flide's PyTorch path runs on NVIDIA GPUs.")
-    if torch.version.cuda is None:
-        raise RuntimeError(f"PyTorch {torch.__version__} is a CPU build. Install a CUDA build: "
-                           f"pip install --force-reinstall torch --index-url {CUDA12_INDEX}")
-    need = int(torch.version.cuda.split(".")[0])
     have = driver_cuda()
+    if torch.version.cuda is None:
+        raise RuntimeError(f"PyTorch {torch.__version__} is a CPU build. {_install_hint(have)}")
+    need = int(torch.version.cuda.split(".")[0])
     if have is not None and have[0] < need:
-        fix = (f"Install the CUDA 12.6 build, which this driver runs: pip install --force-reinstall torch "
-               f"--index-url {CUDA12_INDEX}" if have[0] == 12 else "Update the NVIDIA driver to 525 or newer.")
         raise RuntimeError(f"PyTorch {torch.__version__} is built for CUDA {torch.version.cuda}, and this machine's "
-                           f"NVIDIA driver ({drv}) runs CUDA up to {have[0]}.{have[1]}. {fix}")
+                           f"NVIDIA driver ({drv}) reports CUDA {have[0]}.{have[1]}. {_install_hint(have)}")
     try:
         torch.cuda.init()
         reason = "no GPU is visible to this process"
     except Exception as e:
         reason = str(e).strip().splitlines()[0]
-    runs = f" although the NVIDIA driver ({drv}) runs its CUDA {torch.version.cuda}" if have else ""
-    raise RuntimeError(f"PyTorch {torch.__version__} cannot use the GPU{runs}: {reason}")
+    driver = f" (NVIDIA driver {drv} reports CUDA {have[0]}.{have[1]})" if have else ""
+    raise RuntimeError(f"PyTorch {torch.__version__} cannot use the GPU{driver}: {reason}")
