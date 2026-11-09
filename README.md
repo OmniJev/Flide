@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Flide: Accelerating Decision Inference with Exact State Forking" src="assets/banner.svg" width="100%">
+  <img alt="Flide: Extremely Fast Decision Inference with Exact State Forking" src="assets/banner.svg" width="100%">
 </p>
 
 <p align="center"><b>English</b> · <a href="assets/README_zh.md">简体中文</a> · <a href="assets/README_ja.md">日本語</a></p>
@@ -14,15 +14,28 @@
   <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
 </p>
 
-<p align="center"><a href="#-news">News</a> · <a href="#speed">Speed</a> · <a href="#exact-answers">Exact answers</a> · <a href="#quick-start">Quick start</a> · <a href="#models">Models</a> · <a href="#options">Options</a></p>
+<p align="center"><a href="#-news">News</a> · <a href="#quick-start">Quick start</a> · <a href="#models">Models</a> · <a href="#options">Options</a></p>
 
-[Flide](https://docs.flide.org) is fast inference infrastructure for Jev-style decision models. With exact state forking it is up to 9.4 times faster than vLLM and SGLang, and every answer is the one the model gives the question alone. It serves the Jev `/v1/systemone` API.
+[Flide](https://docs.flide.org) is fast inference infrastructure for Jev-style decision models. With exact state forking it is up to 9.5 times faster than vLLM and SGLang, and every answer is the one the model gives the question alone. It serves the Jev `/v1/systemone` API.
+
+<p align="center">
+  <img alt="9.5 times faster than vLLM and SGLang; exact state forking; extremely fast" src="assets/highlights.svg" width="100%">
+</p>
+
+<p align="center">
+  <img alt="One state forked into three questions, each answered in one forward pass" src="assets/answers.svg" width="100%">
+</p>
+
 
 
 ## 🔥 News
 
+- 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
 - 🔥 **2026-11-09** We added [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) and [JEV-35B](https://huggingface.co/autotrust/JEV-35B) in Flide 0.1.9, and `/v1/systemone` now takes several requests in one body.
 - 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
+
+<details><summary>Earlier news</summary>
+
 - 🔥 **2026-11-02** We released our paper [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) on arXiv.
 - 🔥 **2026-10-29** We added three decision model families in Flide 0.1.7, including [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b), [Wald](https://huggingface.co/collections/org2ai/wald) and [Xor](https://huggingface.co/juspay/Xor-26B-A4B), and Gemma 4 mixture-of-experts models such as [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5).
 - 🔥 **2026-10-29** We added two decision model families in Flide 0.1.6, including [Drex](https://huggingface.co/nace-ai/drex-v2.0) and [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5), and `flide verify` checks exact forking on your own model and requests.
@@ -32,64 +45,23 @@
 - 🔥 **2026-10-25** We added two decision model families in Flide 0.1.2, including [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) and [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b), and a question now takes up to 256 options.
 - 🔥 **2026-10-24** We released Flide 0.1.0 on [PyPI](https://pypi.org/project/flide/), serving [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) and [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) chat models and the [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) and [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) decision models. Welcome to have a try.
 
-
-<p align="center">
-  <img alt="Fork the state into every question: a generation engine runs every question as a sequence and computes part of the state again, multi-item scoring adds delimiters that change the answers, and Flide forks the state at its last token" src="assets/fork.svg" width="100%">
-</p>
-
-With three questions, a generation engine runs three sequences and computes 4 cells of the state again, and multi-item scoring adds 3 delimiters that change the answers. Flide runs one sequence, computes nothing twice, adds no tokens, and gives each question the answer it gets when asked alone.
-
-## Speed
-
-<p align="center">
-  <img alt="Speed of Flide, vLLM and SGLang on one H200 with Qwen3.5-0.8B" src="assets/speed.svg" width="100%">
-</p>
-
-On one H200 with Qwen3.5-0.8B, Flide is up to 9.4 times faster than both vLLM and SGLang (QuALITY, where it is 14 times faster than vLLM), 3.6 to 4 times faster on RACE and the Decision Index, and serves 2.4 times the throughput with 64 clients. The more questions a state carries, the bigger the gap.
-
-## Exact answers
-
-<p align="center">
-  <img alt="Shared work, exact answers: Flide stays within 1.1 points of a float32 reference, multi-item scoring moves 0.9 to 14.8 points; with --batch-invariant a request gets the same bits however it is batched" src="assets/exact.svg" width="100%">
-</p>
-
-Flide stays within 1.1 points of a float32 reference, the closest of any engine, and flips at most 2.3% of decisions at 0.5. Multi-item scoring moves answers by up to 14.8 points and flips up to 28.9%. With `--batch-invariant`, a request gets the same bits however it is batched.
+</details>
 
 ## Quick start
-
-See the [docs](https://docs.flide.org) for every model, the API and all options.
-
-### 1. Install
 
 ```bash
 uv venv -p 3.12 && source .venv/bin/activate
 uv pip install flide torchvision
-```
-
-### 2. Start a server
-
-Any chat model on Qwen3.5 or Gemma 4 serves as it is and answers through its next token.
-
-```bash
-flide serve --model Qwen/Qwen3.5-4B
-```
-
-OneJev models read their answers their own way, and Flide serves them as they are too.
-
-```bash
 flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-An Open-Jev release is an adapter on a Qwen3.5 base. Merge it into a checkpoint once, then serve that.
+Any model in the [model table](#models) starts the same way, for example Perplexity's decision model.
 
 ```bash
-python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
-flide serve --model open-jev-2b
+flide serve --model perplexity-ai/pplx-decider-flash-v1.2
 ```
 
-`flide serve` listens on all interfaces at port 8000; pass `--host 127.0.0.1` to keep it local.
-
-### 3. Send a request
+Every one of them answers this request.
 
 ```bash
 curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
@@ -102,24 +74,7 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
-OneJev models also read images. Put `<image:1>` where the photo belongs in the state and send the photo in `media`.
-
-```bash
-IMG=$(base64 -w0 photo.jpg)
-curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d @- <<EOF
-{
-  "state": {"ticket": "Order #1182 arrived with a cracked screen. The customer asks for a refund.", "photo": "<image:1>"},
-  "media": [{"type": "image", "data": "data:image/jpeg;base64,$IMG"}],
-  "questions": {
-    "cracked": {"type": "noul", "instructions": "The photo shows a cracked screen"},
-    "action": {"type": "choice", "instructions": "What should support do next?",
-               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}}
-  }
-}
-EOF
-```
-
-Every answer carries the probability of each option, ready for a threshold.
+See the [docs](https://docs.flide.org) for every model, images, the API and all options.
 
 ## Models
 
@@ -127,12 +82,13 @@ The last three columns say how much faster Flide answers one request than the en
 
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
+| [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0) | text | 1.4× | 1.3× | 1.3× |
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | text | 3.7× | 9.3× | 2.6× |
 | [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | text, images | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | text | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | 1.3× | 1.0× | 1.0× |
-| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | 1.6× | 7.0× | 1.2× |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | text, images | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | text, images | 4.4× | 1.1× | 1.5× |
@@ -141,7 +97,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | text, images | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | text | ~1.9× | ~5.9× | 1.8× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text | ~1.4× | ~5.6× | ~1.5× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | text, images | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | text | 1.4× | 1.5× | 1.4× |

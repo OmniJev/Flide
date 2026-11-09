@@ -2,7 +2,7 @@
 
 The configuration is the checkpoint's decision_config.json with "format_id": "flide-template-v1", or one that ships
 with Flide for a known checkpoint (formats/known/*.json, matched by its Hub repository, or by its own files and the
-fields of its own decision_config.json). It says how
+fields of its own decision_config.json, or with "config" in its match, of its config.json). It says how
 the model is asked and read:
 
   messages     chat turns [{"role", "content"}], each content a Jinja template, rendered through the checkpoint's chat
@@ -128,6 +128,12 @@ def known(model_dir: str, decision_config: dict | None) -> dict | None:
         if any(f"models--{r.lower().replace('/', '--')}" in path for r in m.get("repos", ())):
             return spec
         files, dc, keys = m.get("files", ()), m.get("decision_config"), m.get("decision_config_keys")
+        if "config" in m:
+            cfg = Path(model_dir) / "config.json"
+            if files and all((Path(model_dir) / x).is_file() for x in files) and cfg.is_file() and \
+                    all(json.loads(cfg.read_text()).get(k) == v for k, v in m["config"].items()):
+                return spec
+            continue
         if files and all((Path(model_dir) / x).is_file() for x in files) and (
                 dc is None or (decision_config is not None and all(decision_config.get(k) == v for k, v in dc.items()))) \
                 and (keys is None or (decision_config is not None and set(decision_config) == set(keys))):

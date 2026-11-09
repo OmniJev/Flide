@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Flide：以精确的状态分叉加速决策推理" src="zh/banner.svg" width="100%">
+  <img alt="Flide：以精确的状态分叉实现极速决策推理" src="zh/banner.svg" width="100%">
 </p>
 
 <p align="center"><a href="../README.md">English</a> · <b>简体中文</b> · <a href="README_ja.md">日本語</a></p>
@@ -14,15 +14,28 @@
   <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
 </p>
 
-<p align="center"><a href="#-动态">动态</a> · <a href="#速度">速度</a> · <a href="#精确的答案">精确的答案</a> · <a href="#快速开始">快速开始</a> · <a href="#模型">模型</a> · <a href="#选项">选项</a></p>
+<p align="center"><a href="#-动态">动态</a> · <a href="#快速开始">快速开始</a> · <a href="#模型">模型</a> · <a href="#选项">选项</a></p>
 
-[Flide](https://docs.flide.org) 是面向 Jev 类决策模型的高速推理基础设施。凭借精确状态分叉，它比 vLLM 和 SGLang 最高快 9.4 倍，每个答案都和模型单独回答这道题时完全一致。接口是 Jev 的 `/v1/systemone`。
+[Flide](https://docs.flide.org) 是面向 Jev 类决策模型的高速推理基础设施。凭借精确状态分叉，它比 vLLM 和 SGLang 最高快 9.5 倍，每个答案都和模型单独回答这道题时完全一致。接口是 Jev 的 `/v1/systemone`。
+
+<p align="center">
+  <img alt="比 vLLM 和 SGLang 快 9.5 倍；精确的状态分叉；极速" src="zh/highlights.svg" width="100%">
+</p>
+
+<p align="center">
+  <img alt="一个状态分叉给三个问题，一次前向传播给出每个问题的答案" src="zh/answers.svg" width="100%">
+</p>
+
 
 
 ## 🔥 动态
 
+- 🔥 **2026-11-09** Flide 0.1.10 支持 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) 和 [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)，KnowLine 系列也能读图片了。
 - 🔥 **2026-11-09** Flide 0.1.9 支持 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) 和 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)，`/v1/systemone` 也能在一个请求体里接收多个请求。
 - 🔥 **2026-11-08** Flide 0.1.8 新增两个决策模型家族，包括 [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) 和 [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6)，并支持 [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1)。
+
+<details><summary>更早的动态</summary>
+
 - 🔥 **2026-11-02** 我们的论文 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) 已发布到 arXiv。
 - 🔥 **2026-10-29** Flide 0.1.7 新增三个决策模型家族，包括 [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b)、[Wald](https://huggingface.co/collections/org2ai/wald) 和 [Xor](https://huggingface.co/juspay/Xor-26B-A4B)，并支持 Gemma 4 混合专家模型，比如 [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5)。
 - 🔥 **2026-10-29** Flide 0.1.6 新增两个决策模型家族，包括 [Drex](https://huggingface.co/nace-ai/drex-v2.0) 和 [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5)，新的 `flide verify` 可以在你自己的模型和请求上检查精确分叉。
@@ -32,64 +45,23 @@
 - 🔥 **2026-10-25** Flide 0.1.2 新增两个决策模型家族，包括 [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) 和 [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b)，每道题最多支持 256 个选项。
 - 🔥 **2026-10-24** Flide 0.1.0 已发布到 [PyPI](https://pypi.org/project/flide/)，支持 [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) 和 [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) 对话模型，以及 [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) 和 [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) 决策模型，欢迎试用。
 
-
-<p align="center">
-  <img alt="把状态分叉给每个问题：生成引擎为每个问题单独跑一条序列并重算部分状态，多项打分插入分隔符改变了答案，Flide 在状态末尾分叉" src="fork.svg" width="100%">
-</p>
-
-以 3 个问题为例，生成引擎要跑 3 条序列，重算 4 格状态；多项打分插入 3 个分隔符，答案随之改变。Flide 只跑 1 条序列，什么都不重算，不加任何 token，每个问题的答案都和单独问它时一样。
-
-## 速度
-
-<p align="center">
-  <img alt="Flide、vLLM 与 SGLang 在一块 H200 上的速度，Qwen3.5-0.8B" src="speed.svg" width="100%">
-</p>
-
-在一块 H200 上跑 Qwen3.5-0.8B，Flide 最高比 vLLM 和 SGLang 都快 9.4 倍（QuALITY，比 vLLM 快 14 倍），在 RACE 和 Decision Index 上快 3.6 到 4 倍，64 个客户端并发时吞吐是它们的 2.4 倍。一个状态带的问题越多，差距越大。
-
-## 精确的答案
-
-<p align="center">
-  <img alt="共享计算，答案精确：Flide 离 float32 参考最多 1.1 个点，多项打分偏 0.9 到 14.8 个点；开启 --batch-invariant 后，无论怎么组批，同一个请求的比特都一样" src="exact.svg" width="100%">
-</p>
-
-Flide 离 float32 参考最多 1.1 个点，是所有引擎里最近的，在 0.5 处翻转的决策最多 2.3%。多项打分会把答案挪动最多 14.8 个点，翻转最多 28.9% 的决策。开启 `--batch-invariant` 后，无论怎么组批，同一个请求得到的比特都一样。
+</details>
 
 ## 快速开始
-
-模型、接口和全部选项见[文档](https://docs.flide.org)。
-
-### 1. 安装
 
 ```bash
 uv venv -p 3.12 && source .venv/bin/activate
 uv pip install flide torchvision
-```
-
-### 2. 启动服务
-
-Qwen3.5 和 Gemma 4 上的聊天模型都能直接启动，用下一个 token 作答。
-
-```bash
-flide serve --model Qwen/Qwen3.5-4B
-```
-
-OneJev 用自己的方式读答案，Flide 同样可以直接启动。
-
-```bash
 flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-Open-Jev 发布的是 Qwen3.5 底座上的适配器，先合并成一个检查点，再启动它。
+[模型表](#模型)里的任何模型都这样启动，比如 Perplexity 的决策模型。
 
 ```bash
-python -m flide_open_jev.prepare ZefanCai/Open-Jev-2B open-jev-2b
-flide serve --model open-jev-2b
+flide serve --model perplexity-ai/pplx-decider-flash-v1.2
 ```
 
-`flide serve` 默认监听所有网卡的 8000 端口，只想本机访问时加 `--host 127.0.0.1`。
-
-### 3. 发送请求
+它们都能回答这个请求。
 
 ```bash
 curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
@@ -102,24 +74,7 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
-OneJev 模型也能读图片。在 state 里图片该出现的位置写 `<image:1>`，再把图片放进 `media` 一起发送。
-
-```bash
-IMG=$(base64 -w0 photo.jpg)
-curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d @- <<EOF
-{
-  "state": {"ticket": "Order #1182 arrived with a cracked screen. The customer asks for a refund.", "photo": "<image:1>"},
-  "media": [{"type": "image", "data": "data:image/jpeg;base64,$IMG"}],
-  "questions": {
-    "cracked": {"type": "noul", "instructions": "The photo shows a cracked screen"},
-    "action": {"type": "choice", "instructions": "What should support do next?",
-               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}}
-  }
-}
-EOF
-```
-
-每个答案都带着每个选项的概率，可以直接拿去和阈值比较。
+每个模型的用法、图片、接口和全部选项见[文档](https://docs.flide.org)。
 
 ## 模型
 
@@ -127,12 +82,13 @@ EOF
 
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
+| [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0) | 文本 | 1.4× | 1.3× | 1.3× |
 | [AJev](https://huggingface.co/andyzhang232/ajev-gemma4-12b-lora7) | 文本 | 3.7× | 9.3× | 2.6× |
 | [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 文本、图片 | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Bespoke-Nimble-9B-v3) | 文本 | 2.6× | 2.1× | 1.6× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | 1.3× | 1.0× | 1.0× |
-| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | 1.6× | 7.0× | 1.2× |
+| [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 文本、图片 | ~1.3× | ~1.7× | ~1.0× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | 文本、图片 | 4.4× | 1.1× | 1.5× |
@@ -141,7 +97,7 @@ EOF
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 文本、图片 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | ~1.9× | ~5.9× | 1.8× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本 | ~1.4× | ~5.6× | ~1.5× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | 文本、图片 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | 文本 | 1.4× | 1.5× | 1.4× |
