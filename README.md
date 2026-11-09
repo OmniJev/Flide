@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
 - 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
 - 🔥 **2026-11-09** We added [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) and [JEV-35B](https://huggingface.co/autotrust/JEV-35B) in Flide 0.1.9, and `/v1/systemone` now takes several requests in one body.
-- 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
 - 🔥 **2026-11-02** We released our paper [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148) on arXiv.
 - 🔥 **2026-10-29** We added three decision model families in Flide 0.1.7, including [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b), [Wald](https://huggingface.co/collections/org2ai/wald) and [Xor](https://huggingface.co/juspay/Xor-26B-A4B), and Gemma 4 mixture-of-experts models such as [KnowLine-26B-A4B](https://huggingface.co/PelaAI/KnowLine-26B-A4B-Gen2.5).
 - 🔥 **2026-10-29** We added two decision model families in Flide 0.1.6, including [Drex](https://huggingface.co/nace-ai/drex-v2.0) and [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5), and `flide verify` checks exact forking on your own model and requests.
@@ -74,6 +75,20 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
   }
 }'
 ```
+
+## Example
+
+Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) has the code to run it yourself.
+
+<p align="center">
+  <img alt="An email and its eight answers, all from one forward pass" src="demos/email_triage/answers.gif" width="100%">
+</p>
+
+<p align="center">
+  <img alt="Time for one email and for 10,000 emails, Flide against three other engines" src="demos/email_triage/chart.png" width="100%">
+</p>
+
+On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,000 in 28 seconds, 3.5 times as fast as the fastest other engine for one email and 4.1 times for all of them.
 
 ## Models
 

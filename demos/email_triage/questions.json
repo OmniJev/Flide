@@ -1,0 +1,53 @@
+{
+  "spam": {
+    "type": "noul",
+    "instructions": "Is this email spam?"
+  },
+  "phishing": {
+    "type": "noul",
+    "instructions": "Does the email try to get the reader to reveal a password or account details, send money, or open a suspicious link?"
+  },
+  "category": {
+    "type": "choice",
+    "instructions": "What kind of email is this?",
+    "criteria": {
+      "work": "business or project communication",
+      "personal": "a personal message between people who know each other",
+      "newsletter": "a newsletter, digest or mailing list",
+      "marketing": "advertising or a sales offer",
+      "finance": "invoices, payments, trading or banking",
+      "scheduling": "meetings, calls or calendar arrangements",
+      "other": "none of the above"
+    }
+  },
+  "urgency": {
+    "type": "score",
+    "instructions": "How urgent is this email for the reader?",
+    "criteria": [
+      "not urgent: can be ignored or read later",
+      "normal: should be handled in the next few days",
+      "urgent: needs attention today"
+    ]
+  },
+  "needs_reply": {
+    "type": "noul",
+    "instructions": "Does the sender expect a reply from the reader?"
+  },
+  "tone": {
+    "type": "choice",
+    "instructions": "What is the tone of the email?",
+    "criteria": {
+      "positive": "friendly, thankful or enthusiastic",
+      "neutral": "factual or routine",
+      "negative": "angry, worried or complaining"
+    }
+  },
+  "meeting": {
+    "type": "noul",
+    "instructions": "Does the email propose or schedule a meeting or a call?"
+  },
+  "action": {
+    "type": "noul",
+    "instructions": "Does the email ask the reader to do something specific?"
+  }
+}
