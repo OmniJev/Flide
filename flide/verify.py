@@ -201,7 +201,7 @@ def add_parser(sub) -> None:
     v.add_argument("--format", default=None, help="model family (default: detected from the checkpoint)")
     v.add_argument("--format-arg", action="append", metavar="KEY=VALUE", help="family option")
     v.add_argument("--limit", type=int, default=32, help="requests to read")
-    v.add_argument("--device", default="cuda:0")
+    v.add_argument("--device", help="inference device (default: chosen by the model format)")
     v.add_argument("--batch-invariant", action="store_true", help="check the batch-invariant mode, bit for bit")
     v.add_argument("--session-cache-gb", type=float, default=0.0, help="also check the session cache, this large")
     v.set_defaults(func=run)

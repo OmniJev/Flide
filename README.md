@@ -128,6 +128,9 @@ Use `LiquidAI/d1-Omni-2B` for audio. Both models use the decision runner and cal
 shipped with the checkpoint. Set `trust_remote_code=true` to let Flide run the Python
 that comes with the checkpoint.
 The runner handles batching and attention for these models.
+Only `d1-2B` and `d1-Omni-2B` currently support MPS in Flide.
+On macOS, d1 defaults to MPS when PyTorch can use it and to CPU otherwise.
+Use `--device cpu` to select CPU explicitly.
 
 Send media alongside `state` and `questions`. The model reads each item in list order before
 the state. Use `{"type":"image","data":"<base64>"}` for an image and

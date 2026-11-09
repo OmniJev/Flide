@@ -1,7 +1,9 @@
 import base64
 import io
 import json
+import sys
 import wave
+from argparse import ArgumentParser
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,7 @@ from flide.api.schema import SystemOneRequest, SystemOneResponse
 from flide.formats.base import Format, check_limits
 from flide.runtime import offline
 from flide.runtime.engine import Engine, model_config
+import flide_d1
 from flide_d1 import D1
 
 
@@ -144,9 +147,18 @@ def test_engine_d1(checkpoint, monkeypatch):
         system_one_batch=lambda inputs: [answer(*x) for x in inputs],
         system_one=answer,
     )
-    model.to = lambda _: model
+    devices = []
+
+    def move(device):
+        devices.append(device)
+        return model
+
+    model.to = move
     monkeypatch.setattr(transformers.AutoModel, "from_pretrained", lambda *args, **kwargs: model)
-    engine = Engine(str(checkpoint), device="cpu", trust_remote_code=True, budget=42)
+    monkeypatch.setattr(D1, "default_device", lambda: "mps")
+    Engine(str(checkpoint), device="cpu", trust_remote_code=True)
+    engine = Engine(str(checkpoint), trust_remote_code=True, budget=42)
+    assert devices == ["cpu", "mps"]
     request = _request("boxes")
     result, meta = engine.decide(request)
     assert result.model_dump()["answers"] == {"q": boxes}
@@ -161,6 +173,70 @@ def test_engine_d1(checkpoint, monkeypatch):
     with pytest.raises(ValueError, match="invalid question"):
         engine.format.finish(request, bad, outputs[1])
     assert engine.format.finish(request, good, outputs[2])[0] == result
+
+
+@pytest.mark.parametrize(
+    ("system", "available", "expected"),
+    [
+        ("darwin", True, "mps"),
+        ("darwin", False, "cpu"),
+        ("darwin", None, "cpu"),
+        ("linux", True, "cuda:0"),
+    ],
+)
+def test_d1_default_device(monkeypatch, system, available, expected):
+    def is_available():
+        assert system == "darwin"
+        return available
+
+    monkeypatch.setattr(flide_d1, "sys", SimpleNamespace(platform=system))
+    backends = SimpleNamespace()
+    if available is not None:
+        backends.mps = SimpleNamespace(is_available=is_available)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(backends=backends))
+    assert D1.default_device() == expected
+    assert Format.default_device() == "cuda:0"
+
+
+@pytest.mark.parametrize("stream_block", ["0", "1"])
+def test_offline_device_choice_is_local_to_the_run(checkpoint, monkeypatch, stream_block):
+    rows = checkpoint / "rows.jsonl"
+    rows.touch()
+    parser = ArgumentParser()
+    offline.add_parser(parser.add_subparsers())
+    args = parser.parse_args(
+        [
+            "run",
+            "--model",
+            str(checkpoint),
+            "--rows",
+            str(rows),
+            "--out",
+            str(checkpoint),
+            "--workers",
+            "1",
+            "--stream-block",
+            stream_block,
+        ]
+    )
+    defaults = iter(("cpu", "mps"))
+    monkeypatch.setattr(D1, "default_device", lambda: next(defaults))
+    monkeypatch.setattr(offline, "_worker", None)
+    monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false")
+    devices = []
+
+    def load(*_, device, **options):
+        devices.append(device)
+        return SimpleNamespace(run_plans=lambda *a, **kw: ([], {"tokens": 0, "micro_batches": 0, "forward_s": 1.0}))
+
+    monkeypatch.setattr("flide.runtime.engine.Engine", load)
+    for requested, expected in ((None, "cpu"), (None, "mps"), ("cpu", "cpu")):
+        if requested is not None:
+            args.device = requested
+        offline.run(args)
+        assert args.device == requested
+        assert devices[-1] == expected
+        assert json.loads((checkpoint / "environment.json").read_text())["device"] == expected
 
 
 def test_extended_questions_are_format_specific():

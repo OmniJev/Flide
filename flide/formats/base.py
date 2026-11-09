@@ -82,6 +82,10 @@ class Format:
     # A format with its own inference path can load a callable taking (plans, budget).
     load_runner = None
 
+    @staticmethod
+    def default_device() -> str:
+        return "cuda:0"
+
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
         """Whether this family claims a checkpoint that does not name its format in decision_config.json."""

@@ -17,6 +17,7 @@ import multiprocessing as mp
 import os
 import sys
 import time
+from copy import copy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -264,12 +265,21 @@ def run(args) -> None:
     rows = read_rows(args.rows, args.every, args.limit)
     log(f"{len(rows)} rows from {len(args.rows)} file(s)")
     model_dir = resolve_model(args.model)
-    name = formats.detect(model_dir, model_config(model_dir), args.format).name
+    family = formats.detect(model_dir, model_config(model_dir), args.format)
+    name = family.name
+    if args.device is None:
+        args = copy(args)
+        args.device = family.default_device()
+    device = torch.device(args.device)
+
+    def device_name():
+        return torch.cuda.get_device_name(device) if device.type == "cuda" else str(device)
+
     if args.stream_block > 0:
         timing = run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log)
         env = {"engine": "flide", "format": name, "quantize": args.quantize, "batch_invariant": args.batch_invariant,
                "model": model_dir, "dtype": args.dtype, "format_args": format_args, "plan_args": plan_args,
-               "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+               "device": device_name(),
                "torch": torch.__version__, "rows": [str(x) for x in args.rows], "every": args.every,
                "limit": args.limit, "latency": "batched; per-request times are the block's forward time split by "
                "token share", "argv": sys.argv}
@@ -323,7 +333,7 @@ def run(args) -> None:
               "workers": args.workers, "counts": counts}
     env = {"engine": "flide", "format": name, "quantize": args.quantize, "batch_invariant": args.batch_invariant,
            "model": model_dir, "dtype": args.dtype, "format_args": format_args, "plan_args": plan_args,
-           "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu", "torch": torch.__version__,
+           "device": device_name(), "torch": torch.__version__,
            "rows": [str(x) for x in args.rows], "every": args.every, "limit": args.limit,
            "latency": "batched; per-request times are the forward wall time split by token share", "argv": sys.argv}
     (out / "timing.json").write_text(json.dumps(timing, indent=2))
@@ -345,7 +355,7 @@ def add_parser(sub) -> None:
     p.add_argument("--budget", type=int, default=65536, help="tokens per micro-batch")
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dtype", default="bfloat16")
-    p.add_argument("--device", default="cuda:0")
+    p.add_argument("--device", help="inference device (default: chosen by the model format)")
     p.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits whatever it is batched with")
     p.add_argument("--quantize", default=None, choices=["fp8"],

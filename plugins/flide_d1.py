@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import sys
 import time
 import wave
 from dataclasses import dataclass
@@ -57,6 +58,16 @@ class _Plan:
 class D1(Format):
     backbones = tuple(_MODELS)
     extended_answers = True
+
+    @staticmethod
+    def default_device() -> str:
+        # Only the d1 runner supports MPS among Flide's built-in formats.
+        if sys.platform != "darwin":
+            return Format.default_device()
+        import torch
+
+        mps = getattr(torch.backends, "mps", None)
+        return "mps" if mps is not None and mps.is_available() else "cpu"
 
     @classmethod
     def detect(cls, model_dir, config, decision_config):

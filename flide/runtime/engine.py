@@ -100,7 +100,7 @@ def _gib() -> tuple[float, float, float]:
 
 
 class Engine:
-    def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
+    def __init__(self, model: str, format: str | None = None, device: str | None = None, dtype: str = "bfloat16",
                  budget: int = 65536, backbone_options: dict | None = None, capture: bool | int = 4096,
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
                  **format_options):
@@ -114,6 +114,8 @@ class Engine:
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
         family = formats.detect(self.model_dir, config, format)
+        if device is None:
+            device = family.default_device()
         self.model_dir = family.run_dir(self.model_dir)
         if family.backbones and config.model_type not in family.backbones:
             raise ValueError(

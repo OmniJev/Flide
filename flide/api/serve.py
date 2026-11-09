@@ -93,7 +93,7 @@ def add_parser(sub) -> None:
     s.add_argument("--format-arg", action="append", metavar="KEY=VALUE", help="family option")
     s.add_argument("--name", default=None, help="model name reported by the API (default: from --model)")
     s.add_argument("--calibration", default=None, help="calibration.json (default: the one next to the weights)")
-    s.add_argument("--device", default="cuda:0")
+    s.add_argument("--device", help="inference device (default: chosen by the model format)")
     s.add_argument("--dtype", default="bfloat16")
     s.add_argument("--media-root", default=None,
                    help="directory that local media paths in requests resolve against (without it, only base64)")
