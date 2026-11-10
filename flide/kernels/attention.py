@@ -185,6 +185,12 @@ def config(device, dtype, head_dim: int) -> dict:
         return {"BLOCK_M": 32, "BLOCK_N": 32, "num_warps": 4, "num_stages": 1}
     if not big:
         if dp > 128:
+            # A 256-dim head fills a 64x256 accumulator on its own, so eight warps leave each thread too few registers
+            # on Blackwell: four warps measured 1.2x at 4k tokens and 1.5x at 8k. BLOCK_M stays: the query tile is what
+            # block_ranges groups rows by, and a smaller tile changes the key ranges those rows are masked against,
+            # which moves long-prompt answers where the ranges differ.
+            if torch.cuda.get_device_capability(device) >= (12, 0):
+                return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}
             return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1}
         return {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 8, "num_stages": 2}
     if dp > 64:
