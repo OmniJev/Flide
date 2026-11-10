@@ -324,6 +324,8 @@ class NextToken(Format):
         expanded, k = [], 0
         for t in prefix:
             if t == pad:
+                if k == len(counts):
+                    raise ValueError(f"more image placeholders in the shared prefix than the {len(counts)} images")
                 expanded.extend([pad] * counts[k])
                 k += 1
             else:

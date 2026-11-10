@@ -322,6 +322,27 @@ def _write(out: Path, man: dict, buf: dict) -> None:
             tar.addfile(info, io.BytesIO(data))
 
 
+def warm_blocks(eng) -> None:
+    """Rounds of block-attention plans on a backbone that reads them (a family such as Sieve asks for them; the engine's
+    own warm-up is causal), through every path a served round takes, so their kernels go into the bundle too: a
+    prefixless plan of whole blocks and plans whose questions fork from block 0."""
+    import random
+
+    from ..formats.base import Plan, Read
+
+    if not getattr(eng.backbone, "block_attention", False):
+        return
+    rng = random.Random(1)
+    tok = lambda n: [rng.randrange(100, 30000) for _ in range(n)]
+    plans = [Plan([], [tok(200), tok(220)], (Read(None),), attention="blocks"),
+             Plan(tok(300), [tok(40), tok(25), tok(60)], (Read(None),), attention="blocks"),
+             Plan(tok(1500), [tok(50)], (Read(None),), attention="blocks")]
+    for mode in ("batch", "graphs", "packed"):
+        eng.forward(plans, mode=mode)
+    for p in plans:
+        eng.forward([p], mode="alone")
+
+
 def export(args) -> None:
     """Warm each model in a fresh cache directory and pack every kernel that ran."""
     tmp = tempfile.mkdtemp(prefix="flide-kernels-")
@@ -342,6 +363,7 @@ def export(args) -> None:
             opts["loader"] = "none"
         eng = Engine(model, format=args.format, device=args.device, dtype=args.dtype, capture=True,
                      session_cache_gb=1.0 if args.sessions else 0.0, backbone_options=opts)
+        warm_blocks(eng)
         log.info("%s warm in %.1fs, %d kernels so far", model, time.perf_counter() - t0, len(rec.seen))
         del eng
         gc.collect()

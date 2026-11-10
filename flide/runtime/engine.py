@@ -514,10 +514,11 @@ class Engine:
     def _alone_items(self, plan: Plan, graphs):
         """Flat graph items of a plan without a prefix under block attention, one per branch: its whole sequence as the
         prefix, a copy of its last token as the branch, read at the sequence's last token (on graphs with
-        `read_spots`); None when the plan is not one of those or reads elsewhere."""
+        `read_spots` or `alone_reads`); None when the plan is not one of those or reads elsewhere."""
         if plan.prefix or not _blocks(plan) or settings.batch_invariant:
             return None
-        if not (getattr(graphs, "read_spots", False) and getattr(graphs, "block_attention", False)):
+        if not ((getattr(graphs, "read_spots", False) or getattr(graphs, "alone_reads", False))
+                and getattr(graphs, "block_attention", False)):
             return None
         if plan.vision is not None and not graphs.media:
             return None

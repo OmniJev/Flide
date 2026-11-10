@@ -122,11 +122,11 @@ def _value(v: Any, model_dir: str) -> Any:
 
 def known(model_dir: str, decision_config: dict | None) -> dict | None:
     """The shipped configuration that claims a checkpoint: by its Hub repository in the path, else by its files."""
-    path = str(Path(model_dir).resolve()).lower()
+    parts = {p.lower() for p in Path(model_dir).resolve().parts}
     for f in sorted(KNOWN.glob("*.json")):
         spec = json.loads(f.read_text())
         m = spec.get("match", {})
-        if any(f"models--{r.lower().replace('/', '--')}" in path for r in m.get("repos", ())):
+        if any(f"models--{r.lower().replace('/', '--')}" in parts for r in m.get("repos", ())):
             return spec
         files, dc, keys = m.get("files", ()), m.get("decision_config"), m.get("decision_config_keys")
         if "config" in m:

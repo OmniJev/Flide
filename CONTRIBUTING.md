@@ -5,17 +5,14 @@ Thank you for helping. Please read this page before you open a pull request.
 ## How changes land
 
 Accepted pull requests are applied by the maintainers and shipped in the next release, with you credited as a co-author
-of the release commit. We then close the pull request with a link to that release.
+of the release commit. We then close the pull request with a link to that release. Maintainers review pull requests in
+batches before each release, so a reply can take a few days.
 
 ## Open an issue first
 
-Open an issue and wait for a maintainer to agree before you write code for any of these:
-
-- a new model family
-- a change to the engine, which is everything under `flide/` (model plugins live in `plugins/`)
-- a new dependency, or a wider version range of an existing one
-
-A bug fix with a test can go straight to a pull request.
+Every pull request starts from an issue. Open one, wait until a maintainer agrees and labels it `accepted`, and then
+write the code. Link that issue in the pull request, for example with `Fixes #12`. A pull request without an accepted
+issue is closed automatically.
 
 ## What a pull request needs
 

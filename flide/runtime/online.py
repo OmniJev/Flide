@@ -107,12 +107,12 @@ class Batcher:
         self._planned(-1)
         return item.future
 
-
     def stats(self) -> dict:
         """What this batcher has served since start, and where the GPU thread's time went."""
         return {"rounds": self.rounds, "requests": self.requests, "planning": self._planning,
                 "queue_s": round(self.queue_s, 3), "forward_s": round(self.forward_s, 3),
                 "max_round": self.max_round, "avg_round": round(self.requests / self.rounds, 2) if self.rounds else 0.0}
+
 
     def _take(self) -> list[_Item]:
         if self._carry is not None:

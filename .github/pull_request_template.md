@@ -4,7 +4,7 @@
 
 ## Issue
 
-<!-- Link the issue. Required for a new model family, an engine change or a dependency change. -->
+<!-- Link the accepted issue, for example Fixes #12. A pull request without one is closed automatically. -->
 
 ## How it was tested
 

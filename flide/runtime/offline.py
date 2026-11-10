@@ -255,7 +255,6 @@ def run(args) -> None:
     options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
                "max_request_tokens": args.max_request_tokens, "media_root": args.media_root,
                "allow_media_urls": args.allow_media_urls or None}
-    # the family options the server takes too, so an offline run reproduces a served one; --format-arg still wins
     format_args = {**{k: v for k, v in options.items() if v is not None}, **format_args}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

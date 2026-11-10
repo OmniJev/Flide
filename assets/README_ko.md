@@ -29,12 +29,13 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-11** Flide 0.1.13에 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3), [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)를 추가하고, RTX 40 시리즈 GPU용 사전 컴파일 커널을 넣었습니다.
 - 🔥 **2026-11-10** Flide 0.1.12에 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max), [clef-flash](https://huggingface.co/Cloudflare/clef-flash)를 추가하고, RTX 50 시리즈와 RTX PRO 6000 GPU용 사전 컴파일 커널을 넣었습니다.
 - 🔥 **2026-11-10** Flide 0.1.11에 [이메일 분류 데모](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)를 추가했습니다. H200 한 장으로 이메일 10,000통에 각각 8개의 질문을 28초 만에 답합니다.
-- 🔥 **2026-11-09** Flide 0.1.10에 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision), [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)를 추가했고, KnowLine 계열이 이제 이미지를 읽습니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-09** Flide 0.1.10에 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision), [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)를 추가했고, KnowLine 계열이 이제 이미지를 읽습니다.
 - 🔥 **2026-11-09** Flide 0.1.9에 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b)와 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)를 추가했고, `/v1/systemone`이 이제 하나의 본문에 여러 요청을 받습니다.
 - 🔥 **2026-11-08** Flide 0.1.8에 [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98), [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6)를 포함한 두 의사결정 모델 계열과 [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1)를 추가했습니다.
 - 🔥 **2026-11-02** 논문 [Flide: Accelerating Decision Inference with Exact State Forking](https://arxiv.org/abs/2610.42148)을 arXiv에 공개했습니다.
@@ -105,10 +106,12 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 텍스트, 이미지 | ~1.7× | ~1.1× | ~1.0× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 텍스트 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 텍스트, 이미지 | ~2.8× | ~6.2× | ~1.5× |
+| [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 텍스트 | 1.1× | 2.0× | 2.8× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 텍스트, 이미지 | ~1.3× | ~1.7× | ~1.0× |
 | [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b) | 텍스트 | ~6.4× | ~1.9× | ~1.8× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | 텍스트, 이미지 | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | 텍스트 | 2.0× | 9.2× | 1.7× |
+| [JDI-Decision](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) | 텍스트, 이미지 | 1.3× | 2.8× | 1.3× |
 | [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | 텍스트 | 3.1× | 2.6× | 1.9× |
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 텍스트, 이미지 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 텍스트 | ~1.9× | ~5.9× | 1.8× |
@@ -125,7 +128,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 텍스트 | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 텍스트, 이미지 | ~2.1× | ~4.8× | ~1.3× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 텍스트 | 3.1× | 28.1× | 1.2× |
-| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 텍스트 | 3.0× | 14.3× | 2.6× |
+| [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 텍스트 | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 텍스트 | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | 텍스트 | 3.3× | 11.9× | 3.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 텍스트, 이미지 | 1.6× | 8.4× | 1.4× |

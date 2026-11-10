@@ -34,6 +34,7 @@ REQUESTS = 64
 
 class GemmaGraphs:
     block_attention = True
+    alone_reads = True
 
     def __init__(self, bb, ladder=LADDER, bmax: int = BMAX):
         self.bb = bb
@@ -208,6 +209,8 @@ class GemmaGraphs:
         blocks = any(len(r) > 3 and r[3] for r in reqs)
         if blocks and any(len(r) > 2 and r[2] is not None for r in reqs):
             return None
+        if any(len(r) > 4 and r[4] is not None and (len(r[1]) != 1 or len(r[4]) != 1) for r in reqs):
+            return None
         if L is None or not self.capture(L, blocks):
             return None
         self._stage(reqs, L)
@@ -262,7 +265,8 @@ class GemmaGraphs:
         for j, (seq, sufs, _) in enumerate(items):
             n, p0 = len(seq), starts[j]
             if not sufs:
-                reads[nread] = p0 + n - 1
+                spot = reqs[j][4] if len(reqs[j]) > 4 else None
+                reads[nread] = p0 + (spot[0] if spot else n - 1)
                 nread += 1
             for sfx in sufs:
                 m = len(sfx)
