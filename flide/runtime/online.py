@@ -62,6 +62,9 @@ class Batcher:
         start_planners(self._planners, planners)
         self.rounds = 0
         self.requests = 0
+        self.queue_s = 0.0
+        self.forward_s = 0.0
+        self.max_round = 0
         self._thread = threading.Thread(target=self._loop, name="flide-gpu", daemon=True)
         self._thread.start()
 
@@ -104,6 +107,12 @@ class Batcher:
         self._planned(-1)
         return item.future
 
+
+    def stats(self) -> dict:
+        """What this batcher has served since start, and where the GPU thread's time went."""
+        return {"rounds": self.rounds, "requests": self.requests, "planning": self._planning,
+                "queue_s": round(self.queue_s, 3), "forward_s": round(self.forward_s, 3),
+                "max_round": self.max_round, "avg_round": round(self.requests / self.rounds, 2) if self.rounds else 0.0}
 
     def _take(self) -> list[_Item]:
         if self._carry is not None:
@@ -165,6 +174,9 @@ class Batcher:
         dt = time.perf_counter() - t0
         self.rounds += 1
         self.requests += len(items)
+        self.queue_s += sum(t0 - it.t_in for it in items)
+        self.forward_s += dt
+        self.max_round = max(self.max_round, len(items))
         for it, out, path in zip(items, outs, paths):
             it.future.set_result((out, {"path": path, "round": len(items), "queue_s": t0 - it.t_in,
                                         "forward_s": dt}))

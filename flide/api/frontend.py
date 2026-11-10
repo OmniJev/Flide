@@ -117,6 +117,31 @@ class RemoteBatcher:
         out.set_result([f.result() for f in futs])
         return out
 
+    def stats(self) -> cf.Future:
+        """The GPU process's numbers, one dict per replica it runs (a list when there are several)."""
+        futs = []
+        for q in self.requests:
+            rid = next(self._ids)
+            f: cf.Future = cf.Future()
+            with self._lock:
+                self._waiting[rid] = f
+            q.put(("stats", self.fid, rid))
+            futs.append(f)
+        if len(futs) == 1:
+            return futs[0]
+        out: cf.Future = cf.Future()
+        pending = len(futs)
+
+        def done(_) -> None:
+            nonlocal pending
+            pending -= 1
+            if pending == 0:
+                out.set_result([f.result() for f in futs])
+
+        for f in futs:
+            f.add_done_callback(done)
+        return out
+
     def _read(self):
         while True:
             rid, result, error = self.replies.get()
@@ -167,6 +192,12 @@ def dispatch(batcher, requests, replies) -> None:
             batcher._planned(1)
         elif msg[0] == "fail":
             batcher._planned(-1)
+        elif msg[0] == "stats":
+            _, fid, rid = msg
+            sessions = batcher.engine.sessions
+            payload = batcher.stats()
+            payload["sessions"] = sessions.stats() if sessions is not None else None
+            replies[fid].put((rid, payload, None))
         elif msg[0] == "flush":
             _, fid, rid = msg
             sessions = batcher.engine.sessions
