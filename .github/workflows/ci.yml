@@ -20,6 +20,13 @@ jobs:
           pip install .
       - name: Compile
         run: python -m compileall -q flide plugins demos tests
+      - name: Kernel bundle tests
+        run: |
+          # torch's CPU wheel does not depend on triton, and fla-core requires it only under extras,
+          # so the test that compiles kernels installs it here. 3.8.0 is the newest Triton that
+          # flide/kernels/prebuilt/cuda_utils ships driver modules for.
+          python -m pip install "triton==3.8.0"
+          python tests/test_kcache.py
       - name: Import and load every model family
         run: |
           python -c "import flide; print('flide', flide.__version__)"
