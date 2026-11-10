@@ -28,6 +28,17 @@ def resolve_model(name: str) -> str:
     return lora.view(d, resolve_model) if lora.is_adapter(d) else d
 
 
+def _budget_hint(model_dir: str) -> int | None:
+    """The token budget a checkpoint asks for in its decision_config.json (`"budget": 16384`), None when it names
+    none; ValueError for a value no budget can be."""
+    value = (formats.read_decision_config(model_dir) or {}).get("budget")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{model_dir}: decision_config.json budget must be a positive integer, not {value!r}")
+    return value
+
+
 def model_config(model_dir: str):
     import transformers
 
@@ -102,7 +113,7 @@ def _gib() -> tuple[float, float, float]:
 
 class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
-                 budget: int = 65536, backbone_options: dict | None = None, capture: bool | int = 4096,
+                 budget: int | None = None, backbone_options: dict | None = None, capture: bool | int = 4096,
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
@@ -123,6 +134,7 @@ class Engine:
                      "on this machine takes a few minutes and later ones read them from the cache", missing, cache_dir())
         t0 = time.perf_counter()
         self.model_dir = resolve_model(model)
+        budget_hint = _budget_hint(self.model_dir)
         config = model_config(self.model_dir)
         family = formats.detect(self.model_dir, config, format)
         self.model_dir = family.run_dir(self.model_dir)
@@ -150,7 +162,7 @@ class Engine:
         self.heads = self.format.load_heads(self.backbone)
         self.eager_tokens = eager_tokens(config.model_type, self.backbone) if tp_size == 1 else None
         mem = _gib()
-        self.budget = budget
+        self.budget = budget if budget is not None else (budget_hint or 65536)
         self.sessions = None
         if session_cache_gb > 0:
             from .session import SessionCache
@@ -179,6 +191,8 @@ class Engine:
             self.warmup()
         log.info("loaded %s as %s on %s in %.1fs", self.model_dir, family.name, config.model_type,
                  time.perf_counter() - t0)
+        if budget is None and budget_hint is not None:
+            log.info("token budget %d from decision_config.json", self.budget)
         end = _gib()
         log.info("memory: model %.2f GiB, graphs %.2f GiB (%d), sessions and work space %.2f GiB, reserved %.2f GiB, "
                  "device used %.2f GiB",

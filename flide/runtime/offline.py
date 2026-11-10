@@ -233,7 +233,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
             pool.close()
             pool.join()
     total = time.perf_counter() - t_wall
-    return {"rows": len(rows), "tokens": tokens, "micro_batches": micro, "budget": args.budget, "streamed": True,
+    return {"rows": len(rows), "tokens": tokens, "micro_batches": micro, "budget": engine.budget, "streamed": True,
             "stream_block": args.stream_block, "load_s": t_load, "plan_wait_s": t_wait, "forward_s": t_forward,
             "finish_tail_s": t_tail, "wall_s": total, "total_excl_load_s": total - t_load,
             "tokens_per_s_forward": tokens / max(t_forward, 1e-9), "workers": args.workers, "counts": counts,
@@ -322,7 +322,7 @@ def run(args) -> None:
     t_finish = time.perf_counter() - t0
     log(f"finish done in {t_finish:.1f}s, {counts}")
 
-    timing = {"rows": len(rows), "tokens": tokens, "micro_batches": stats["micro_batches"], "budget": args.budget,
+    timing = {"rows": len(rows), "tokens": tokens, "micro_batches": stats["micro_batches"], "budget": engine.budget,
               "plan_s": t_plan, "load_s": t_load, "forward_s": t_forward, "finish_s": t_finish,
               "total_excl_load_s": t_plan + t_forward + t_finish, "tokens_per_s_forward": tokens / t_forward,
               "workers": args.workers, "counts": counts}
@@ -356,7 +356,8 @@ def add_parser(sub) -> None:
     p.add_argument("--name", default="flide", help="model name written into each response")
     p.add_argument("--every", type=int, default=1, help="keep every n-th row")
     p.add_argument("--limit", type=int, default=None)
-    p.add_argument("--budget", type=int, default=65536, help="tokens per micro-batch")
+    p.add_argument("--budget", type=int, default=None,
+                   help="tokens per micro-batch (default: the budget the checkpoint names in its decision_config.json, else 65536)")
     p.add_argument("--session-cache-gb", type=float, default=0.0,
                    help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
                         "(a block is scheduled whole, so --stream-block decides how often that can happen)")
