@@ -17,6 +17,7 @@ from flide.api.answers import make_choice, make_noul, make_score
 from flide.api.schema import ChoiceQuestion, NoulQuestion, ScoreQuestion, SystemOneResponse, Usage
 from flide.formats import register
 from flide.formats.base import Format, Plan, Read
+from flide.formats.tokens import SERIAL, Pieces
 
 from .prepare import FORMAT_ID
 
@@ -49,6 +50,7 @@ class OpenJev(Format):
         self.temperature = float(self.config["temperature"])
         self.max_length = max_length or int(self.config.get("max_length", 4096))
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self._splitter = Pieces(self.tokenizer)
         self._wrap = None
 
     def load_heads(self, backbone) -> dict[str, Any]:
@@ -104,9 +106,26 @@ class OpenJev(Format):
         if pre or post:
             window, first_tail = context[-256:], tails[0] + post
             if enc(window + first_tail) == enc(window) + enc(first_tail):
-                shared = enc(pre + context, first=True)
-                return [shared + enc(t + post) for t in tails]
+                shared = self._encode_first(pre + context)
+                return [shared + t for t in self._encode_many([t + post for t in tails])]
         return [self._prompt(context + t) for t in tails]
+
+    def _encode_first(self, text: str) -> list[int]:
+        """enc(text, first=True) through the tokenizer's own library: a long text cut where the tokenizer never merges
+        across (flide.formats.tokens.Pieces) and its pieces tokenized in one batch, in parallel; whole when the
+        tokenizer adds special tokens of its own."""
+        bt = self.tokenizer.backend_tokenizer
+        parts = self._splitter.split(text)
+        if len(parts) == 1 or bt.encode("", add_special_tokens=True).ids:
+            return bt.encode(text, add_special_tokens=True).ids
+        return [i for e in bt.encode_batch(parts, add_special_tokens=False) for i in e.ids]
+
+    def _encode_many(self, texts: list[str]) -> list[list[int]]:
+        """enc of several texts through the tokenizer's own library: a few one by one, more in one parallel batch."""
+        bt = self.tokenizer.backend_tokenizer
+        if len(texts) <= SERIAL:
+            return [bt.encode(t, add_special_tokens=False).ids for t in texts]
+        return [e.ids for e in bt.encode_batch(texts, add_special_tokens=False)]
 
     def plan(self, request, **_) -> Plan:
         state, records = self._records(request)

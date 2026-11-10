@@ -26,7 +26,8 @@ the model is asked and read:
   attention    "bidirectional": the checkpoint reads each question's whole prompt both ways in its full-attention layers
                (recurrent and sliding-window layers stay causal), so every question is a sequence of its own and nothing is
                shared (a request's images are read again in each); "causal" (the default) shares the state between
-               questions
+               questions; "prefix": the request, through the last occurrence of the text "prefix_ends", is read both
+               ways and shared, and each question's tail after it one way (text only)
   images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
                the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
                without it images are refused. max_prompt_tokens counts the images' tokens
@@ -190,9 +191,13 @@ class Template(Format):
         self.images = spec.get("images")
         if self.images is not None and self.prompt is not None:
             raise ValueError("images go in a user turn: a configuration with images has messages")
-        if spec.get("attention", "causal") not in ("causal", "bidirectional"):
-            raise ValueError("attention is causal or bidirectional")
-        self.attention = "blocks" if spec.get("attention") == "bidirectional" else "causal"
+        if spec.get("attention", "causal") not in ("causal", "bidirectional", "prefix"):
+            raise ValueError("attention is causal, bidirectional or prefix")
+        self.attention = {"bidirectional": "blocks", "prefix": "prefix"}.get(spec.get("attention"), "causal")
+        if (self.attention == "prefix") != ("prefix_ends" in spec) or (self.attention == "prefix" and self.images):
+            raise ValueError("attention prefix takes prefix_ends and no images")
+        self.prefix_ends = (self.tokenizer(spec["prefix_ends"], add_special_tokens=False)["input_ids"]
+                            if self.attention == "prefix" else None)
         st = spec.get("state")
         self.state_text = env.from_string(st["text"]) if st else None
         if st:
@@ -416,6 +421,11 @@ class Template(Format):
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
         if self.attention == "blocks" and not refs:
             return Plan([], rows, (READ,), data, attention="blocks")
+        if self.attention == "prefix":
+            end = self._prefix_end(rows[0])
+            if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
+                raise ValueError("the prompts differ before their requested parts end")
+            return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data, attention="prefix")
         m = min(len(r) for r in rows) - 1
         for i in range(m):
             if any(r[i] != rows[0][i] for r in rows):
@@ -431,6 +441,14 @@ class Template(Format):
         if self.attention == "blocks":
             return Plan([], [prefix + s for s in suffixes], (READ,), data, vision=vision, attention="blocks")
         return Plan(prefix, suffixes, (READ,), data, vision=vision)
+
+    def _prefix_end(self, ids: list) -> int:
+        """The index just past the last occurrence of the prefix_ends tokens."""
+        k = len(self.prefix_ends)
+        for i in range(len(ids) - k, -1, -1):
+            if ids[i: i + k] == self.prefix_ends:
+                return i + k
+        raise ValueError("a prompt has no end of its request part")
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         answers = {}

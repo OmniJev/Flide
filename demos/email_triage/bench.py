@@ -59,8 +59,6 @@ def main():
         th.join()
     wall = time.perf_counter() - start
     done = [r for r in results if r is not None]
-    if not done:
-        raise SystemExit(f"all {len(failed)} requests failed; is the server running at {a.url}?")
     print(f"{len(done)} emails in {wall:.1f} s with {a.clients} clients, {len(done) / wall:.1f} emails/s, "
           f"median {statistics.median(ms for ms, _ in done):.1f} ms per email, {len(failed)} failed")
     if a.out:

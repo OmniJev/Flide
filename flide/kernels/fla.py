@@ -26,11 +26,16 @@ class _PinnedNB:
 
 
 def pin_fla_size_buckets() -> None:
-    import fla.modules.conv.triton.ops as conv_ops
-    import fla.modules.l2norm as l2norm
+    import importlib
 
-    for module, name in ((conv_ops, "causal_conv1d_fwd_kernel"), (l2norm, "l2norm_fwd_kernel")):
-        kernel = getattr(module, name)
-        if not isinstance(kernel, _PinnedNB):
-            setattr(module, name, _PinnedNB(kernel))
-
+    for paths, name in ((("fla.modules.conv.triton.ops", "fla.modules.causal_conv1d.ops"), "causal_conv1d_fwd_kernel"),
+                        (("fla.modules.l2norm", "fla.modules.norm.l2norm"), "l2norm_fwd_kernel")):
+        for path in paths:
+            try:
+                module = importlib.import_module(path)
+            except ImportError:
+                continue
+            kernel = getattr(module, name, None)
+            if kernel is not None and not isinstance(kernel, _PinnedNB) and "NB" in getattr(kernel, "arg_names", ()):
+                setattr(module, name, _PinnedNB(kernel))
+            break

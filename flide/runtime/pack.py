@@ -48,6 +48,7 @@ class Job:
     resume: Any = None
     marks: tuple[int, ...] = ()
     blocks: bool = False
+    prefix_two_way: bool = False
 
     @property
     def tokens(self) -> int:
@@ -113,7 +114,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             raise ValueError(f"job {j}: resume start {job.start} needs a saved state and must be inside its {P} prefix tokens")
         if (job.start or job.marks) and (job.positions is not None or job.offset or job.vision is not None):
             raise ValueError(f"job {j}: sessions take text-only prefixes")
-        if job.blocks and (job.start or job.marks):
+        if (job.blocks or job.prefix_two_way) and (job.start or job.marks):
             raise ValueError(f"job {j}: block attention takes no session states")
         bounds.append([job.start] + sorted({m for m in job.marks if job.start < m < P}) + [P])
     split = any(len(b) > 2 or b[0] > 0 for b in bounds)
@@ -142,7 +143,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             segs[j].append((a, e, n))
             r = ranges[n: n + m]
             r[:, 0] = base
-            r[:, 1] = base + e if job.blocks else np.arange(base + a + 1, base + e + 1)
+            r[:, 1] = base + e if job.blocks or job.prefix_two_way else np.arange(base + a + 1, base + e + 1)
             r[:, 2:] = 0
             ids[n: n + m] = job.prefix[a:e]
             pos[n: n + m] = np.arange(a, e)

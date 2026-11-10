@@ -76,16 +76,19 @@ _OFF = -1.0e4
 
 def _causal(q, k, v, scale: float):
     """Causal attention over one sequence from position 0, q [T, H, D], k and v [T, Hkv, D] -> [T, H, D]: PyTorch's
-    flash attention, which needs no key metadata (a round of one sequence has no other request to mask)."""
+    attention, which needs no key metadata (a round of one sequence has no other request to mask), with the key heads
+    read in groups rather than copied per query head. cuDNN's first on Hopper (H200, 256-dim heads: 2.2 times flash
+    attention at 3.7k tokens, the same distance from float32), flash attention's first elsewhere."""
+    import torch
     import torch.nn.functional as F
     from torch.nn.attention import SDPBackend, sdpa_kernel
 
-    G = q.shape[1] // k.shape[1]
+    order = [SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
+    if torch.cuda.get_device_capability(q.device)[0] >= 9:
+        order[:2] = order[1::-1]
     heads = lambda x: x.transpose(0, 1)[None]
-    with sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION],
-                     set_priority=True):
-        o = F.scaled_dot_product_attention(heads(q), heads(k.repeat_interleave(G, 1)), heads(v.repeat_interleave(G, 1)),
-                                           is_causal=True, scale=scale)
+    with sdpa_kernel(order, set_priority=True):
+        o = F.scaled_dot_product_attention(heads(q), heads(k), heads(v), is_causal=True, scale=scale, enable_gqa=True)
     return o[0].transpose(0, 1)
 
 
@@ -143,6 +146,7 @@ def _flat_layout(T: int, sess: bool = False) -> dict:
 
 class RequestGraphs:
     block_attention = True
+    prefix_attention = True
     read_spots = True
 
     def __init__(self, bb, sequence_ladder=SEQUENCE_LADDER, width_ladder=WIDTH_LADDER, batch_ladder=BATCH_LADDER,
@@ -871,7 +875,7 @@ class RequestGraphs:
             job[s] = j
             br[s] = -1
             r[0, s] = at
-            r[1, s] = np.where(ar < p, at + p, at + n) if blk else ar + at + 1
+            r[1, s] = np.where(ar < p, at + p, ar + at + 1 if blk == "prefix" else at + n) if blk else ar + at + 1
             r[2:, s] = 0
             for d in (1, 2, 3):
                 src[d - 1, s] = np.where(ar >= d, ar + at - d, -1)
@@ -899,7 +903,7 @@ class RequestGraphs:
                 r[0, s] = p0
                 r[1, s] = p0 + n
                 r[2, s] = at
-                r[3, s] = at + m if blk else ar + at + 1
+                r[3, s] = at + m if blk and blk != "prefix" else ar + at + 1
                 for d in (1, 2, 3):
                     back = ar - d
                     src[d - 1, s] = np.where(back >= 0, at + back, np.where(n + back >= 0, p0 + n + back, -1))

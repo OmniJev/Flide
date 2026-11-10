@@ -140,6 +140,10 @@ class Pieces:
             out[k] += e.ids
         return out
 
+    def split(self, text: str) -> list[str]:
+        """The pieces `encode` tokenizes a text in: a long text cut, any other whole."""
+        return self._split(text) if self.ok and len(text) >= LONG else [text]
+
     def _split(self, text: str) -> list[str]:
         parts, s = [], 0
         while len(text) - s > PIECE * 3 // 2:

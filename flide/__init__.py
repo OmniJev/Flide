@@ -2,7 +2,7 @@
 says, never generate."""
 from __future__ import annotations
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 
 def __getattr__(name):

@@ -204,10 +204,19 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
     return added
 
 
-def first_compile() -> bool:
-    """Whether this start compiles its kernels: no bundle fits this GPU and Triton, and the Triton cache is empty."""
-    d = cache_dir()
-    return not _matched and not (d.is_dir() and any(d.iterdir()))
+def no_bundle() -> str | None:
+    """This GPU and Triton ("sm_120 with Triton 3.8.0") when no bundle fits them, so kernels missing from the Triton
+    cache compile on first use; None when one fits, or with no GPU or no Triton."""
+    if _matched:
+        return None
+    try:
+        import triton
+
+        t = _target()
+    except Exception:
+        return None
+    return f"sm_{t['arch']} with Triton {triton.__version__}" if t["backend"] == "cuda" else \
+        f"{t['backend']} {t['arch']} with Triton {triton.__version__}"
 
 
 def tune() -> int:

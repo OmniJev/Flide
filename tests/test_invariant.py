@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flide.kernels.invariant import CFG, NEEDS, SMALL_CFG, SMALL_M, pick
 
-HOPPER = 232448                # sm_90: 227 KB of shared memory per block
-CONSUMER_BLACKWELL = 101376    # sm_120: 99 KB
+HOPPER = 232448
+CONSUMER_BLACKWELL = 101376
 
 
 def main():

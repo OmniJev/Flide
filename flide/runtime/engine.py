@@ -35,10 +35,19 @@ def model_config(model_dir: str):
 
 
 def _blocks(plan: Plan) -> bool:
-    """Whether a plan reads with block attention (formats.base.Plan); ValueError for an attention no backbone runs."""
-    if plan.attention not in ("causal", "blocks"):
+    """Whether a plan reads any of its prefix both ways, attention "blocks" or "prefix" (formats.base.Plan); ValueError
+    for an attention no backbone runs."""
+    if plan.attention not in ("causal", "blocks", "prefix"):
         raise ValueError(f"unknown attention {plan.attention!r}")
-    return plan.attention == "blocks"
+    if plan.attention == "prefix" and not plan.prefix:
+        raise ValueError("attention \"prefix\" needs a prefix")
+    return plan.attention != "causal"
+
+
+def _flag(plan: Plan):
+    """The attention the flat graphs take: True for "blocks", "prefix" for "prefix" (sessions and other graphs take
+    neither)."""
+    return "prefix" if plan.attention == "prefix" else True
 
 
 def _split(rows: list, counts: list[int] | None) -> list:
@@ -105,12 +114,13 @@ class Engine:
         if str(device).startswith("cuda"):
             check_cuda()
         launcher.install()
-        from .kcache import cache_dir, first_compile, seed, tune
+        from .kcache import cache_dir, no_bundle, seed, tune
 
         seed()
-        if first_compile():
-            log.info("no precompiled kernels ship for this GPU and Triton version, so they compile now; only the first "
-                     "start takes these minutes, later ones read them from %s", cache_dir())
+        missing = no_bundle()
+        if missing:
+            log.info("no precompiled kernels ship for %s: kernels not yet in %s compile on first use, so the first start "
+                     "on this machine takes a few minutes and later ones read them from the cache", missing, cache_dir())
         t0 = time.perf_counter()
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
@@ -133,7 +143,8 @@ class Engine:
             self.backbone = backbones.get(config.model_type).load(self.model_dir, device=device, dtype=dtype, **options)
         tune()
         needs = getattr(self.format, "attention", "causal")
-        if needs != "causal" and not getattr(self.backbone, "block_attention", False):
+        if needs != "causal" and not getattr(self.backbone, "prefix_attention" if needs == "prefix" else "block_attention",
+                                             False):
             raise ValueError(f"{self.model_dir} reads with block attention, which the {config.model_type} backbone "
                              "does not run")
         self.heads = self.format.load_heads(self.backbone)
@@ -215,8 +226,9 @@ class Engine:
 
         budget = budget or self.budget
         for p in plans:
-            if p is not None and _blocks(p) and not getattr(self.backbone, "block_attention", False):
-                raise ValueError("this backbone does not run block attention")
+            if p is not None and _blocks(p) and not getattr(self.backbone, "prefix_attention" if p.attention == "prefix"
+                                                           else "block_attention", False):
+                raise ValueError(f"this backbone does not run attention {p.attention!r}")
             if p is not None and p.vision is not None and p.positions is None:
                 p.positions, p.offset = self._media_positions(p)
         outputs: list[Any] = [None if p is None else [None] * len(p.suffixes) for p in plans]
@@ -403,7 +415,7 @@ class Engine:
             head = plan.branch_reads(0)[0].head
             return self.heads[head](hidden) if head is not None else hidden
         blocks = _blocks(plan)
-        if blocks and not getattr(graphs, "block_attention", False):
+        if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
             return None
         if self._branch_spots(plan) is not None:
             item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
@@ -469,13 +481,13 @@ class Engine:
         if not plan.suffixes or not plan.prefix or self._eager(plan):
             return None
         blocks = _blocks(plan)
-        if blocks and not getattr(graphs, "block_attention", False):
+        if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
             return None
         bspots = self._branch_spots(plan)
         if bspots is not None:
             if not getattr(graphs, "read_spots", False):
                 return None
-            tail = (blocks, bspots)
+            tail = (_flag(plan) if blocks else False, bspots)
         else:
             reads = {plan.branch_reads(b) for b in range(len(plan.suffixes))}
             if len(reads) != 1:
@@ -488,7 +500,7 @@ class Engine:
                 return None
             if self.sessions is not None and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan):
                 return None
-            tail = (blocks, spots) if spots is not None else (True,) if blocks else ()
+            tail = (_flag(plan) if blocks else False, spots) if spots is not None else (_flag(plan),) if blocks else ()
         if plan.vision is None:
             if plan.positions is not None or plan.offset:
                 return None

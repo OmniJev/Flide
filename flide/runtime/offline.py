@@ -184,8 +184,6 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
                     **format_args)
     t_load = time.perf_counter() - t0
-    # the kernels of the packed path, and the autotuner picks the kernel bundle holds, before the blocks are timed:
-    # the first block would otherwise pay for them and report a tokens/s that is not a steady state
     tune()
     t_warm = time.perf_counter()
     engine.warmup()

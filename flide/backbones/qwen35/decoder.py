@@ -65,6 +65,7 @@ class _Headless(torch.nn.Module):
 class Qwen35(Backbone):
     model_types = ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
     block_attention = True
+    prefix_attention = True
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,

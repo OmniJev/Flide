@@ -47,7 +47,11 @@ class Plan:
     `attention` "blocks": in the full-attention layers the prefix sees all of itself and each suffix sees the prefix
     and all of itself (the block-bidirectional mask some checkpoints are trained with); recurrent layers stay causal,
     and the prefix still never sees a suffix, so it is shared exactly. Such a plan needs a backbone with
-    `block_attention`, and takes no session states."""
+    `block_attention`, and takes no session states.
+
+    `attention` "prefix": in the full-attention layers the prefix sees all of itself, as under "blocks", and each suffix
+    sees the prefix and itself one way (a request read both ways, then a question's tail read one way). It needs a
+    prefix and a backbone with `prefix_attention`, and takes no session states."""
 
     prefix: list[int]
     suffixes: list[list[int]]

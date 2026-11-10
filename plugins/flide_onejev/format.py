@@ -22,6 +22,7 @@ from typing import Any
 from flide.api.answers import make_choice, make_noul, make_score
 from flide.api.schema import Answer, ChoiceQuestion, SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import Format, Plan, Read, register
+from flide.formats.tokens import SERIAL, Pieces
 
 from . import media as mmedia
 from .calibrate import Calibration, softmax
@@ -223,6 +224,7 @@ class OneJev(Format):
         self.max_score_levels = self.max_slots
         self.token_cache = TokenCache()
         self._token_cache_selfcheck()
+        self._splitter = Pieces(self.tokenizer)
         self.model_dir = model_dir
         self.media_root = media_root
         self.allow_local_paths = media_root is not None if allow_local_paths is None else allow_local_paths
@@ -294,19 +296,41 @@ class OneJev(Format):
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False)
 
+    def _encode_many(self, texts: list[str]) -> list[list[int]]:
+        """`_encode` of several texts through the tokenizer's own library, past the transformers wrapper: a few one by
+        one, more in one batch it runs in parallel (flide.formats.tokens)."""
+        bt = self.tokenizer.backend_tokenizer
+        if len(texts) <= SERIAL:
+            return [bt.encode(t, add_special_tokens=False).ids for t in texts]
+        return [e.ids for e in bt.encode_batch(texts, add_special_tokens=False)]
+
+    def _tokenize_offsets(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
+        """Token ids and character offsets of a text; a long one cut where its tokenizer never merges across
+        (flide.formats.tokens.Pieces) and its pieces tokenized in one batch, in parallel."""
+        bt = self.tokenizer.backend_tokenizer
+        parts = self._splitter.split(text)
+        if len(parts) == 1:
+            e = bt.encode(text, add_special_tokens=False)
+            return list(e.ids), list(e.offsets)
+        ids, offs, a = [], [], 0
+        for p, e in zip(parts, bt.encode_batch(parts, add_special_tokens=False)):
+            ids += e.ids
+            offs += [(x + a, y + a) for x, y in e.offsets]
+            a += len(p)
+        return ids, offs
+
     def _encode_offsets(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
         """Token ids and character offsets of a whole prompt, tokenizing only what follows the part it shares with
-        a recent prompt (TokenCache)."""
+        a recent prompt (TokenCache), a long remainder in pieces run in parallel (`_tokenize_offsets`)."""
         hit = self.token_cache.lookup(text)
         if hit is None:
-            enc = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-            ids, offs = list(enc["input_ids"]), [tuple(o) for o in enc["offset_mapping"]]
+            ids, offs = self._tokenize_offsets(text)
             self.token_cache.misses += 1
         else:
             head_ids, head_offs, b = hit
-            enc = self.tokenizer(text[b:], add_special_tokens=False, return_offsets_mapping=True)
-            ids = head_ids + list(enc["input_ids"])
-            offs = head_offs + [(x + b, y + b) for x, y in enc["offset_mapping"]]
+            tail_ids, tail_offs = self._tokenize_offsets(text[b:])
+            ids = head_ids + tail_ids
+            offs = head_offs + [(x + b, y + b) for x, y in tail_offs]
             self.token_cache.hits += 1
             self.token_cache.saved_chars += b
         self.token_cache.add(text, ids, offs)
@@ -351,7 +375,7 @@ class OneJev(Format):
         """Whole-prompt token ids of prompts that agree on their first `cut` characters, tokenizing the shared part
         once. Falls back to tokenizing each prompt whole when the shortcut does not reproduce the first one."""
         if any(p[:cut] != prompts[0][:cut] for p in prompts[1:]):
-            return [self._encode(p) for p in prompts]
+            return self._encode_many(prompts)
         ids0, offs = self._encode_offsets(prompts[0])
         if len(prompts) == 1:
             return [ids0]
@@ -360,12 +384,13 @@ class OneJev(Format):
             inside += 1
         n0 = inside - self.BACKOFF
         if n0 <= 0:
-            return [self._encode(p) for p in prompts]
+            return self._encode_many(prompts)
         off = offs[n0][0]
         head = ids0[:n0]
-        if head + self._encode(prompts[0][off:]) != ids0:
-            return [self._encode(p) for p in prompts]
-        return [ids0] + [head + self._encode(p[off:]) for p in prompts[1:]]
+        tails = self._encode_many([p[off:] for p in prompts])
+        if head + tails[0] != ids0:
+            return self._encode_many(prompts)
+        return [ids0] + [head + t for t in tails[1:]]
 
     def _prefix_and_suffix_ids(self, state: Any, rendered: list[RenderedQuestion]):
         """The longest common token prefix of all branches that ends at or before the end of the state block, and each

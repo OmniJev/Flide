@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.11"
+version = "0.1.12"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.12,<2.15",
     "transformers>=5.0",
-    "flash-linear-attention>=0.5.2,<0.6",
+    "flash-linear-attention>=0.5.2,<0.7",
     "accelerate",
     "huggingface_hub",
     "pydantic>=2",

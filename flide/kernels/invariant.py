@@ -3,8 +3,7 @@ row sits: one fixed tile shape, the whole reduction in one program, no split alo
 do not depend on the other requests of its round (`settings.batch_invariant`).
 
 On compute capability 9 and later bf16 products run a persistent kernel that streams its tiles through the Hopper
-tensor-memory accelerator, at the widest tile shape the device's shared memory per block holds; elsewhere, and for the
-float32 token head, a portable kernel."""
+tensor-memory accelerator; elsewhere, and for the float32 token head, a portable kernel."""
 from __future__ import annotations
 
 import threading
@@ -15,7 +14,6 @@ import triton.language as tl
 
 CFG = (128, 256, 64, 8, 3)
 SMALL_M, SMALL_CFG = 256, (64, 128, 64, 4, 4)
-NEEDS = {CFG: 163856, SMALL_CFG: 90136}
 _sms = None
 _local = threading.local()
 
@@ -74,6 +72,9 @@ def _mm_tma_kernel(X, W, Y, M, N, K, sxm, swn, sym, BM: tl.constexpr, BN: tl.con
 
 def _alloc(size: int, alignment: int, stream):
     return torch.empty(size, device="cuda", dtype=torch.int8)
+
+
+NEEDS = {CFG: 163856, SMALL_CFG: 90136}
 
 
 def budget(device) -> int:
