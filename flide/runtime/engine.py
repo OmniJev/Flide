@@ -103,7 +103,8 @@ def _gib() -> tuple[float, float, float]:
 class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
                  budget: int = 65536, backbone_options: dict | None = None, capture: bool | int = 4096,
-                 session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
+                 session_cache_gb: float = 0.0, session_min_tokens: int = 2048, session_cache_dir: str | None = None,
+                 batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
         if batch_invariant:
@@ -153,9 +154,11 @@ class Engine:
         self.budget = budget
         self.sessions = None
         if session_cache_gb > 0:
-            from .session import SessionCache
+            from .session import SessionCache, fingerprint
 
-            self.sessions = SessionCache(int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
+            self.sessions = SessionCache(int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens,
+                                         root=session_cache_dir, device=str(self.backbone.device),
+                                         key=fingerprint(self.model_dir, dtype, device) if session_cache_dir else None)
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         tune()
         if graphs is not None and capture is not False:

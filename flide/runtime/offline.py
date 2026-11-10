@@ -182,6 +182,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_dir=args.session_cache_dir,
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
                     **format_args)
     t_load = time.perf_counter() - t0
@@ -232,6 +233,8 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
         if pool is not None:
             pool.close()
             pool.join()
+        if engine.sessions is not None:
+            engine.sessions.close()
     total = time.perf_counter() - t_wall
     return {"rows": len(rows), "tokens": tokens, "micro_batches": micro, "budget": args.budget, "streamed": True,
             "stream_block": args.stream_block, "load_s": t_load, "plan_wait_s": t_wait, "forward_s": t_forward,
@@ -246,6 +249,8 @@ def run(args) -> None:
     from .. import settings
     from .engine import Engine, model_config, resolve_model
 
+    if args.session_cache_dir and not args.session_cache_gb > 0:
+        raise SystemExit("--session-cache-dir needs a session cache: pass --session-cache-gb GIB")
     format_args, plan_args = parse_kv(args.format_arg), parse_kv(args.plan_arg)
     if args.max_media_mb is not None:
         if not args.max_media_mb > 0:
@@ -290,6 +295,7 @@ def run(args) -> None:
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_dir=args.session_cache_dir,
                     backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant, **format_args)
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
@@ -321,6 +327,8 @@ def run(args) -> None:
             counts[result["status"]] = counts.get(result["status"], 0) + 1
     t_finish = time.perf_counter() - t0
     log(f"finish done in {t_finish:.1f}s, {counts}")
+    if engine.sessions is not None:
+        engine.sessions.close()
 
     timing = {"rows": len(rows), "tokens": tokens, "micro_batches": stats["micro_batches"], "budget": args.budget,
               "plan_s": t_plan, "load_s": t_load, "forward_s": t_forward, "finish_s": t_finish,
@@ -361,6 +369,8 @@ def add_parser(sub) -> None:
                    help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
                         "(a block is scheduled whole, so --stream-block decides how often that can happen)")
     p.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
+    p.add_argument("--session-cache-dir", default=None,
+                   help="directory that carries the session cache across runs: loaded at start, written at the end")
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--device", default="cuda:0")

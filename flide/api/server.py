@@ -87,6 +87,10 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
     aliases = set(family.aliases) | {"jev-latest"}
     app = FastAPI(title="flide", version=__version__)
     app.state.engine = engine
+    if getattr(engine, "sessions", None) is not None:
+        @app.on_event("shutdown")
+        async def _keep_sessions() -> None:
+            engine.sessions.close()
     app.state.debias = 1
     lock = threading.Lock()
     playground = Path(__file__).parent / "playground" / "index.html"

@@ -14,10 +14,28 @@ confirmed token by token. Entries live on the GPU and are evicted least recently
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import logging
 from collections import OrderedDict
+from pathlib import Path
 
 
 BLOCK = 64
+_FORMAT = 1
+log = logging.getLogger("flide.session")
+_HELD: dict[str, object] = {}
+
+
+def _plain(x):
+    """What torch.save can take: a detached CPU copy of every tensor, because tensors of different dtypes can share one
+    storage and torch refuses to save that."""
+    if isinstance(x, dict):
+        return {k: _plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_plain(v) for v in x]
+    return x.detach().to("cpu", copy=True) if hasattr(x, "detach") else x
 
 
 def _bytes(x) -> int:
@@ -66,7 +84,8 @@ class _Hashes:
 
 
 class SessionCache:
-    def __init__(self, budget_bytes: int, min_tokens: int = 2048, stride: int = 256, margin: int = 32):
+    def __init__(self, budget_bytes: int, min_tokens: int = 2048, stride: int = 256, margin: int = 32,
+                 root: str | None = None, key: str | None = None, keep: int = 8, device: str = "cuda:0"):
         self.budget = budget_bytes
         self.min_tokens = min_tokens
         self.stride = stride
@@ -77,6 +96,13 @@ class SessionCache:
         self.used = 0
         self._next = 0
         self.hits = self.misses = self.saved_tokens = 0
+        self.root = Path(root) if root else None
+        self.keep = keep
+        self.device = device
+        self._loaded = 0
+        self._closed = False
+        if self.root is not None:
+            self._attach(key)
 
     def mark(self, n_prefix: int, start: int = 0) -> int | None:
         """Where to save the state of a prefix of n tokens that starts computing at `start`: the last stride multiple
@@ -140,12 +166,108 @@ class SessionCache:
                 self.positions.pop(pos, None)
 
     def clear(self) -> None:
-        """Drop every entry (requests that already matched one keep their reference)."""
+        """Drop every entry (requests that already matched one keep their reference), on disk too."""
         self.entries.clear()
         self.index.clear()
         self.positions.clear()
         self.used = 0
+        if self.root is not None:
+            self._wipe()
+
+    def _wipe(self) -> None:
+        for path in self.root.glob("*.pt"):
+            path.unlink(missing_ok=True)
+
+    def _attach(self, key: str | None) -> None:
+        """Take over what a previous process saved in `root`, oldest first so the budget keeps the newest, when it
+        was saved from the same checkpoint on the same kind of device; anything else there is thrown away."""
+        import torch
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._hold()
+        meta = self.root / "meta.json"
+        want = {"format": _FORMAT, "key": key}
+        try:
+            have = json.loads(meta.read_text())
+        except (OSError, ValueError):
+            have = None
+        if have != want:
+            self._wipe()
+            meta.write_text(json.dumps(want))
+            return
+        for path in sorted(self.root.glob("*.pt")):
+            try:
+                saved = torch.load(path, map_location=self.device, weights_only=True)
+                entry = Entry(saved["tokens"], saved["states"], saved["kv"])
+            except Exception:
+                path.unlink(missing_ok=True)
+                continue
+            self.insert(entry)
+            self._loaded += 1
+
+    def _hold(self) -> None:
+        """One process at a time: close() rewrites the directory, so a second server must not point at the same one."""
+        try:
+            import fcntl
+        except ImportError:
+            return
+        root = str(self.root)
+        if root in _HELD:                 # this process already owns the directory
+            return
+        fd = (self.root / ".lock").open("w")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fd.close()
+            raise ValueError(f"{self.root} is in use by another flide process") from None
+        _HELD[root] = fd
+
+    def close(self) -> None:
+        """Write the newest `keep` entries to `root` (a process that stops cleanly leaves the next one its context)."""
+        if self.root is None or self._closed:
+            return
+        self._closed = True
+        import torch
+
+        self._wipe()
+        for i, entry in enumerate(list(self.entries.values())[-self.keep:]):
+            tmp = self.root / f".{i:08d}.tmp"
+            try:
+                torch.save({"tokens": entry.tokens, "states": _plain(entry.states), "kv": _plain(entry.kv)}, tmp)
+                os.replace(tmp, self.root / f"{i:08d}.pt")
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                log.warning("session cache: could not write %s", self.root / f"{i:08d}.pt", exc_info=True)
+        held = _HELD.pop(str(self.root), None)
+        if held is not None:
+            held.close()
 
     def stats(self) -> dict:
         return {"entries": len(self.entries), "bytes": self.used, "hits": self.hits, "misses": self.misses,
-                "saved_tokens": self.saved_tokens}
+                "saved_tokens": self.saved_tokens, "restored": self._loaded,
+                "on_disk": len(list(self.root.glob("*.pt"))) if self.root is not None else 0}
+
+
+def fingerprint(model_dir: str, dtype: str, device: str) -> str:
+    """What a saved state is valid for: the checkpoint's own config, the dtype, the device's capability, and the
+    software that computed it -- a state written by other kernels is not the same state, even if the tensors load."""
+    import torch
+
+    from .. import __version__
+
+    h = hashlib.sha256()
+    for name in ("config.json", "decision_config.json"):
+        path = Path(model_dir) / name
+        h.update(path.read_bytes() if path.is_file() else b"\0")
+    h.update(str(dtype).encode())
+    h.update(__version__.encode())
+    h.update(torch.__version__.encode())
+    try:
+        import triton
+
+        h.update(triton.__version__.encode())
+    except ImportError:
+        pass
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        h.update(str(torch.cuda.get_device_capability(device)).encode())
+    return h.hexdigest()[:32]

@@ -72,16 +72,30 @@ def run(args) -> None:
 
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,
                                 args.host, args.port, args.planners, args.access_log)
+    if args.session_cache_dir and not args.session_cache_gb > 0:
+        raise SystemExit("--session-cache-dir needs a session cache: pass --session-cache-gb GIB")
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_dir=args.session_cache_dir,
                     batch_invariant=args.batch_invariant, **_family_options(family, options))
     from ..runtime.online import Batcher
 
     batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms)
     freeze_heap()
     if fronts is not None:
-        return frontend.serve(batcher, fronts)
+        import signal
+
+        def _stop(*_) -> None:
+            raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGINT, _stop)
+        try:
+            return frontend.serve(batcher, fronts)
+        finally:
+            if engine.sessions is not None:
+                engine.sessions.close()
     app = create_app(engine, model_name=name, batcher=batcher)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=args.access_log)
 
@@ -112,6 +126,9 @@ def add_parser(sub) -> None:
     s.add_argument("--session-cache-gb", type=float, default=0.0,
                    help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it")
     s.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
+    s.add_argument("--session-cache-dir", default=None,
+                   help="directory that carries the session cache across restarts: loaded at start, written when this "
+                        "process stops cleanly (needs a session cache size)")
     s.add_argument("--planners", type=int, default=4, help="CPU threads that render and tokenize requests")
     s.add_argument("--frontends", type=int, default=0,
                    help="HTTP front-end processes (each plans and finishes requests with its own planners); 0 serves "
