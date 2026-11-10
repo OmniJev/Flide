@@ -50,7 +50,7 @@ def run(args) -> None:
 
     from .. import formats, settings
     from ..runtime.engine import Engine, model_config, resolve_model
-    from ..runtime.offline import parse_kv
+    from ..runtime.offline import cache_gb, parse_kv, resolve_cache_gb
     from .server import create_app
 
     if args.max_media_mb is not None:
@@ -58,6 +58,12 @@ def run(args) -> None:
             raise SystemExit("--max-media-mb is a positive number")
         os.environ["FLIDE_MAX_MEDIA_MB"] = str(args.max_media_mb)
         settings.max_media_bytes = int(args.max_media_mb * 2 ** 20)
+    try:
+        cache_size = resolve_cache_gb(cache_gb(args.session_cache_gb), args.device)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    if str(args.session_cache_gb).strip().lower() == "auto":
+        log.info("session cache %.2f GiB (auto)", cache_size)
     model_dir = resolve_model(args.model)
     family = formats.detect(model_dir, model_config(model_dir), args.format)
     options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
@@ -74,7 +80,7 @@ def run(args) -> None:
                                 args.host, args.port, args.planners, args.access_log)
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
-                    session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_gb=cache_size, session_min_tokens=args.session_min_tokens,
                     batch_invariant=args.batch_invariant, **_family_options(family, options))
     from ..runtime.online import Batcher
 
@@ -109,8 +115,9 @@ def add_parser(sub) -> None:
                         "changes the numbers a little")
     s.add_argument("--max-branch-tokens", type=int, default=None)
     s.add_argument("--max-request-tokens", type=int, default=None)
-    s.add_argument("--session-cache-gb", type=float, default=0.0,
-                   help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it")
+    s.add_argument("--session-cache-gb", default="0", metavar="GIB|auto",
+                   help="GPU memory for saved prefix states, or 'auto' for 15%% of the device (at most 4 GiB); a "
+                        "request that extends an earlier prefix resumes from it")
     s.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
     s.add_argument("--planners", type=int, default=4, help="CPU threads that render and tokenize requests")
     s.add_argument("--frontends", type=int, default=0,

@@ -67,6 +67,29 @@ def parse_kv(items) -> dict:
 _INPUTS = ("media", "images", "videos", "video", "assets")
 
 
+def cache_gb(text: str) -> float:
+    """`--session-cache-gb`: `auto` for the size a device can spare (engine.session_default_gib), or a number of GiB;
+    0 turns the cache off."""
+    if str(text).strip().lower() == "auto":
+        return -1.0            # resolved against the device once one is known
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        raise ValueError(f"--session-cache-gb takes 'auto' or a size in GiB, not {text!r}") from None
+    if value < 0:
+        raise ValueError(f"--session-cache-gb takes a size of 0 or more, not {value}")
+    return value
+
+
+def resolve_cache_gb(value: float, device: str) -> float:
+    """The size `cache_gb` asked for: a device's spare share when it said `auto`, the number otherwise."""
+    if value >= 0:
+        return value
+    from .engine import _total_memory, session_default_gib
+
+    return session_default_gib(_total_memory(device))
+
+
 def _request(row):
     from ..api.schema import SystemOneRequest
 
@@ -173,7 +196,7 @@ def follow_ups(engine, rows, statuses, plans, outputs, plan_args) -> tuple[int, 
             plans[i], outputs[i] = p, o
 
 
-def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) -> dict:
+def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log, cache_size: float) -> dict:
     """Plan, forward and finish overlapped: the planning pool starts before the model loads and keeps running ahead,
     the GPU takes the rows block by block as soon as a block is planned, a writer thread finishes and writes each
     block in row order while the next one is on the GPU."""
@@ -186,7 +209,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     it, pool = plan_iter(rows, name, model_dir, args.workers, format_args, plan_args)
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
-                    session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_gb=cache_size, session_min_tokens=args.session_min_tokens,
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
                     **format_args)
     t_load = time.perf_counter() - t0
@@ -252,6 +275,11 @@ def run(args) -> None:
     from .engine import Engine, model_config, resolve_model
 
     format_args, plan_args = parse_kv(args.format_arg), parse_kv(args.plan_arg)
+    try:
+        cache_size = resolve_cache_gb(cache_gb(args.session_cache_gb), args.device)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    auto_cache = str(args.session_cache_gb).strip().lower() == "auto"
     if args.max_media_mb is not None:
         if not args.max_media_mb > 0:
             raise SystemExit("--max-media-mb is a positive number")
@@ -268,14 +296,16 @@ def run(args) -> None:
     def log(msg):
         print(f"[{time.perf_counter() - t_start:8.1f}s] {msg}", flush=True)
 
+    if auto_cache:
+        log(f"session cache {cache_size:.2f} GiB (auto)")
     rows = read_rows(args.rows, args.every, args.limit)
     log(f"{len(rows)} rows from {len(args.rows)} file(s)")
     model_dir = resolve_model(args.model)
     name = formats.detect(model_dir, model_config(model_dir), args.format).name
     if args.stream_block > 0:
-        timing = run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log)
+        timing = run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log, cache_size)
         env = {"engine": "flide", "format": name, "quantize": args.quantize, "batch_invariant": args.batch_invariant,
-               "session_cache_gb": args.session_cache_gb, "session_min_tokens": args.session_min_tokens,
+               "session_cache_gb": cache_size, "session_min_tokens": args.session_min_tokens,
                "model": model_dir, "dtype": args.dtype, "format_args": format_args, "plan_args": plan_args,
                "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
                "torch": torch.__version__, "rows": [str(x) for x in args.rows], "every": args.every,
@@ -293,7 +323,7 @@ def run(args) -> None:
 
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
-                    session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
+                    session_cache_gb=cache_size, session_min_tokens=args.session_min_tokens,
                     backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant, **format_args)
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
@@ -361,9 +391,10 @@ def add_parser(sub) -> None:
     p.add_argument("--every", type=int, default=1, help="keep every n-th row")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--budget", type=int, default=65536, help="tokens per micro-batch")
-    p.add_argument("--session-cache-gb", type=float, default=0.0,
-                   help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
-                        "(a block is scheduled whole, so --stream-block decides how often that can happen)")
+    p.add_argument("--session-cache-gb", default="0", metavar="GIB|auto",
+                   help="GPU memory for saved prefix states, or 'auto' for 15%% of the device (at most 4 GiB); a row "
+                        "that extends an earlier one resumes from it. A block is scheduled whole, so --stream-block "
+                        "decides how often a row can resume")
     p.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dtype", default="bfloat16")

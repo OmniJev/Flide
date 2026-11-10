@@ -34,6 +34,22 @@ def model_config(model_dir: str):
     return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
 
 
+def session_default_gib(total_bytes: int) -> float:
+    """The session cache a device gets when the caller names no size: 15% of its memory, at most 4 GiB, and none when
+    that would be under 1 GiB. `--session-cache-gb 0` still asks for none."""
+    share = min(4 * 2 ** 30, int(0.15 * max(0, total_bytes)))
+    return round(share / 2 ** 30, 2) if share >= 2 ** 30 else 0.0
+
+
+def _total_memory(device: str) -> int:
+    """The device's own memory in bytes; 0 for something that is not a CUDA device."""
+    import torch
+
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return 0
+    return torch.cuda.get_device_properties(device).total_memory
+
+
 def _blocks(plan: Plan) -> bool:
     """Whether a plan reads any of its prefix both ways, attention "blocks" or "prefix" (formats.base.Plan); ValueError
     for an attention no backbone runs."""
