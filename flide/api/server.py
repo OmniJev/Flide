@@ -12,6 +12,7 @@ finishing run on CPU threads, so /health stays responsive while a long request i
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures as cf
 import logging
 import threading
 import time
@@ -90,6 +91,7 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
     lock = threading.Lock()
     playground = Path(__file__).parent / "playground" / "index.html"
     released = release_date
+    t_start = time.perf_counter()
 
     def decide(req, **options):
         with lock:
@@ -241,6 +243,22 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         if sessions is not None:
             sessions.clear()
         return {"status": "ok", "sessions": sessions.stats() if sessions is not None else None}
+
+    @app.get("/stats")
+    async def stats():
+        """What the server has done since it started: rounds, requests, where the GPU thread's time went, and what
+        the session cache holds. Read-only, unlike /flush_cache."""
+        remote = getattr(batcher, "stats", None)
+        payload = remote() if remote is not None else {}
+        if isinstance(payload, cf.Future):
+            payload = await asyncio.wrap_future(payload)
+        payload = dict(payload)
+        if "sessions" not in payload:
+            sessions = getattr(engine, "sessions", None)
+            payload["sessions"] = sessions.stats() if sessions is not None else None
+        payload.update(model=model_name, format=family.name, engine="flide", version=__version__,
+                       uptime_s=round(time.perf_counter() - t_start, 3))
+        return JSONResponse(content=payload)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
