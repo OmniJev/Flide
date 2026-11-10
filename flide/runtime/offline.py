@@ -175,6 +175,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     import concurrent.futures as cf
 
     from .engine import Engine
+    from .kcache import tune
 
     t_wall = time.perf_counter()
     it, pool = plan_iter(rows, name, model_dir, args.workers, format_args, plan_args)
@@ -183,7 +184,12 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
                     **format_args)
     t_load = time.perf_counter() - t0
-    log(f"model loaded in {t_load:.1f}s (planning meanwhile)")
+    # the kernels of the packed path, and the autotuner picks the kernel bundle holds, before the blocks are timed:
+    # the first block would otherwise pay for them and report a tokens/s that is not a steady state
+    tune()
+    t_warm = time.perf_counter()
+    engine.warmup()
+    log(f"model loaded in {t_load:.1f}s (planning meanwhile), packed path warmed in {time.perf_counter() - t_warm:.1f}s")
     counts: dict[str, int] = {}
     tokens = micro = 0
     t_forward = t_wait = 0.0
