@@ -181,6 +181,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     it, pool = plan_iter(rows, name, model_dir, args.workers, format_args, plan_args)
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
+                    session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
                     **format_args)
     t_load = time.perf_counter() - t0
@@ -235,15 +236,27 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     return {"rows": len(rows), "tokens": tokens, "micro_batches": micro, "budget": args.budget, "streamed": True,
             "stream_block": args.stream_block, "load_s": t_load, "plan_wait_s": t_wait, "forward_s": t_forward,
             "finish_tail_s": t_tail, "wall_s": total, "total_excl_load_s": total - t_load,
-            "tokens_per_s_forward": tokens / max(t_forward, 1e-9), "workers": args.workers, "counts": counts}
+            "tokens_per_s_forward": tokens / max(t_forward, 1e-9), "workers": args.workers, "counts": counts,
+            "sessions": engine.sessions.stats() if engine.sessions is not None else None}
 
 
 def run(args) -> None:
     import torch
 
+    from .. import settings
     from .engine import Engine, model_config, resolve_model
 
     format_args, plan_args = parse_kv(args.format_arg), parse_kv(args.plan_arg)
+    if args.max_media_mb is not None:
+        if not args.max_media_mb > 0:
+            raise SystemExit("--max-media-mb is a positive number")
+        os.environ["FLIDE_MAX_MEDIA_MB"] = str(args.max_media_mb)
+        settings.max_media_bytes = int(args.max_media_mb * 2 ** 20)
+    options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
+               "max_request_tokens": args.max_request_tokens, "media_root": args.media_root,
+               "allow_media_urls": args.allow_media_urls or None}
+    # the family options the server takes too, so an offline run reproduces a served one; --format-arg still wins
+    format_args = {**{k: v for k, v in options.items() if v is not None}, **format_args}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     t_start = time.perf_counter()
@@ -258,6 +271,7 @@ def run(args) -> None:
     if args.stream_block > 0:
         timing = run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log)
         env = {"engine": "flide", "format": name, "quantize": args.quantize, "batch_invariant": args.batch_invariant,
+               "session_cache_gb": args.session_cache_gb, "session_min_tokens": args.session_min_tokens,
                "model": model_dir, "dtype": args.dtype, "format_args": format_args, "plan_args": plan_args,
                "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
                "torch": torch.__version__, "rows": [str(x) for x in args.rows], "every": args.every,
@@ -275,6 +289,7 @@ def run(args) -> None:
 
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
+                    session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant, **format_args)
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
@@ -329,10 +344,23 @@ def add_parser(sub) -> None:
     p.add_argument("--format", default=None, help="model family (default: detected from the checkpoint)")
     p.add_argument("--format-arg", action="append", metavar="KEY=VALUE", help="family option, e.g. max_branch_tokens=131072")
     p.add_argument("--plan-arg", action="append", metavar="KEY=VALUE", help="per-request option, e.g. debias=1")
+    p.add_argument("--calibration", default=None, help="calibration.json (default: the one next to the weights)")
+    p.add_argument("--max-branch-tokens", type=int, default=None)
+    p.add_argument("--max-request-tokens", type=int, default=None)
+    p.add_argument("--media-root", default=None,
+                   help="directory that local media paths in a row resolve against (without it, only base64)")
+    p.add_argument("--allow-media-urls", action="store_true",
+                   help="fetch media that rows give as http(s) URLs; the run then reaches any address it can")
+    p.add_argument("--max-media-mb", type=float, default=None,
+                   help="largest image or video a row may carry, in MiB once decoded (default 64)")
     p.add_argument("--name", default="flide", help="model name written into each response")
     p.add_argument("--every", type=int, default=1, help="keep every n-th row")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--budget", type=int, default=65536, help="tokens per micro-batch")
+    p.add_argument("--session-cache-gb", type=float, default=0.0,
+                   help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
+                        "(a block is scheduled whole, so --stream-block decides how often that can happen)")
+    p.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--device", default="cuda:0")
