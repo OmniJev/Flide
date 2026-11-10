@@ -3,7 +3,8 @@ row sits: one fixed tile shape, the whole reduction in one program, no split alo
 do not depend on the other requests of its round (`settings.batch_invariant`).
 
 On compute capability 9 and later bf16 products run a persistent kernel that streams its tiles through the Hopper
-tensor-memory accelerator; elsewhere, and for the float32 token head, a portable kernel."""
+tensor-memory accelerator, at the widest tile shape the device's shared memory per block holds; elsewhere, and for the
+float32 token head, a portable kernel."""
 from __future__ import annotations
 
 import threading
@@ -14,6 +15,7 @@ import triton.language as tl
 
 CFG = (128, 256, 64, 8, 3)
 SMALL_M, SMALL_CFG = 256, (64, 128, 64, 4, 4)
+NEEDS = {CFG: 163856, SMALL_CFG: 90136}
 _sms = None
 _local = threading.local()
 
@@ -74,6 +76,22 @@ def _alloc(size: int, alignment: int, stream):
     return torch.empty(size, device="cuda", dtype=torch.int8)
 
 
+def budget(device) -> int:
+    """The shared memory per block this device lets one kernel ask for."""
+    return torch.cuda.get_device_properties(device).shared_memory_per_block_optin
+
+
+def pick(M: int, budget_bytes: int, cfg: tuple | None = None):
+    """The TMA tile shape for an M-row product at this shared-memory budget: the wide shape when the product is long
+    and the shape fits, the narrow one otherwise, None when not even the narrow one fits (the portable kernel below,
+    which is invariant too, serves those devices). `NEEDS` holds the shared memory each shape asks for, measured on a
+    device (tests/test_invariant.py pins the numbers this change was made for)."""
+    if cfg is not None:
+        return cfg
+    order = (SMALL_CFG,) if (SMALL_M and M <= SMALL_M) else (CFG, SMALL_CFG)
+    return next((c for c in order if NEEDS[c] <= budget_bytes), None)
+
+
 def mm(x: torch.Tensor, w: torch.Tensor, out: torch.Tensor | None = None, cfg: tuple | None = None) -> torch.Tensor:
     """x [M, K] @ w[N, K].T, rows of x and w contiguous in K; `cfg` forces a tile shape (tests)."""
     global _sms
@@ -89,8 +107,9 @@ def mm(x: torch.Tensor, w: torch.Tensor, out: torch.Tensor | None = None, cfg: t
     ieee = x.dtype == torch.float32
     tma = (not ieee and torch.cuda.get_device_capability(x.device)[0] >= 9 and K % 8 == 0
            and x.stride(0) % 8 == 0 and w.stride(0) % 8 == 0 and y.stride(0) % 8 == 0 and y.stride(-1) == 1)
-    if tma:
-        BM, BN, BK, warps, stages = cfg or (SMALL_CFG if SMALL_M and M <= SMALL_M else CFG)
+    shape = pick(M, budget(x.device), cfg) if tma else None
+    if shape is not None:
+        BM, BN, BK, warps, stages = shape
         if _sms is None:
             _sms = torch.cuda.get_device_properties(x.device).multi_processor_count
         if not getattr(_local, "allocator", False):
