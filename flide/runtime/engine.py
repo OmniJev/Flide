@@ -100,12 +100,25 @@ def _gib() -> tuple[float, float, float]:
     return torch.cuda.memory_allocated() / g, torch.cuda.memory_reserved() / g, (total - free) / g
 
 
+def refuse_invariant_quantized(batch_invariant: bool, backbone_options: dict | None) -> None:
+    """`--quantize` and `--batch-invariant` cannot both hold: the quantized products come from a scaled matmul whose
+    split depends on the batch, so the promise `--batch-invariant` makes does not survive it. Refused rather than
+    silently answering with batch-dependent numbers."""
+    quantize = (backbone_options or {}).get("quantize")
+    if batch_invariant and quantize:
+        raise ValueError(
+            f"--quantize {quantize} cannot be combined with --batch-invariant: the quantized products come from a "
+            "scaled matmul whose split depends on the batch, so the same question can answer differently in another "
+            "round. Drop one of the two.")
+
+
 class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
                  budget: int = 65536, backbone_options: dict | None = None, capture: bool | int = 4096,
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
+        refuse_invariant_quantized(batch_invariant, backbone_options)
         if batch_invariant:
             settings.batch_invariant = True
         from ..kernels import launcher
