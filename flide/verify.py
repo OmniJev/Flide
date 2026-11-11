@@ -87,7 +87,8 @@ def run(args) -> None:
 
     model_dir = resolve_model(args.model)
     family = formats.detect(model_dir, model_config(model_dir), args.format)
-    eng = Engine(model_dir, format=family.name, device=args.device, backbone_options={"cuda_graphs": True},
+    eng = Engine(model_dir, format=family.name, device=args.device,
+                 backbone_options={"cuda_graphs": True, "quantize": args.quantize},
                  session_cache_gb=args.session_cache_gb, batch_invariant=args.batch_invariant,
                  **_family_options(family, parse_kv(args.format_arg)))
     reqs, plans = [], []
@@ -195,6 +196,8 @@ def add_parser(sub) -> None:
     v.add_argument("--format-arg", action="append", metavar="KEY=VALUE", help="family option")
     v.add_argument("--limit", type=int, default=32, help="requests to read")
     v.add_argument("--device", default="cuda:0")
+    v.add_argument("--quantize", choices=("fp8",), default=None,
+                   help="check the quantized model the server runs, as serve --quantize does")
     v.add_argument("--batch-invariant", action="store_true", help="check the batch-invariant mode, bit for bit")
     v.add_argument("--session-cache-gb", type=float, default=0.0, help="also check the session cache, this large")
     v.set_defaults(func=run)
