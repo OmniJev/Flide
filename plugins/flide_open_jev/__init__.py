@@ -97,18 +97,18 @@ class OpenJev(Format):
             self._wrap = tuple(chat.split(mark)) if chat.count(mark) == 1 else ("", "")
         return self._wrap
 
-    def _prompts(self, context: str, tails: list[str]) -> list[list[int]]:
-        """Token ids of the prompts context + tail with the long context tokenized once. The context ends with a
-        newline run and every tail starts with a letter, where the pre-tokenizer always splits; checked on the end
-        of the context with the first tail, and on failure every prompt is tokenized whole."""
+    def _prompts(self, context: str, tails: list[str]) -> tuple[list[int], list[list[int]]]:
+        """Token ids of the prompts context + tail, as the ids every prompt starts with (the long context, tokenized
+        once) and each prompt's own ids after them. The context ends with a newline run and every tail starts with a
+        letter, where the pre-tokenizer always splits; checked on the end of the context with the first tail, and on
+        failure nothing is shared and every prompt is tokenized whole."""
         pre, post = self._chat_wrap()
         enc = lambda text, first=False: self.tokenizer(text, add_special_tokens=first)["input_ids"]
         if pre or post:
             window, first_tail = context[-256:], tails[0] + post
             if enc(window + first_tail) == enc(window) + enc(first_tail):
-                shared = self._encode_first(pre + context)
-                return [shared + t for t in self._encode_many([t + post for t in tails])]
-        return [self._prompt(context + t) for t in tails]
+                return self._encode_first(pre + context), self._encode_many([t + post for t in tails])
+        return [], [self._prompt(context + t) for t in tails]
 
     def _encode_first(self, text: str) -> list[int]:
         """enc(text, first=True) through the tokenizer's own library: a long text cut where the tokenizer never merges
@@ -139,22 +139,24 @@ class OpenJev(Format):
             for opt in options:
                 tails.append(head + f"Proposed answer: {opt}\nIs this proposed answer correct? Answer Yes or No.")
                 owners.append(qid)
-        seqs = self._prompts(f"Context:\n{_render(state)}\n\n", tails)
-        longest = max(len(s) for s in seqs)
+        shared, rest = self._prompts(f"Context:\n{_render(state)}\n\n", tails)
+        longest = len(shared) + max(len(r) for r in rest)
         if longest > self.max_length:
             raise ValueError(f"input length {longest} exceeds max_length={self.max_length}")
-        n = min(len(s) for s in seqs) - 1
-        first = seqs[0]
+        # The prefix is the shared ids and what the tails then have in common (the question, when there is one), so
+        # only the tails are compared: the shared ids are never copied into the branches or scanned.
+        n = min(len(r) for r in rest) - 1
+        first = rest[0]
         p = 0
         while p < n:
             k = min(n, p + 256)
-            if all(s[p:k] == first[p:k] for s in seqs):
+            if all(r[p:k] == first[p:k] for r in rest):
                 p = k
                 continue
-            while p < n and all(s[p] == first[p] for s in seqs):
+            while p < n and all(r[p] == first[p] for r in rest):
                 p += 1
             break
-        return Plan(first[:p], [s[p:] for s in seqs], (SCORE,), {"records": records, "owners": owners})
+        return Plan(shared + first[:p], [r[p:] for r in rest], (SCORE,), {"records": records, "owners": owners})
 
     def finish(self, request, plan: Plan, outputs, debug: bool = False, **_):
         scores: dict[str, list[float]] = {}
