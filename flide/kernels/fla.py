@@ -28,6 +28,7 @@ class _PinnedNB:
 def pin_fla_size_buckets() -> None:
     import importlib
 
+    # (fla <= 0.5 module, fla 0.6 module) of each kernel; fla 0.6 moved them and dropped NB from the conv kernel
     for paths, name in ((("fla.modules.conv.triton.ops", "fla.modules.causal_conv1d.ops"), "causal_conv1d_fwd_kernel"),
                         (("fla.modules.l2norm", "fla.modules.norm.l2norm"), "l2norm_fwd_kernel")):
         for path in paths:

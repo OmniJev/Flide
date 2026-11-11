@@ -58,7 +58,7 @@ def check_cuda() -> None:
                            f"{torch_install(driver_cuda())}")
     need = int(torch.version.cuda.split(".")[0])
     have = driver_cuda()
-    if have is not None and have[0] < need:
+    if have is not None and have[0] < need:   # within a major version, newer builds run on older drivers
         fix = (f"Install the CUDA 12.6 build, which this driver runs: {torch_install(have)}" if have[0] == 12
                else "Update the NVIDIA driver to 525 or newer.")
         raise RuntimeError(f"PyTorch {torch.__version__} is built for CUDA {torch.version.cuda}, and this machine's "

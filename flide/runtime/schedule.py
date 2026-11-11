@@ -16,8 +16,8 @@ from .pack import Job
 
 @dataclass
 class Piece:
-    request: int
-    branches: list[int]
+    request: int                 # index into the plans
+    branches: list[int]          # branch indices of that plan carried by this piece
     job: Job
 
 
@@ -44,6 +44,8 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
     if not plan.prefix:
         if plan.attention == "prefix":
             raise ValueError("attention \"prefix\" needs a prefix")
+        # sequences of their own: each is a job whose last token is its one branch; under block attention the whole
+        # sequence is the job's prefix (one block) and a copy of its last token the branch, which nothing reads
         blocks = plan.attention == "blocks"
         if plan.vision is not None and not blocks:
             raise ValueError("a plan without a prefix takes media under block attention only")
@@ -63,6 +65,9 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
     if plan.tokens - (session or {}).get("start", 0) <= budget:
         return [_piece(i, plan, list(range(len(plan.suffixes))), session)]
     P = len(plan.prefix) - (session or {}).get("start", 0)
+    # the branch tokens a piece takes on top of its prefix: what the budget leaves; a prefix that fills the budget alone
+    # runs whole in every piece anyway, so a piece of one branch saves no memory and computes the prefix once per branch;
+    # its pieces take up to a budget of branch tokens instead
     room = budget if P >= budget else budget - P
     pieces, cur, size = [], [], 0
     for b, s in enumerate(plan.suffixes):

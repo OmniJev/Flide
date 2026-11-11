@@ -269,7 +269,7 @@ class Wald(Format):
             if q.type == "noul":
                 y = p[1]
                 low = round(1.0 - self.floor, 12)
-                if self.floor and low < y < self.floor:
+                if self.floor and low < y < self.floor:   # the decisive floor
                     y = self.floor if y > 0.5 else low
                 answers[qid] = make_noul(y)
             elif q.type == "choice":

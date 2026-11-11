@@ -31,6 +31,8 @@ the model is asked and read:
   images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
                the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
                without it images are refused. max_prompt_tokens counts the images' tokens
+  midloop      the checkpoint's recurrent depth (decision_config "midloop"): blocks of layers that run again inside the
+               pass, each pass stepping from the stream that entered it (the backbone's set_midloop)
   types, max_options, max_prompt_tokens
   state        the state as the prompt shows it, cut to a token budget: "text" (a Jinja template of state, the prompt
                reads it as state_text), "max_tokens", "min_tokens", "keep" ("head" or "tail", or one per state shape
@@ -51,6 +53,7 @@ temperature of its type.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import string
@@ -63,12 +66,14 @@ from ..api.schema import ChoiceQuestion, NoulQuestion, SystemOneRequest, SystemO
 from . import register
 from .base import Format, Plan, Read
 from .next_token import NextToken, TokenRows
+from .tokens import Pieces
 
 FORMAT_ID = "flide-template-v1"
 KNOWN = Path(__file__).resolve().parent / "known"
 LETTERS = string.ascii_uppercase
 READ = Read("labels")
 TYPES = ("choice", "noul", "score")
+log = logging.getLogger("flide.template")
 
 
 def _describe(value: Any) -> str:
@@ -122,14 +127,15 @@ def _value(v: Any, model_dir: str) -> Any:
 
 def known(model_dir: str, decision_config: dict | None) -> dict | None:
     """The shipped configuration that claims a checkpoint: by its Hub repository in the path, else by its files."""
-    parts = {p.lower() for p in Path(model_dir).resolve().parts}
+    parts = {p.lower() for p in Path(model_dir).resolve().parts}   # the Hub cache's models--org--name, whole: a repo whose
+    # name extends another's (Sieve-31B-v3 after Sieve-31B) is not claimed by the shorter one
     for f in sorted(KNOWN.glob("*.json")):
         spec = json.loads(f.read_text())
         m = spec.get("match", {})
         if any(f"models--{r.lower().replace('/', '--')}" in parts for r in m.get("repos", ())):
             return spec
         files, dc, keys = m.get("files", ()), m.get("decision_config"), m.get("decision_config_keys")
-        if "config" in m:
+        if "config" in m:   # a checkpoint whose decision fields are in its config.json: those fields and its files
             cfg = Path(model_dir) / "config.json"
             if files and all((Path(model_dir) / x).is_file() for x in files) and cfg.is_file() and \
                     all(json.loads(cfg.read_text()).get(k) == v for k, v in m["config"].items()):
@@ -156,7 +162,7 @@ class Template(Format):
         import transformers
 
         self.model_dir = model_dir
-        if isinstance(spec, str):
+        if isinstance(spec, str):   # a file, or the name of a configuration that ships with Flide
             spec = json.loads((Path(spec) if Path(spec).is_file() else KNOWN / f"{spec}.json").read_text())
         if spec is None:
             p = Path(model_dir) / "decision_config.json"
@@ -167,6 +173,7 @@ class Template(Format):
         self.spec = spec = {k: (v if k in ("messages", "prompt", "match") else _value(v, model_dir))
                             for k, v in spec.items()}
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self._pieces, self._cut_checks = Pieces(self.tokenizer), 0
         env = jinja2.sandbox.ImmutableSandboxedEnvironment(keep_trailing_newline=True, undefined=jinja2.StrictUndefined)
         env.filters["describe"] = _describe
         env.filters["json"] = _json
@@ -209,6 +216,7 @@ class Template(Format):
         t = spec.get("temperature", 1.0)
         self.temperature = {k: _temp(t.get(k, t.get("default", 1.0))) for k in TYPES} if isinstance(t, dict) \
             else {k: float(t) for k in TYPES}
+        self.midloop = spec.get("midloop")
         self.head = spec.get("head", "output")
         self.softcap = bool(spec.get("softcap", True))
         self.sets, self.row_ids = self._label_sets(spec)
@@ -227,7 +235,7 @@ class Template(Format):
         if self.prompt is not None:
             return self.prompt.render(**ctx)
         msgs = [{"role": role, "content": tpl.render(**ctx)} for role, tpl in self.messages]
-        if images:
+        if images:   # the images, then the text of the last user turn
             last = max(i for i, m in enumerate(msgs) if m["role"] == "user")
             msgs[last]["content"] = [{"type": "image"}] * images + [{"type": "text", "text": msgs[last]["content"]}]
             return self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
@@ -247,6 +255,31 @@ class Template(Format):
             p.image_processor.size = {"shortest_edge": int(self.images["min_pixels"]),
                                       "longest_edge": int(self.images["max_pixels"])}
         return p
+
+    CUT_CHECKS = 8
+
+    def _rows(self, texts: list[str]) -> tuple[list[int], list[list[int]]]:
+        """The prompts' token ids as a head they all start with and each one's tail after it: their common start is
+        tokenized once, up to a cut where tokens restart (formats/tokens.py), and the first plans also tokenize one
+        prompt whole. One prompt, or prompts with boundaries, come whole after an empty head."""
+        if len(texts) < 2 or not self._pieces.ok or any(self.boundary in t for t in texts):
+            return [], self._encode(texts)
+        a, b = min(texts), max(texts)   # the common start of all is that of the first and last in order
+        lo, hi = 0, min(len(a), len(b))
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            lo, hi = (mid, hi) if a[:mid] == b[:mid] else (lo, mid - 1)
+        c = self._pieces.last_cut(texts[0], lo - 1) if lo else 0
+        if not c:
+            return [], self._encode(texts)
+        head, *tails = self._pieces.encode(self.tokenizer, [texts[0][:c]] + [t[c:] for t in texts])
+        if self._cut_checks < self.CUT_CHECKS:
+            self._cut_checks += 1
+            if head + tails[0] != self._encode(texts[:1])[0]:
+                self._pieces.ok = False
+                log.warning("tokenizing in pieces off: a cut changed the tokens of a prompt")
+                return [], self._encode(texts)
+        return head, tails
 
     def _encode(self, texts: list[str]) -> list[list[int]]:
         """Token ids of rendered prompts; the pieces between boundaries are tokenized apart and joined."""
@@ -269,7 +302,7 @@ class Template(Format):
 
     def _token(self, label: str, probe: list[int] | None, text: str | None) -> int | None:
         tok = self.tokenizer
-        if probe is None:
+        if probe is None:   # standalone
             ids = tok.encode(label, add_special_tokens=False)
             return ids[0] if len(ids) == 1 and tok.decode(ids, clean_up_tokenization_spaces=False) == label else None
         ids = self._encode([text + label])[0]
@@ -278,7 +311,7 @@ class Template(Format):
     def _label_sets(self, spec) -> tuple[dict, list[int]]:
         """{question type: [(upto, labels)]} and the token ids the head reads, every label once."""
         raw = spec.get("labels", "A-Z+")
-        if spec.get("label_ids") is not None:
+        if spec.get("label_ids") is not None:   # one list whose ids the release fixed
             labels, ids = list(raw), [int(i) for i in spec["label_ids"]]
             if len(labels) != len(ids):
                 raise ValueError("labels and label_ids differ in length")
@@ -408,8 +441,8 @@ class Template(Format):
             state_text, n = self._cut_state(request.state, budget) if self.state_text is not None else (None, 0)
             texts = [self._render(request.state, kind, q, keys, descs, labels, state_text, qid, everyone, len(refs))
                      for qid, q, kind, keys, descs, labels in questions]
-            rows = self._encode(texts)
-            over = max(len(r) for r in rows) - self.max_prompt_tokens
+            head, tails = self._rows(texts)
+            over = len(head) + max(len(t) for t in tails) - self.max_prompt_tokens
             if over <= 0:
                 break
             if self.state_text is None:
@@ -419,26 +452,31 @@ class Template(Format):
                 raise ValueError(f"the questions leave no room for the state within {self.max_prompt_tokens} tokens")
         else:
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
-        if self.attention == "blocks" and not refs:
-            return Plan([], rows, (READ,), data, attention="blocks")
-        if self.attention == "prefix":
+        if self.attention == "blocks" and not refs:   # whole prompts read both ways: sequences of their own
+            return Plan([], [head + t for t in tails], (READ,), data, attention="blocks")
+        if self.attention == "prefix":   # the request through the last prefix_ends read both ways, each tail one way
+            rows = [head + t for t in tails]
             end = self._prefix_end(rows[0])
             if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
                 raise ValueError("the prompts differ before their requested parts end")
             return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data, attention="prefix")
-        m = min(len(r) for r in rows) - 1
+        m = min(len(t) for t in tails) - 1   # where the prompts part, past the head they share
         for i in range(m):
-            if any(r[i] != rows[0][i] for r in rows):
+            if any(t[i] != tails[0][i] for t in tails):
                 m = i
                 break
+        if m < 0:   # a prompt ends with the head
+            rows, n = [head + t for t in tails], len(head) + m
+            shared, suffixes = rows[0][:n], [r[n:] for r in rows]
+        else:
+            shared, suffixes = head + tails[0][:m], [t[m:] for t in tails]
         if not refs:
-            return Plan(rows[0][:m], [r[m:] for r in rows], (READ,), data)
-        suffixes = [r[m:] for r in rows]
-        prefix, vision = self._vision(rows[0][:m], [self._open(r) for r in refs], texts[0], suffixes[0])
+            return Plan(shared, suffixes, (READ,), data)
+        prefix, vision = self._vision(shared, [self._open(r) for r in refs], texts[0], suffixes[0])
         longest = len(prefix) + max(len(x) for x in suffixes)
         if longest > self.max_prompt_tokens:
             raise ValueError(f"prompt is {longest} tokens with its images, limit is {self.max_prompt_tokens}")
-        if self.attention == "blocks":
+        if self.attention == "blocks":   # sequences of their own, each starting with the head that holds the images
             return Plan([], [prefix + s for s in suffixes], (READ,), data, vision=vision, attention="blocks")
         return Plan(prefix, suffixes, (READ,), data, vision=vision)
 

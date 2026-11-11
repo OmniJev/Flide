@@ -55,12 +55,12 @@ def _set_dtype(config, dtype) -> None:
         if id(c) in seen:
             continue
         seen.add(id(c))
-        for attr in ("dtype", "torch_dtype"):
-            if hasattr(c, attr):
-                try:
-                    setattr(c, attr, dtype)
-                except Exception:
-                    pass
+        attr = "dtype" if hasattr(c, "dtype") else "torch_dtype" if "torch_dtype" in vars(c) else None
+        if attr:
+            try:
+                setattr(c, attr, dtype)
+            except Exception:
+                pass
         for v in vars(c).values():
             if hasattr(v, "to_dict") and hasattr(v, "model_type"):
                 stack.append(v)
@@ -186,12 +186,13 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter) -> d
         model.tie_weights()
     head = model.get_output_embeddings() if adapter is not None and adapter.embedding is not None else None
     if head is not None and head.weight.data_ptr() == model.get_input_embeddings().weight.data_ptr():
-        head.weight = torch.nn.Parameter(adapter.embedding, requires_grad=False)
+        head.weight = torch.nn.Parameter(adapter.embedding, requires_grad=False)   # peft leaves a tied head as it was
     _init_buffers(model)
     tied = set()
     for a, b in (getattr(model, "_tied_weights_keys", None) or {}).items():
         tied.add(a)
     missing = [k for k in targets if k not in filled and k not in tied and not k.startswith(skip)]
+    # non-persistent buffers are not in state_dict; persistent ones the checkpoint lacks are an error like weights
     if missing:
         raise ValueError(f"{len(missing)} tensors of the model are not in the checkpoint, e.g. {missing[:5]}")
     dt = time.perf_counter() - t0

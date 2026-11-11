@@ -113,7 +113,7 @@ class Adapter:
             raise NotImplementedError(f"{d / CONFIG}: DoRA, fan_in_fan_out and LoRA biases are not supported")
         self.alpha = float(cfg.get("lora_alpha", 8))
         self.patterns = dict(cfg.get("alpha_pattern") or {})
-        self.r = cfg.get("r")
+        self.r = cfg.get("r")   # the rank the scaling divides by, as peft and vLLM take it (not the tensors' rank)
         self.rank_patterns = dict(cfg.get("rank_pattern") or {})
         self.rslora = bool(cfg.get("use_rslora"))
         parts: dict[str, dict] = {}
@@ -138,7 +138,7 @@ class Adapter:
         self.merge = merge
         self.applied = set()
         self.attached = set()
-        self.embedding = None
+        self.embedding = None   # the table before an embedding LoRA: peft leaves a tied output head on it
 
     def _scaling(self, name: str, r: int) -> float:
         """alpha / r of the adapter's configuration (its patterns first); `r`, the tensors' rank, when it names none. A
@@ -153,7 +153,7 @@ class Adapter:
 
     def apply(self, key: str, t):
         name = canonical(key)
-        if name in self.full:
+        if name in self.full:   # a module saved whole (or an embedding's own table), then any LoRA on top of it
             new = self.full[name]
             if tuple(new.shape) != tuple(t.shape):
                 raise ValueError(f"adapter {name}: shape {tuple(new.shape)}, checkpoint {tuple(t.shape)}")
@@ -161,7 +161,7 @@ class Adapter:
             t = new.to(device=t.device, dtype=t.dtype)
         if name in self.pairs:
             A, B, embedding = self.pairs[name]
-            if not embedding:
+            if not embedding:   # a projection keeps its weight; its LoRA runs beside it (attach), or merges into it
                 if (B.shape[0], A.shape[1]) != tuple(t.shape):
                     raise ValueError(f"adapter {name}: B A {(B.shape[0], A.shape[1])}, checkpoint {tuple(t.shape)}")
                 self.applied.add(name)
@@ -169,7 +169,7 @@ class Adapter:
                     return t
                 delta = (B.float() @ A.float()).to(t.device) * self._scaling(name, A.shape[0])
                 return (t.float() + delta).to(t.dtype)
-            delta = (B.float() @ A.float()).T
+            delta = (B.float() @ A.float()).T   # lora_embedding_A [r, vocab], lora_embedding_B [dim, r]: [vocab, dim]
             self.embedding = t.clone()
             if tuple(delta.shape) != tuple(t.shape):
                 raise ValueError(f"adapter {name}: delta {tuple(delta.shape)}, checkpoint {tuple(t.shape)}")

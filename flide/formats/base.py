@@ -77,10 +77,15 @@ class Format:
 
     name: ClassVar[str] = ""
     backbones: ClassVar[tuple[str, ...]] = ()
+    # Key of the per-request metadata in HTTP responses; a family keeps the key its older clients read.
     meta_key: ClassVar[str] = "meta"
+    # Model names the server also answers to, besides the served name.
     aliases: ClassVar[tuple[str, ...]] = ()
+    # The most options of a choice and levels of a score the family reads; requests past them are refused.
     max_choice_options: ClassVar[int] = 255
     max_score_levels: ClassVar[int] = 10
+    # A LoRA adapter merged into the weights as they are read, as the family's release serves it; else it runs beside
+    # them (flide/lora.py).
     merge_lora: ClassVar[bool] = False
 
     @classmethod

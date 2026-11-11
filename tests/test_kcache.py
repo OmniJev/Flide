@@ -34,7 +34,7 @@ def _tuned(x, y, n, a: tl.constexpr, BLOCK: tl.constexpr):
     tl.store(y + i, tl.load(x + i, mask=i < n) * a, mask=i < n)
 
 
-class _Launch:
+class _Launch:   # a launch wrapper over a kernel, as kernels/fla.py puts over fla's
     def __init__(self, kernel):
         self.kernel = kernel
 
@@ -45,7 +45,7 @@ _wrapped = _Launch(_tuned)
 def compile_once(target, launch):
     src = ASTSource(_axpy, {"x": "*fp32", "y": "*fp32", "n": "i32", "a": "constexpr", "BLOCK": "constexpr"},
                     {"a": 2.0, "BLOCK": 128}, {(0,): [["tt.divisibility", 16]], (1,): [["tt.divisibility", 16]]})
-    opts = make_backend(target).parse_options(dict(launch)).__dict__
+    opts = make_backend(target).parse_options(dict(launch)).__dict__   # what the JIT hands compile()
     hits = []
     knobs.compilation.listener = lambda **kw: hits.append(kw["cache_hit"])
     k = triton.compile(src, target=target, options=opts)
@@ -58,7 +58,7 @@ def main():
     tdict = {"backend": "cuda", "arch": 90, "warp_size": 32}
     fails = 0
     with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
-        kcache.SHIPPED = Path(b) / "shipped"
+        kcache.SHIPPED = Path(b) / "shipped"   # the test's bundle alone, whatever the installed package ships
         os.environ["TRITON_CACHE_DIR"] = a
         launch = {"num_warps": 4, "num_stages": 2}
         src, opts, k, hit = compile_once(target, launch)

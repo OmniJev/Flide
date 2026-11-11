@@ -25,6 +25,7 @@ from ...kernels import vision as vk
 from ...runtime.tp import capture_mode
 
 
+
 def patchify(img: torch.Tensor, patch: int, merge: int, temporal: int) -> torch.Tensor:
     """[3, H, W] -> [H * W / patch^2, 3 * temporal * patch^2]: the image processor's patch layout (Qwen2VL `patchify`,
     the same reshape, permute and temporal repeat), on whatever device the image is."""
@@ -89,7 +90,7 @@ def pixels(v: dict, pix: str, device) -> torch.Tensor:
     if imgs is not None:
         sizes = v.get("pixel_resize") or [None] * len(imgs)
         up = (lambda x: x.pin_memory().to(device, non_blocking=True)) if torch.device(device).type == "cuda" else \
-            (lambda x: x.to(device))
+            (lambda x: x.to(device))   # through pinned memory the host does not wait for the copy
         u8 = torch.cat([patchify(resized(up(x), s), *v["pixel_patch"]) for x, s in zip(imgs, sizes)])
     else:
         u8 = v.get(pix + "_u8")
@@ -134,6 +135,7 @@ class VisionGraphs:
         pos = (v.pos_embed(idx) * w[:, :, None]).sum(1)
         dummy = torch.zeros(1, device=pos.device, dtype=v.patch_embed.proj.weight.dtype)
         cos, sin = v.rotary_pos_emb(dummy, pos_ids)
+        # attention metadata: every token of a segment (an image, a video frame) sees the others
         seg = (grid[:, 1] * grid[:, 2]).repeat_interleave(grid[:, 0]).to(pos.device)
         n = int(seg.sum())
         job = torch.repeat_interleave(torch.arange(seg.shape[0], device=pos.device), seg)
@@ -145,6 +147,8 @@ class VisionGraphs:
         cfg = attn_kernel.config(pos.device, dummy.dtype, v.blocks[0].attn.head_dim)
         zero = torch.zeros_like(lo)
         R = attn_kernel.block_ranges(lo, hi, zero, zero, cfg["BLOCK_M"], cfg["BLOCK_N"], exact=True)
+        # in 16 bits each segment is a plain full attention, which PyTorch's fused kernels (cuDNN, flash) run at about
+        # twice our kernel's rate on an H200 and at any head size (the 9B's 72); float32 keeps our kernel
         segs = None
         if dummy.dtype in (torch.bfloat16, torch.float16):
             e = torch.cumsum(seg, 0).tolist()
@@ -171,6 +175,8 @@ class VisionGraphs:
             d = F.linear(o.view(n, -1), a.proj.weight, a.proj.bias)
             h, x = vk.layer_norm(h, blk.norm2.weight, blk.norm2.bias, blk.norm2.eps, residual=d)
             mlp = blk.mlp
+            # cuBLAS's bias-and-GELU epilogue approximates tanh too coarsely here (float32 features 4x further from a
+            # float64 truth than transformers'), so the GELU stays a kernel of its own
             y = F.gelu(F.linear(x, mlp.linear_fc1.weight, mlp.linear_fc1.bias), approximate="tanh")
             d = F.linear(y, mlp.linear_fc2.weight, mlp.linear_fc2.bias)
             if bi + 1 < len(blocks):

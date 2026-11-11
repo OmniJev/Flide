@@ -12,10 +12,13 @@ import torch
 import triton
 import triton.language as tl
 
+# bf16 tile and launch shape: BM, BN, BK, warps, stages (any fixed choice
+# keeps the products invariant)
 CFG = (128, 256, 64, 8, 3)
+# rows at or below SMALL_M run SMALL_CFG (same BK, so each element is summed in the same order)
 SMALL_M, SMALL_CFG = 256, (64, 128, 64, 4, 4)
 _sms = None
-_local = threading.local()
+_local = threading.local()   # Triton keeps its allocator per thread; the server runs rounds on other threads
 
 
 @triton.jit
@@ -74,6 +77,7 @@ def _alloc(size: int, alignment: int, stream):
     return torch.empty(size, device="cuda", dtype=torch.int8)
 
 
+# shared memory each TMA shape asks for, measured on a device; kept below the kernels so their lines do not move
 NEEDS = {CFG: 163856, SMALL_CFG: 90136}
 
 
@@ -109,7 +113,7 @@ def mm(x: torch.Tensor, w: torch.Tensor, out: torch.Tensor | None = None, cfg: t
     tma = (not ieee and torch.cuda.get_device_capability(x.device)[0] >= 9 and K % 8 == 0
            and x.stride(0) % 8 == 0 and w.stride(0) % 8 == 0 and y.stride(0) % 8 == 0 and y.stride(-1) == 1)
     shape = pick(M, budget(x.device), cfg) if tma else None
-    if shape is not None:
+    if shape is not None:   # the widest TMA shape this device's shared memory holds (an sm_120 card holds 99 KB)
         BM, BN, BK, warps, stages = shape
         if _sms is None:
             _sms = torch.cuda.get_device_properties(x.device).multi_processor_count

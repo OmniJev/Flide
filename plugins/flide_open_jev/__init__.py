@@ -59,6 +59,7 @@ class OpenJev(Format):
         t = load_file(str(Path(self.model_dir) / "head.safetensors"), device=str(backbone.device))
         return {"score": ScalarHead(t["weight"], t["bias"])}
 
+    # ---- rendering (as the release's compile_request and candidate_prompts) ------------------
 
     def _records(self, request):
         state = request.state if isinstance(request.state, (str, dict, list)) else request.model_dump()["state"]
@@ -145,10 +146,10 @@ class OpenJev(Format):
             raise ValueError(f"input length {longest} exceeds max_length={self.max_length}")
         # The prefix is the shared ids and what the tails then have in common (the question, when there is one), so
         # only the tails are compared: the shared ids are never copied into the branches or scanned.
-        n = min(len(r) for r in rest) - 1
+        n = min(len(r) for r in rest) - 1          # every branch keeps at least its last token
         first = rest[0]
         p = 0
-        while p < n:
+        while p < n:       # whole slices first (compared in C), then token by token in the slice that differs
             k = min(n, p + 256)
             if all(r[p:k] == first[p:k] for r in rest):
                 p = k

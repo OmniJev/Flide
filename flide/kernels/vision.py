@@ -54,7 +54,7 @@ def _rope_kernel(QKV, COS, SIN, Q, K, n, H, s_t, s_w, s_h, sc_t, so_t, so_h, HAL
                  BT: tl.constexpr):
     """A block of BT tokens, every head of the queries and keys (the token's cos / sin read once)."""
     t = tl.program_id(0) * BT + tl.arange(0, BT)
-    i = tl.arange(0, HP)
+    i = tl.arange(0, HP)       # half the head, padded to a power of two
     mi = (t < n)[:, None] & (i < HALF)[None, :]
     tt = t.to(tl.int64)[:, None]
     ii = i[None, :]
@@ -62,7 +62,7 @@ def _rope_kernel(QKV, COS, SIN, Q, K, n, H, s_t, s_w, s_h, sc_t, so_t, so_h, HAL
     c2 = tl.load(COS + tt * sc_t + HALF + ii, mask=mi).to(tl.float32)
     s1 = tl.load(SIN + tt * sc_t + ii, mask=mi).to(tl.float32)
     s2 = tl.load(SIN + tt * sc_t + HALF + ii, mask=mi).to(tl.float32)
-    for which in tl.static_range(2):
+    for which in tl.static_range(2):   # 0: query, 1: key
         for h in range(H):
             base = QKV + tt * s_t + which * s_w + h * s_h
             x1 = tl.load(base + ii, mask=mi).to(tl.float32)
@@ -141,7 +141,7 @@ def _resize_weights(n_in: int, n_out: int, device):
                  np.where(x < 2.0, (((x - 5) * x + 8) * x - 4) * a, 0.0))
     w = np.where(j < size[:, None], w, 0.0)
     total = np.zeros(n_out)
-    for k in range(K):
+    for k in range(K):   # summed in index order, as torch sums them
         total += w[:, k]
     w = np.where(total[:, None] != 0, w / np.where(total == 0, 1.0, total)[:, None], w)
     wmax = float(w.max())

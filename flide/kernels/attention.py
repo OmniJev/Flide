@@ -85,6 +85,7 @@ def _attend_source(acc, m_i, l_i, q, qj, qb, qp, qx, qlo, qhi, K, V, KJ, KB, KP,
                 vis = vis & ((qp[:, None] - kp[None, :]) < window)
         m_new = tl.maximum(m_i, tl.max(tl.where(vis, s, float("-inf")), 1))
         m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        # masked after the exponent, so the product and the subtraction contract into one FMA as in _attend_full
         p = tl.where(vis, tl.exp2(s - m_safe[:, None]), 0.0)
         alpha = tl.exp2(m_i - m_safe)
         l_i = l_i * alpha + tl.sum(p, 1)
@@ -104,16 +105,19 @@ def _attention_fwd(Q, K1, V1, K2, V2, O, QJ, QB, QP, QX, K1J, K1B, K1P, K1X, K2J
                    sq_t, sq_h, sk1_t, sk1_h, sv1_t, sv1_h, sk2_t, sk2_h, sv2_t, sv2_h, so_t, so_h,
                    G: tl.constexpr, D: tl.constexpr, DP: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
                    WINDOW: tl.constexpr, BLOCKS: tl.constexpr, EXACT: tl.constexpr, SPLIT: tl.constexpr):
+    # the grid runs every head of the last query block first: under a causal mask later blocks see more keys, and the
+    # longest blocks going first leave no long block running alone at the end
+    # SPLIT > 1: each program writes 1 / SPLIT of the value dims (scores over the whole head, once per part)
     h = tl.program_id(0) // SPLIT
     part = tl.program_id(0) % SPLIT
     pid = tl.num_programs(1) - 1 - tl.program_id(1)
     hk = h // G
     row_lo = tl.load(R + pid * 10)
     row_hi = tl.load(R + pid * 10 + 1)
-    if row_hi <= row_lo:
+    if row_hi <= row_lo:   # a tile past the real ones
         return
     offs_m = row_lo + tl.arange(0, BLOCK_M)
-    offs_d = tl.arange(0, DP)
+    offs_d = tl.arange(0, DP)   # head dims not a power of two are padded with zeros
     offs_v = part * (DP // SPLIT) + tl.arange(0, DP // SPLIT)
     mq = offs_m < row_hi
     if DP != D:
@@ -128,7 +132,7 @@ def _attention_fwd(Q, K1, V1, K2, V2, O, QJ, QB, QP, QX, K1J, K1B, K1P, K1X, K2J
         qx = tl.load(QX + offs_m, mask=mq, other=-1)
     else:
         qx = qp
-    if EXACT:
+    if EXACT:   # per-query key ranges, one column per (source, end)
         qlo1 = tl.load(QR + offs_m * sqr_t, mask=mq, other=0)
         qhi1 = tl.load(QR + offs_m * sqr_t + sqr_c, mask=mq, other=0)
         qlo2 = tl.load(QR + offs_m * sqr_t + 2 * sqr_c, mask=mq, other=0)
@@ -138,6 +142,7 @@ def _attention_fwd(Q, K1, V1, K2, V2, O, QJ, QB, QP, QX, K1J, K1B, K1P, K1X, K2J
     m_i = tl.full([BLOCK_M], float("-inf"), tl.float32)
     l_i = tl.zeros([BLOCK_M], tl.float32)
     acc = tl.zeros([BLOCK_M, DP // SPLIT], tl.float32)
+    # per source: masked [lo, f0), whole [f0, f1), masked [f1, hi)
     lo1 = tl.load(R + pid * 10 + 2)
     f01 = tl.load(R + pid * 10 + 3)
     f11 = tl.load(R + pid * 10 + 4)
@@ -177,7 +182,9 @@ def config(device, dtype, head_dim: int) -> dict:
     smem = getattr(torch.cuda.get_device_properties(device), "shared_memory_per_block_optin", 0)
     big = smem >= 160 * 1024
     dp = triton.next_power_of_2(head_dim)
-    if dp > 256:
+    if dp > 256:   # Gemma 4 global layers (512); on the large parts in 16 bits, 128-query tiles with each program
+        # writing half the value dims (H200: 200 TFLOP/s causal at 3584 tokens against 65 with 16-query tiles whole), two
+        # stages (12 to 17 percent faster than one from 512 tokens on, the same bits)
         if big and dtype != torch.float32:
             return {"BLOCK_M": 128, "BLOCK_N": 32, "num_warps": 8, "num_stages": 2, "SPLIT": 2}
         return {"BLOCK_M": 16, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1}

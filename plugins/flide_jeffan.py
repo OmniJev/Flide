@@ -184,7 +184,7 @@ class Jeffan(Format):
         base = self.chat_pre + self.state_head + state_ids
         branches = [q["mid"] + q["block"] + self.closing + self.chat_post for q in questions]
         data = {"round": 1, "base": base, "state": state_ids, "questions": questions}
-        if self.attention == "blocks":
+        if self.attention == "blocks":   # every prompt read whole, both ways: sequences of their own
             return Plan([], [base + b for b in branches], (READ,), data, attention="blocks")
         return self._plan(base, branches, data)
 

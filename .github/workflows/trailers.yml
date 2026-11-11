@@ -1,0 +1,21 @@
+name: Commit trailers
+
+on:
+  pull_request:
+
+jobs:
+  trailers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No AI co-author lines
+        run: |
+          hits=$(git log --format=%B "origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }}" \
+            | grep -i -E '^co-authored-by:.*(c[l]aude|anthr[o]pic|copilot|openai|chatgpt|codex|cursor|gemini|devin-ai)' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::You can use AI help. But please remove these lines from your commit messages and push again."
+            echo "$hits"
+            exit 1
+          fi

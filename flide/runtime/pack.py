@@ -42,13 +42,13 @@ class Job:
     suffixes: list[list[int]]
     reads: list[tuple[Read, ...]]
     vision: Any = None
-    positions: Any = None
-    offset: int = 0
-    start: int = 0
-    resume: Any = None
-    marks: tuple[int, ...] = ()
-    blocks: bool = False
-    prefix_two_way: bool = False
+    positions: Any = None          # [3, P] rotary positions of the prefix, or None for 0..P-1
+    offset: int = 0                # suffix tokens start at rotary position P + offset
+    start: int = 0                 # prefix tokens before this come from `resume`, not from the stream
+    resume: Any = None             # saved state at `start` (runtime.session.Entry), when start > 0
+    marks: tuple[int, ...] = ()    # prefix positions to save the state at (the end of a level)
+    blocks: bool = False           # full attention block-bidirectional (Plan.attention "blocks")
+    prefix_two_way: bool = False   # the prefix alone read both ways, the branches one way (Plan.attention "prefix")
 
     @property
     def tokens(self) -> int:
@@ -60,39 +60,39 @@ class Job:
 class ReadGroup:
     layer: int | None
     head: str | None
-    start: int
+    start: int                                    # rows [start, end) of the layer's gathered rows
     end: int
-    owners: list[tuple[int, int, int]] = field(default_factory=list)
+    owners: list[tuple[int, int, int]] = field(default_factory=list)   # (branch in batch, read index, rows)
 
 
 @dataclass
 class PackedBatch:
-    input_ids: "torch.Tensor"
-    positions: "torch.Tensor"
-    job: "torch.Tensor"
-    branch: "torch.Tensor"
-    cu_prefix: "torch.Tensor"
-    cu_suffix: "torch.Tensor"
+    input_ids: "torch.Tensor"     # [T] long
+    positions: "torch.Tensor"     # [T] long, prefix 0..P-1, every suffix restarts at P
+    job: "torch.Tensor"           # [T] long, job index of every token
+    branch: "torch.Tensor"        # [T] long, -1 on prefix tokens, branch index on suffix tokens
+    cu_prefix: "torch.Tensor"     # [J+1] long, prefix boundaries inside the prefix part
+    cu_suffix: "torch.Tensor"     # [B+1] long, suffix boundaries inside the suffix part
     cu_prefix_cpu: "torch.Tensor"
     cu_suffix_cpu: "torch.Tensor"
-    branch_job: "torch.Tensor"
-    reads: dict
+    branch_job: "torch.Tensor"    # [B] long, job index of every branch
+    reads: dict                   # {layer key: [rows] long stream indices}
     groups: list[ReadGroup]
     n_prefix_tokens: int
     n_jobs: int
     n_branches: int
-    key_ranges: "torch.Tensor | None" = None
-    embeds: "torch.Tensor | None" = None
-    pos3: "torch.Tensor | None" = None
-    vision: list = field(default_factory=list)
-    cache: dict = field(default_factory=dict)
-    levels: list = field(default_factory=list)
-    ctx: dict | None = None
-    resumes: list = field(default_factory=list)
-    marks: dict = field(default_factory=dict)
-    saved: dict = field(default_factory=dict)
-    jobs: list = field(default_factory=list)
-    attn_runs: int = 0
+    key_ranges: "torch.Tensor | None" = None  # [T, 4] int32 per query: lo, hi in the prefix part; lo, hi in the branch part
+    embeds: "torch.Tensor | None" = None   # [T, hidden] in stream order, when the family supplies embeddings
+    pos3: "torch.Tensor | None" = None     # [3, T] M-RoPE positions; None: all three equal `positions`
+    vision: list = field(default_factory=list)  # vision inputs of the jobs that have media, in job order
+    cache: dict = field(default_factory=dict)   # per-batch values shared by every layer (attention metadata)
+    levels: list = field(default_factory=list)  # prefix levels: dicts lo, hi, cu, cu_cpu, jobs, jobs_cpu, ends
+    ctx: dict | None = None        # context buffer layout when prefixes are not contiguous in the stream
+    resumes: list = field(default_factory=list)  # (job, Entry, start)
+    marks: dict = field(default_factory=dict)    # job -> marks; the forward fills `saved`
+    saved: dict = field(default_factory=dict)    # job -> {"states": {pos: {...}}, "kv": {layer: (K, V)}}
+    jobs: list = field(default_factory=list)  # the jobs packed (tensor parallel ranks pack them again)
+    attn_runs: int = 0   # runs of consecutive queries of one group (kernels.attention.runs), for the attention tiles
 
     @property
     def n_tokens(self) -> int:
@@ -122,6 +122,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
     for job in jobs:
         ctx_start.append(at)
         at += len(job.prefix)
+    # per-token columns, filled slice by slice (lists of Python ints are slow to turn into tensors)
     T = sum(job.tokens for job in jobs)
     ids = np.empty(T, np.int64)
     pos = np.empty(T, np.int64)
@@ -129,6 +130,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
     branch_of = np.empty(T, np.int64)
     ranges = np.empty((T, 4), np.int64)
     n = 0
+    # stream index of every prefix position in the stream, per job: (lo, hi, stream lo) per segment
     segs: list[list[tuple[int, int, int]]] = [[] for _ in jobs]
     levels = []
     for k in range(max(len(b) - 1 for b in bounds)):
@@ -152,7 +154,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             n += m
             lens.append(m)
             owners.append(j)
-            if k + 2 < len(bounds[j]):
+            if k + 2 < len(bounds[j]):   # the segment ends at a mark, not at the end of the prefix
                 ends.append((len(owners) - 1, j, e))
         cu = [0]
         for m in lens:

@@ -1,0 +1,17 @@
+{
+ "format_id": "flide-template-v1",
+ "match": {},
+ "prompt": "{% set inst = question.instructions %}{% if inst is none %}{% set inst_text = 'null' if 'instructions' in question.given else '' %}{% elif inst is string %}{% set inst_text = inst %}{% elif inst is mapping %}{% set ns = namespace(lines=[]) %}{% for k, v in inst.items() %}{% set ns.lines = ns.lines + [k ~ ': ' ~ (v | describe)] %}{% endfor %}{% set inst_text = ns.lines | join('\\n') %}{% else %}{% set inst_text = inst | describe %}{% endif %}{% set opt = namespace(lines=[]) %}{% for o in options %}{% if question.type == 'noul' %}{% set d = o.description if o.description else ('Yes' if o.key == 'true' else 'No') %}{% elif o.description is string and o.description %}{% set d = o.description %}{% elif o.description is none or o.description == '' %}{% set d = o.key %}{% else %}{% set d = o.description | describe %}{% endif %}{% set opt.lines = opt.lines + ['(' ~ o.label ~ ') ' ~ o.key ~ ('' if d == o.key else ': ' ~ d)] %}{% endfor %}{% set body %}Context:\n{{ state | describe }}\n\nQuestion: {{ inst_text }}\n\nOptions:\n{{ opt.lines | join('\\n') }}{% endset %}<|im_start|>user\n{{ body | trim }}\n\nThink it through briefly, then answer with the option letter only.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nAnswer: (",
+ "attention": "bidirectional",
+ "midloop": "@decision_config.json#midloop",
+ "labels": "@decision_config.json#codes",
+ "label_ids": "@decision_config.json#token_ids",
+ "head": "readout.safetensors",
+ "temperature": "@decision_config.json#temperature",
+ "noul": [
+  "true",
+  "false"
+ ],
+ "max_options": 255,
+ "max_prompt_tokens": 39992
+}

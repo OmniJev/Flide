@@ -175,7 +175,7 @@ class Torchcast(Format):
         return head + ("\n\n" + text if text.strip() else "")
 
     def _template(self, user: str) -> str:
-        if SLOT in user:
+        if SLOT in user:   # the release's message with image parts at the slots
             parts, content = user.split(SLOT), []
             for k, part in enumerate(parts):
                 if part:
@@ -323,7 +323,7 @@ class Torchcast(Format):
             else:
                 rows.append((qid, None, ("plain", qid)))
         data = {"fixed": fixed, "wide": wide, "plain": {}, "tokens": 0}
-        if not rows:
+        if not rows:   # every question has one option: a one-token branch keeps the runtime's shape
             return Plan([], [[self.letter_ids[0]]], (READ,), {**data, "rows": []})
         return self._plan(request, rows, data)
 
@@ -436,7 +436,7 @@ class StartLux(Torchcast):
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
         return bool(decision_config) and decision_config.get("format") == LODESTAR
 
-    def __init__(self, model_dir: str, tokenizer=None, max_length: int = 131072):
+    def __init__(self, model_dir: str, tokenizer=None, max_length: int = 131072):   # its server's Instant context
         super().__init__(model_dir, tokenizer, max_length)
         if self.config.get("prompt_attention") != "bidirectional":
             raise ValueError(f"{model_dir}: prompt_attention {self.config.get('prompt_attention')!r}; this family reads "
@@ -489,7 +489,7 @@ class StartLux(Torchcast):
             listed = len(keys) if keys is not None else len(options_of(q))
             none = q.type == "choice" and ref[0] != "group"
             p = self._probs(out, q.type, listed + none)
-            if none:
+            if none:   # the extra option's share left out, the listed options renormalised
                 s = sum(p[:-1])
                 p = [v / s for v in p[:-1]] if s > 0 else [1.0 / listed] * listed
             if ref[0] == "plain":

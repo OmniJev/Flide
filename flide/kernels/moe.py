@@ -21,7 +21,7 @@ import triton
 import triton.language as tl
 
 BM, BN, BK = 64, 128, 64
-BK8 = 128
+BK8 = 128   # float8 products: k steps of 32 per instruction
 
 
 @functools.lru_cache(maxsize=None)
@@ -47,7 +47,8 @@ def tile(pairs: int, fp8: bool, device) -> tuple[int, int, int, int, int]:
 def _grouped_kernel(A, B, C, WT, ROWS, BLK_E, USED, n_pairs, N, KD, topk, sa, sbe, sbn, sc, NBM,
                     BY_TOKEN: tl.constexpr, MUL_W: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
                     BK: tl.constexpr, GM: tl.constexpr):
-    if GM:
+    if GM:   # GM row blocks (of one expert, mostly) through every column tile before the next ones: their rows and
+        # the expert's columns stay in L2
         pid = tl.program_id(0)
         width = GM * tl.cdiv(N, BN)
         first = pid // width * GM
@@ -86,7 +87,8 @@ def _grouped_kernel(A, B, C, WT, ROWS, BLK_E, USED, n_pairs, N, KD, topk, sa, sb
 def _grouped_fp8_kernel(A, SA, B, SB, C, WT, ROWS, BLK_E, USED, n_pairs, N, KD, topk, sa, sbe, sbn, sse, sc, NBM,
                         BY_TOKEN: tl.constexpr, MUL_W: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
                         BK: tl.constexpr, GM: tl.constexpr):
-    if GM:
+    if GM:   # GM row blocks (of one expert, mostly) through every column tile before the next ones: their rows and
+        # the expert's columns stay in L2
         pid = tl.program_id(0)
         width = GM * tl.cdiv(N, BN)
         first = pid // width * GM
@@ -141,7 +143,7 @@ def _router_kernel(X, WR, WG, L, G, T, E, H, sx, swr, sl, HAS_G: tl.constexpr, B
         acc += tl.dot(a, b)
         if HAS_G:
             wg = tl.load(WG + k0 + ks, mask=mk, other=0.0).to(tl.float32)
-            g += tl.sum(a.to(tl.float32) * wg[None, :], 1)
+            g += tl.sum(a.to(tl.float32) * wg[None, :], 1)   # bf16 products are exact in float32
     tl.store(L + rows[:, None].to(tl.int64) * sl + cols[None, :], acc, mask=mr[:, None] & mc[None, :])
     if HAS_G:
         tl.store(G + rows, g, mask=mr & (tl.program_id(1) == 0))
@@ -177,13 +179,13 @@ def _route_kernel(L, W, IDS, PS, E, sl, K: tl.constexpr, BE: tl.constexpr, SCALE
     slot = tl.arange(0, K)
     top = tl.zeros([K], tl.float32)
     idx = tl.zeros([K], tl.int32)
-    for j in tl.static_range(K):
+    for j in tl.static_range(K):   # the largest left, the lowest expert on a tie
         m = tl.max(p, 0)
         i = tl.min(tl.where(p == m, e, BE), 0)
         top = tl.where(slot == j, m, top)
         idx = tl.where(slot == j, i, idx)
         p = tl.where(e == i, -1.0, p)
-    if SCALED:
+    if SCALED:   # each expert's own scale on its renormalized weight
         tl.store(W + t * K + slot, top / tl.sum(top, 0) * tl.load(PS + idx).to(tl.float32))
     else:
         tl.store(W + t * K + slot, top / tl.sum(top, 0))
@@ -218,13 +220,13 @@ def _place_kernel(IDS, ENDS, PADDED, ROWS, BLK_E, n, BM: tl.constexpr, BLOCK: tl
     end = tl.load(ENDS + e)
     start = end - tl.load(PADDED + e)
     at = start
-    for i0 in range(0, n, BLOCK):
+    for i0 in range(0, n, BLOCK):   # the expert's pairs in pair order
         i = i0 + tl.arange(0, BLOCK)
         hit = tl.load(IDS + i, mask=i < n, other=-1) == e
         h = hit.to(tl.int32)
         tl.store(ROWS + at + tl.cumsum(h, 0) - 1, i, mask=hit)
         at += tl.sum(h, 0)
-    for r0 in range(at, end, BLOCK):
+    for r0 in range(at, end, BLOCK):   # its padding: the index no product reads
         r = r0 + tl.arange(0, BLOCK)
         tl.store(ROWS + r, n, mask=r < end)
     for b0 in range(start // BM, end // BM, BLOCK):
@@ -257,7 +259,7 @@ def _combine_kernel(Y, S, G, OUT, H, K: tl.constexpr, BH: tl.constexpr):
     c = tl.program_id(1) * BH + tl.arange(0, BH)
     m = c < H
     acc = tl.zeros([BH], tl.float32)
-    for j in tl.static_range(K):
+    for j in tl.static_range(K):   # the token's experts in slot order
         acc += tl.load(Y + (t * K + j) * H + c, mask=m, other=0.0).to(tl.float32)
     g = tl.load(G + t).to(tl.float32)
     sh = tl.load(S + t * H + c, mask=m, other=0.0).to(tl.float32)
@@ -340,12 +342,13 @@ def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act)
     fp8 = "experts_scale" in w
     t = tile(T * K, fp8, x.device)
     rows, blocks, used = align(ids, w["experts"].shape[0], t[0])
-    if fp8:
+    if fp8:   # float8 experts
         gu = grouped_fp8(x, w["experts"], w["experts_scale"], x.new_empty(T * K, 2 * I), rows, blocks, used, K, True,
                          tile=t)
         return grouped_fp8(act(gu, I), w["experts_down"], w["experts_down_scale"], x.new_empty(T * K, H), rows, blocks,
                            used, K, False, top.reshape(-1), tile=t)
     gu = grouped(x, w["experts"], x.new_empty(T * K, 2 * I), rows, blocks, used, K, True, tile=t)
+    # each expert row kept in float32 to the sum: one rounding for the layer, as float32 has it
     return grouped(act(gu, I), w["experts_down"], x.new_empty(T * K, H, dtype=torch.float32), rows, blocks, used, K,
                    False, top.reshape(-1), tile=t)
 
@@ -358,7 +361,7 @@ def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
     wr, wg = w["router"], w["shared_gate"]
     if isinstance(wr, torch.Tensor) and isinstance(wg, torch.Tensor):
         logits, gate = router(x, wr, wg)
-    else:
+    else:   # an adapter on the router or the gate: their own products
         logits, gate = mm(x, wr), mm(x, wg)
     top, ids = route(logits, K)
     y = experts(x, w, top, ids, swiglu)
@@ -372,7 +375,7 @@ def _combine_norm_kernel(Y, D, W1, W2, OUT, H, sd, so, eps, K: tl.constexpr, BH:
     c = tl.arange(0, BH)
     m = c < H
     acc = tl.zeros([BH], tl.float32)
-    for j in tl.static_range(K):
+    for j in tl.static_range(K):   # the token's experts in slot order
         acc += tl.load(Y + (t * K + j) * H + c, mask=m, other=0.0).to(tl.float32)
     d = tl.load(D + t * sd + c, mask=m, other=0.0).to(tl.float32)
     a = d * tl.math.rsqrt(tl.sum(d * d, 0) / H + eps) * tl.load(W1 + c, mask=m, other=0.0).to(tl.float32)

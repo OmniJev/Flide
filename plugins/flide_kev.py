@@ -117,7 +117,7 @@ class Kev(Format):
         self.meta = _meta(model_dir)
         if self.meta is None:
             raise ValueError(f"{model_dir}: no pointer head ({HEAD})")
-        if tokenizer is None:
+        if tokenizer is None:   # the release reads its base checkpoint's tokenizer unless head.pt says it saved its own
             if self.meta.get("tokenizer_saved") or not self.meta.get("base"):
                 tokenizer = _saved_tokenizer(model_dir)
             else:
@@ -242,7 +242,7 @@ class Drex(Kev):
         if not 1 <= context <= self.max_context:
             raise ValueError(f"context must be between 1 and {self.max_context}")
         self.max_state = self.max_row = context
-        if tokenizer is None:
+        if tokenizer is None:   # as its kev.model.load_tokenizer reads it: AutoTokenizer, whatever class the config names
             import transformers
 
             tokenizer = transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)

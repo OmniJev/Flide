@@ -111,7 +111,7 @@ def run(args) -> None:
     fork = _Check("fork")
     for req, plan, outs in zip(reqs, plans, alone):
         if len(plan.suffixes) != len(req.questions):
-            continue
+            continue   # a family that reads its questions together, as its release does
         full = _answers(eng, req, plan, outs)
         for b, (name, q) in enumerate(req.questions.items()):
             one = req.model_copy(update={"questions": {name: q}})

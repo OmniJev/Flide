@@ -94,7 +94,7 @@ def common_prefix_len(a: str, b: str) -> int:
     n = min(len(a), len(b))
     if a[:n] == b[:n]:
         return n
-    lo, hi = 0, n
+    lo, hi = 0, n          # a[:lo] == b[:lo], a[:hi] != b[:hi]
     while hi - lo > 32:
         mid = (lo + hi) // 2
         if a[lo:mid] == b[lo:mid]:
@@ -137,12 +137,12 @@ class TokenCache:
         if best is None:
             return None
         c, ids, offs = best
-        b = text.rfind("\n", 0, c - 1)
-        while b > 0 and text[b + 1: b + 2].isspace():
+        b = text.rfind("\n", 0, c - 1)      # the boundary b must leave text[b] shared (b < c)
+        while b > 0 and text[b + 1: b + 2].isspace():   # whitespace up to a later newline is one piece with it
             b = text.rfind("\n", 0, b)
         if b <= 0:
             return None
-        b += 1
+        b += 1                                # just after a newline; text[b] is not whitespace
         starts = [o[0] for o in offs]
         i = bisect.bisect_left(starts, b)
         if i >= len(starts) or starts[i] != b:
@@ -157,6 +157,7 @@ class TokenCache:
             self._next += 1
             while len(self.items) > self.size:
                 self.items.popitem(last=False)
+
 
 
 class SlotHead:
@@ -174,7 +175,7 @@ class SlotHead:
     def __call__(self, hidden):
         out = hidden.to(self.weight.dtype) @ self.weight.T
         out = out if self.bias is None else out + self.bias
-        if self.softcap:
+        if self.softcap:   # Gemma 4 soft-caps its logits; the slot rows are logits like any other
             out = (out / self.softcap).tanh() * self.softcap
         return out
 
@@ -228,6 +229,7 @@ class OneJev(Format):
         self.model_dir = model_dir
         self.media_root = media_root
         self.allow_local_paths = media_root is not None if allow_local_paths is None else allow_local_paths
+        # `--format-arg allow_media_urls=1` arrives as a string
         self.allow_media_urls = str(allow_media_urls).lower() in ("1", "true", "yes", "on")
         self.vision_ids = {i for i in (getattr(config, k, None) for k in ("image_token_id", "video_token_id",
                            "vision_start_token_id", "vision_end_token_id", "boi_token_id", "eoi_token_id",
@@ -241,7 +243,7 @@ class OneJev(Format):
             raise ValueError(f"unknown attention {rc['attention']!r} in {model_dir}")
         self.attention = "blocks" if rc["attention"] == "noncausal" else "causal"
         self._processor = None
-        self._marker_checks = 0
+        self._marker_checks = 0     # plans whose first branch was also rendered whole (MARKER_CHECKS of them)
         self._marker_ok = True
 
     def for_thread(self):
@@ -266,6 +268,7 @@ class OneJev(Format):
                 self._processor.tokenizer.chat_template = self._processor.chat_template
         return self._processor
 
+    # ---- tokens -----------------------------------------------------------------------------
 
     def _verify_slots(self) -> list[int]:
         """Slot token ids for every label the tokenizer holds as one round-trip token. A..Z are required. The
@@ -408,6 +411,7 @@ class OneJev(Format):
         while n > 0 and not all(ids[:n] == prefix_ids[:n] for ids in full):
             n -= 1
         if self.attention == "blocks" and n < len(prefix_ids):
+            # the prefix block ends where the question text starts: tokens that end there, in every branch
             for p in prompts:
                 ends = [e for _, e in self._encode_offsets(p)[1]]
                 k = bisect.bisect_right(ends, cut)
@@ -434,10 +438,10 @@ class OneJev(Format):
         proc = self.processor
         qwen_images = (all(m["type"] == "image" for m in items)
                        and type(proc.image_processor).__name__.startswith("Qwen2VL"))
-        if qwen_images:
+        if qwen_images:   # decoded here, resized and reshuffled into patches on the GPU
             imgs, sizes, grid, images = self._qwen_images(items, self._raw_image_processor())
             vision = {"image_grid_thw": grid}
-            if imgs is not None:
+            if imgs is not None:   # resized, reshuffled into patches and normalized on the GPU (the backbone's `_pixels`)
                 ip = proc.image_processor
                 vision.update(pixel_images_u8=imgs, pixel_resize=sizes, pixel_scale=self._pixel_scale(ip),
                               pixel_patch=(ip.patch_size, ip.merge_size, ip.temporal_patch_size))
@@ -455,6 +459,7 @@ class OneJev(Format):
         while n > 0 and not all(ids[:n] == prefix_u[:n] for ids in full):
             n -= 1
         if self.attention == "blocks" and n < len(prefix_u):
+            # the prefix block ends where the question text starts: tokens that end there, in every branch
             for p in prompts:
                 ends = [e for _, e in self._encode_offsets(p)[1]]
                 k = bisect.bisect_right(ends, cut)
@@ -523,7 +528,7 @@ class OneJev(Format):
                     return (None, None, self.processor.image_processor(images, return_tensors="pt")["image_grid_thw"],
                             images)
                 got = (x, raw.deferred.sizes[-1], out["image_grid_thw"])
-                if fast is not None:
+                if fast is not None:   # the first image both ways: the processor-free path must give the same
                     self._rgb_fast = (torch.equal(fast[0], got[0]) and tuple(fast[1]) == tuple(got[1])
                                       and torch.equal(fast[2], got[2]))
                     if not self._rgb_fast:
@@ -573,6 +578,7 @@ class OneJev(Format):
         size = -(-len(names) // n_chunks)
         return [names[i:i + size] for i in range(0, len(names), size)]
 
+    # ---- format interface -------------------------------------------------------------------
 
     def load_heads(self, backbone) -> dict[str, Any]:
         weight, bias = backbone.output_head()

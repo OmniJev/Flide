@@ -14,6 +14,7 @@ from .schedule import schedule
 log = logging.getLogger("flide.engine")
 
 
+
 def resolve_model(name: str) -> str:
     """A local directory, or a Hub repository id downloaded (or found in the cache) as a snapshot; a LoRA adapter
     becomes the directory it runs from, its base checkpoint with the adapter (lora.view)."""
@@ -32,6 +33,23 @@ def model_config(model_dir: str):
     import transformers
 
     return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
+
+
+SMALL_CARD = 25 * 2 ** 30
+
+
+def default_budget(total_bytes: int) -> int:
+    """Tokens per micro-batch when the caller names none: 65536, and 16384 on a card of 24 GB or less, where a 9B
+    model's 65536-token micro-batch does not fit beside its weights. `total_bytes` 0 (no CUDA device) keeps 65536."""
+    return 16384 if 0 < total_bytes <= SMALL_CARD else 65536
+
+
+def _total_memory(device) -> int:
+    import torch
+
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return 0
+    return torch.cuda.get_device_properties(device).total_memory
 
 
 def _blocks(plan: Plan) -> bool:
@@ -94,7 +112,7 @@ def _gib() -> tuple[float, float, float]:
     if not torch.cuda.is_available():
         return 0.0, 0.0, 0.0
     torch.cuda.synchronize()
-    torch.cuda.empty_cache()
+    torch.cuda.empty_cache()   # cached free blocks would make the differences between snapshots meaningless
     free, total = torch.cuda.mem_get_info()
     g = 2 ** 30
     return torch.cuda.memory_allocated() / g, torch.cuda.memory_reserved() / g, (total - free) / g
@@ -114,7 +132,7 @@ def refuse_invariant_quantized(batch_invariant: bool, backbone_options: dict | N
 
 class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
-                 budget: int = 65536, backbone_options: dict | None = None, capture: bool | int = 4096,
+                 budget: int | None = None, backbone_options: dict | None = None, capture: bool | int = 4096,
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
@@ -127,13 +145,14 @@ class Engine:
         if str(device).startswith("cuda"):
             check_cuda()
         launcher.install()
-        from .kcache import cache_dir, no_bundle, seed, tune
+        from .kcache import cache_dir, no_bundle, progress, seed, tune
 
         seed()
         missing = no_bundle()
-        if missing:
+        if missing:   # said on every start, a warm Triton cache or not, so a slow first start never looks hung
             log.info("no precompiled kernels ship for %s: kernels not yet in %s compile on first use, so the first start "
                      "on this machine takes a few minutes and later ones read them from the cache", missing, cache_dir())
+            progress(True)
         t0 = time.perf_counter()
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
@@ -146,7 +165,7 @@ class Engine:
         if family.merge_lora:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
-        if tp_size > 1:
+        if tp_size > 1:   # rank 0 here, the other ranks in worker processes (runtime/tp.py)
             if session_cache_gb > 0:
                 raise ValueError("tensor parallel runs without the session cache")
             from . import tp
@@ -154,16 +173,24 @@ class Engine:
             self.backbone = tp.launch(config.model_type, self.model_dir, device, dtype, tp_size, options)
         else:
             self.backbone = backbones.get(config.model_type).load(self.model_dir, device=device, dtype=dtype, **options)
-        tune()
+        tune()   # autotuner picks from the kernel bundles, now that the kernels' modules are loaded
         needs = getattr(self.format, "attention", "causal")
         if needs != "causal" and not getattr(self.backbone, "prefix_attention" if needs == "prefix" else "block_attention",
                                              False):
             raise ValueError(f"{self.model_dir} reads with block attention, which the {config.model_type} backbone "
                              "does not run")
+        midloop = getattr(self.format, "midloop", None)
+        if midloop:   # layers run again inside the pass (the checkpoint's recurrent depth)
+            if tp_size > 1 or not hasattr(self.backbone, "set_midloop"):
+                raise ValueError(f"{self.model_dir} runs layers again (midloop), which the {config.model_type} backbone "
+                                 "does not" + (" under tensor parallelism" if tp_size > 1 else ""))
+            self.backbone.set_midloop(midloop)
         self.heads = self.format.load_heads(self.backbone)
         self.eager_tokens = eager_tokens(config.model_type, self.backbone) if tp_size == 1 else None
         mem = _gib()
-        self.budget = budget
+        self.budget = budget or default_budget(_total_memory(device))
+        if budget is None and self.budget != 65536:
+            log.info("budget %d tokens per micro-batch on a card of 24 GB or less (--budget sets it)", self.budget)
         self.sessions = None
         if session_cache_gb > 0:
             from .session import SessionCache
@@ -173,6 +200,8 @@ class Engine:
         tune()
         if graphs is not None and capture is not False:
             limit = None if capture is True else capture
+            # flat graphs take text and media requests alone or together; the sequence, branch and continuation
+            # graphs are for sessions (and requests the flat graphs do not take, captured when first needed)
             if hasattr(graphs, "capture_flat"):
                 graphs.capture_flat(max_tokens=limit)
             if self.sessions is not None or not hasattr(graphs, "capture_flat"):
@@ -190,6 +219,8 @@ class Engine:
         if capture is not False:
             tune()
             self.warmup()
+        if missing:
+            progress(False)
         log.info("loaded %s as %s on %s in %.1fs", self.model_dir, family.name, config.model_type,
                  time.perf_counter() - t0)
         end = _gib()
@@ -214,7 +245,7 @@ class Engine:
         saved, self.sessions = self.sessions, None
         try:
             self.run_plans(plans)
-            if saved is not None:
+            if saved is not None:   # the level-by-level path that saves and resumes session states
                 from .pack import Job
                 from .session import Entry
 
@@ -303,6 +334,7 @@ class Engine:
         step = max(1, len(batches) // 10)
         done = 0
         pending = None
+        # the next micro-batch is queued before the last one's outputs are read, so the GPU never waits for the host
         for k, mb in enumerate(batches):
             item = launch(mb)
             if pending is not None:
@@ -382,6 +414,8 @@ class Engine:
         """Sessions take text-only plans whose reads all fall inside the branches."""
         if self.sessions is None or plan.vision is not None or plan.positions is not None or plan.offset:
             return False
+        if getattr(self.backbone, "midloop", None) is not None:
+            return False
         if _blocks(plan):
             return False
         if not plan.prefix:
@@ -412,7 +446,7 @@ class Engine:
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         if graphs is None or (plan.vision is not None and not graphs.media) or self._eager(plan):
             return None
-        if not plan.prefix:
+        if not plan.prefix:   # sequences of their own: flat graphs under block attention (`_alone_items`), else none
             items = self._alone_items(plan, graphs) if hasattr(graphs, "run_flat") else None
             if items is None:
                 return None
@@ -430,7 +464,7 @@ class Engine:
         blocks = _blocks(plan)
         if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
             return None
-        if self._branch_spots(plan) is not None:
+        if self._branch_spots(plan) is not None:   # flat graphs only
             item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
             hidden = None if item is None else graphs.run_flat([item])
             if hidden is None:
@@ -446,6 +480,7 @@ class Engine:
             return None
         if (spots is None and self.sessions is not None and hasattr(graphs, "run_session")
                 and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan)):
+            # long text prefixes resume from and save session states
             entry, start = self.sessions.match(plan.prefix)
             mark = self.sessions.mark(len(plan.prefix), start)
             out = None
@@ -497,7 +532,7 @@ class Engine:
         if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
             return None
         bspots = self._branch_spots(plan)
-        if bspots is not None:
+        if bspots is not None:   # the session cache reads last tokens only
             if not getattr(graphs, "read_spots", False):
                 return None
             tail = (_flag(plan) if blocks else False, bspots)
@@ -571,7 +606,7 @@ class Engine:
     def _flat_rounds(graphs, items) -> list[list[int]]:
         """Indices of flat graph items cut into rounds, in order, as many per replay as fit."""
         rounds, cur, size = [], [], None
-        whole = getattr(graphs, "whole", lambda item: False)
+        whole = getattr(graphs, "whole", lambda item: False)   # a request read at every position runs alone
         for k, item in enumerate(items):
             cost = graphs.flat_cost(item)
             grown = cost if size is None else tuple(x + y for x, y in zip(size, cost))
@@ -698,6 +733,8 @@ class Engine:
             for i, p in enumerate(plans):
                 if i in batched:
                     continue
+                # with the batch-invariant products a plan the flat graphs do not take is packed: the sequence and
+                # branch graphs cut their key blocks where their padding ends
                 y = None if settings.batch_invariant else self._graph_hidden(p, lazy=mode != "batch")
                 if y is None:
                     rest.append(i)
@@ -743,6 +780,8 @@ class Engine:
 
     def decide(self, request, **options):
         t0 = time.perf_counter()
+        # the vision tower is queued as soon as the format has the images (one request at a time: the online batcher's
+        # planner threads do not touch the device), so it runs while the host tokenizes and stages the request
         start = getattr(self.backbone, "start_vision", None)
         check_limits(self.format, request)
         plan = self.format.plan(request, start_vision=start, **options)

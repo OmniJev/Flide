@@ -45,6 +45,9 @@ class Batcher:
                  gather_ms: float | None = None):
         self.engine = engine
         self.window = window_ms / 1000
+        # while requests are still being planned, a round waits up to `gather_ms` for them (under load the answers
+        # of a round go out together and the next requests come back one by one; taking only what is queued would
+        # split them into rounds too small to batch)
         self.gather = (2.0 if gather_ms is None else gather_ms) / 1000
         self._planning = 0
         self._count = threading.Lock()
@@ -52,9 +55,11 @@ class Batcher:
         graphs = getattr(engine.backbone, "request_graphs", lambda: None)()
         if graphs is not None and hasattr(graphs, "capture_flat"):
             graphs.capture_flat()
+            # a round is at most one flat replay: under load the next round is queued while this one runs, so small
+            # rounds keep requests in arrival order instead of waiting behind several replays
             if max_round_tokens is None:
                 self.max_round_tokens = graphs.flat_max
-        self._carry: _Item | None = None
+        self._carry: _Item | None = None   # the request that did not fit the last round: first in the next
         self.q: queue.Queue[_Item] = queue.Queue()
         self._local = threading.local()
         self._planners = cf.ThreadPoolExecutor(max_workers=planners, thread_name_prefix="flide-plan",
@@ -75,6 +80,7 @@ class Batcher:
         f = getattr(self._local, "format", None)
         return f if f is not None else self.engine.format
 
+    # ---- caller side ----------------------------------------------------------------------------
 
     def _planned(self, n: int) -> None:
         with self._count:
@@ -113,6 +119,7 @@ class Batcher:
                 "queue_s": round(self.queue_s, 3), "forward_s": round(self.forward_s, 3),
                 "max_round": self.max_round, "avg_round": round(self.requests / self.rounds, 2) if self.rounds else 0.0}
 
+    # ---- GPU thread ------------------------------------------------------------------------------
 
     def _take(self) -> list[_Item]:
         if self._carry is not None:
@@ -144,7 +151,7 @@ class Batcher:
         import torch
 
         torch.cuda.set_device(self.engine.backbone.device)
-        inflight = None
+        inflight = None   # (items, launched round, start): queued on the GPU, outputs not yet collected
         while True:
             if inflight is not None and self._carry is None and self.q.empty():
                 self._deliver(*inflight)
@@ -154,11 +161,12 @@ class Batcher:
             t0 = time.perf_counter()
             try:
                 launched = self.engine.forward_launch([it.plan for it in items], mode="batch")
-            except Exception as exc:
+            except Exception as exc:  # one bad round must not take the server down
                 log.exception("round of %d requests failed", len(items))
                 for it in items:
                     it.future.set_exception(exc)
                 launched = None
+            # the next round is on the GPU behind this one: now wait for the previous round's outputs
             if inflight is not None:
                 self._deliver(*inflight)
             inflight = (items, launched, t0) if launched is not None else None

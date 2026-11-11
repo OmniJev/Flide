@@ -1,31 +1,6 @@
 {
  "format_id": "flide-template-v1",
- "match": {
-  "repos": [
-   "fastino/GLiDE-0.8B",
-   "fastino/GLiDE-2B"
-  ],
-  "files": [
-   "readout.safetensors",
-   "decision_config.json"
-  ],
-  "decision_config": {
-   "format_version": 1,
-   "attention_mode": "noncausal_full_attention",
-   "pooling": "last",
-   "prompt_format": "quick-empty-think-medium-v1"
-  },
-  "decision_config_keys": [
-   "attention_mode",
-   "codes",
-   "format_version",
-   "model_name",
-   "pooling",
-   "prompt_format",
-   "temperature",
-   "token_ids"
-  ]
- },
+ "match": {},
  "prompt": "{% set inst = question.instructions %}{% if inst is none %}{% set inst_text = 'null' if 'instructions' in question.given else '' %}{% elif inst is string %}{% set inst_text = inst %}{% elif inst is mapping %}{% set ns = namespace(lines=[]) %}{% for k, v in inst.items() %}{% set ns.lines = ns.lines + [k ~ ': ' ~ (v | describe)] %}{% endfor %}{% set inst_text = ns.lines | join('\\n') %}{% else %}{% set inst_text = inst | describe %}{% endif %}{% set opt = namespace(lines=[]) %}{% for o in options %}{% if question.type == 'noul' %}{% set d = o.description if o.description else ('Yes' if o.key == 'true' else 'No') %}{% elif o.description is string and o.description %}{% set d = o.description %}{% elif o.description is none or o.description == '' %}{% set d = o.key %}{% else %}{% set d = o.description | describe %}{% endif %}{% set opt.lines = opt.lines + ['(' ~ o.label ~ ') ' ~ o.key ~ ('' if d == o.key else ': ' ~ d)] %}{% endfor %}{% set body %}Context:\n{{ state | describe }}\n\nQuestion: {{ inst_text }}\n\nOptions:\n{{ opt.lines | join('\\n') }}{% endset %}<|im_start|>user\n{{ body | trim }}\n\nThink it through briefly, then answer with the option letter only.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nAnswer: (",
  "attention": "bidirectional",
  "labels": "@decision_config.json#codes",

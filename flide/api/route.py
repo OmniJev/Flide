@@ -18,9 +18,9 @@ import hashlib
 import itertools
 import json
 
-STRIDE = 1024
-SLOTS = 1 << 20
-_TAG = 20
+STRIDE = 1024       # characters, about 256 tokens: the stride of the session cache's marks
+SLOTS = 1 << 20     # entries of the shared table
+_TAG = 20           # the low bits of a key pick its slot, the rest tag it
 
 
 def _text(state) -> str:
@@ -48,7 +48,7 @@ class Router:
         self.table, self.loads = table, loads
         self.fid, self.n, self.fronts = fid, replicas, fronts
         self.slack, self.stride = slack, stride
-        self._turn = itertools.count(fid)
+        self._turn = itertools.count(fid)   # ties among the least busy rotate, so lone requests spread
 
     def _get(self, key: int) -> tuple[int, bool] | None:
         """(replica, whether a request went on past this prefix), or None when no replica served it."""

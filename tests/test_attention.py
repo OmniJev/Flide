@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("TRITON_F32_DEFAULT", "ieee")
+os.environ.setdefault("TRITON_F32_DEFAULT", "ieee")   # float32 comparisons need exact Triton dots, not TF32
 
 import random
 import sys
@@ -88,6 +88,7 @@ def graph_case(rng, Kmax, B, Sb, device):
             r = b * Sb + i
             real = i < L
             job.append(0 if real else -100000 - r); branch.append(b if real else -2); pos.append(P + i if real else 0)
+            # padding rows see only themselves (an empty cache range, as the branch graphs give them)
             lo1.append(start if real else 0); hi1.append(Kmax if real else 0)
             lo2.append(b * Sb if real else r); hi2.append(r + 1)
     t = lambda x: torch.tensor(x, dtype=torch.int32, device=device)
@@ -181,6 +182,7 @@ def tables(device) -> bool:
             ok &= same
             if not same:
                 print(f"  table case {case} bm {bm} bn {bn} exact {exact} groups {groups}: DIFFERENT")
+        # a sliding window moves the first range's start: tiles from the unwindowed ranges, key ranges from the cut ones
         cut = (torch.minimum(torch.maximum(rq[0], rq[1] - 37), rq[1]).contiguous(), rq[1], rq[2], rq[3])
         for bm, bn in ((128, 64), (16, 32)):
             a = block_ranges(*cut, bm, bn, exact=True, groups=n, tiles_from=rq)
@@ -189,7 +191,7 @@ def tables(device) -> bool:
             ok &= same
             if not same:
                 print(f"  table case {case} bm {bm} bn {bn} windowed, tiles from the full ranges: DIFFERENT")
-    stacked = torch.stack(rq)
+    stacked = torch.stack(rq)   # rows of a [4, T] (stride 1) and columns of a [T, 4] (stride 4) give the same table
     by_col = stacked.T.contiguous()
     same = bool(torch.equal(block_ranges(*stacked, 128, 64, exact=True, groups=n),
                             block_ranges(*(by_col[:, i] for i in range(4)), 128, 64, exact=True, groups=n)))
@@ -203,6 +205,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     ok = tables(device)
     for dtype in (torch.float32, torch.bfloat16):
+        # 72: the 9B / 27B vision tower (padded); 512: Gemma 4 global layers (value dims split in 16 bits)
         for D, H, Hk in ((256, 8, 2), (128, 4, 4), (72, 16, 16), (512, 8, 1)):
             for window in (0, 100):
                 ok &= run(dtype, D, H, Hk, window, device)

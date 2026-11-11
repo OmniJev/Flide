@@ -234,9 +234,9 @@ class Xor(Format):
         if refs:
             raws = [_data_url(r, "image") for r in refs]
             media = {"images": [_image(raw, self.device) for raw in raws]}
-            if self.device is not None:
+            if self.device is not None:   # a JPEG nvJPEG decoded: the processor tokenizes anew
                 anew = any(not hasattr(im, "height") for im in media["images"])
-            else:
+            else:   # planning without a GPU (token checks): as it would go on one
                 anew = any(raw.startswith(b"\xff\xd8") and raw.endswith(b"\xff\xd9") for raw in raws)
             keys = ("pixel_values", "image_position_ids")
         else:
@@ -247,7 +247,7 @@ class Xor(Format):
         tk = {"add_special_tokens": False} if tok.bos_token and head_text.startswith(tok.bos_token) else {}
         px = p(text=[head_text], padding=True, return_tensors="pt", **media, **tk, **kw)
         vision = {k: px[k] for k in keys if k in px}
-        if anew:
+        if anew:   # the media end in an end token, where tokenizing splits: the rest of each row tokenizes alone
             hid = px["input_ids"][0].tolist()
             out = []
             for row in rows:

@@ -30,7 +30,7 @@ from .schema import ModelMetadata, ModelMetadataList, SystemOneRequest
 log = logging.getLogger("flide.server")
 
 
-MAX_BATCH = 1024
+MAX_BATCH = 1024   # requests in one {"requests": [...]} body, as Nace's drex serve.py takes them
 
 
 def _validation_error(exc: ValidationError, loc: tuple = ("body",)) -> JSONResponse:
@@ -84,7 +84,7 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
     """`ready`, when given, is asked by /health (503 "loading" until it says yes): front ends start before the model
     has loaded."""
     family = engine.format
-    aliases = set(family.aliases) | {"jev-latest"}
+    aliases = set(family.aliases) | {"jev-latest"}   # the API's default model name, whatever the family
     app = FastAPI(title="flide", version=__version__)
     app.state.engine = engine
     app.state.debias = 1
@@ -225,7 +225,7 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         except ValueError as exc:
             return JSONResponse(status_code=422,
                                 content={"detail": [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]})
-        except ImportError as exc:
+        except ImportError as exc:   # a package the request needs and the server lacks (torchvision for images)
             return JSONResponse(status_code=500, content={"detail": str(exc)})
         response.model = model_name
         payload = response.model_dump()

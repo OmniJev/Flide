@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from flide.kernels import pointwise as pw
 
 
+# the eager PyTorch functions the kernels replace (transformers' Qwen3.5 arithmetic)
 def _rms(x, w, eps: float):
     """Qwen3.5 RMSNorm: zero-centred weight, statistics in float32."""
     xf = x.float()

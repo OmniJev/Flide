@@ -193,13 +193,13 @@ def _conv(X, X2, W, SRC, Q, Kt, Vt, T, sx, eps, KD: tl.constexpr, VD: tl.constex
         s = tl.load(SRC + j * T + t, mask=mt, other=-1)
         ok = (s >= 0) & (s < T) & mt
         xs = tl.load(X + s[:, None].to(tl.int64) * sx + c[None, :], mask=ok[:, None] & mc[None, :], other=0.0)
-        if SAVED:
+        if SAVED:   # predecessors before a resumed segment: rows of the saved convolution windows
             far = (s >= T) & mt
             xs += tl.load(X2 + (s - T)[:, None].to(tl.int64) * C + c[None, :], mask=far[:, None] & mc[None, :],
                           other=0.0)
         acc += xs.to(tl.float32) * tl.load(W + c * 4 + (2 - j), mask=mc, other=0.0).to(tl.float32)[None, :]
     y = acc * tl.sigmoid(acc)
-    if NORM:
+    if NORM:   # queries and keys L2-normalized per head (one head per block of channels), as fla's l2norm_fwd does it
         if c0 < 2 * KD:
             yb = y.to(Q.dtype.element_ty).to(tl.float32)
             y = yb * (1 / tl.sqrt(tl.sum(yb * yb, 1) + eps))[:, None]

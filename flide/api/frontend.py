@@ -37,8 +37,8 @@ class RemoteBatcher:
         self.requests = requests
         self.replies = replies
         self.router = router
-        self._replica: dict[int, int] = {}
-        self._sent: dict[int, int] = {}
+        self._replica: dict[int, int] = {}   # id(plan) -> its replica, from plan to forward
+        self._sent: dict[int, int] = {}      # forward id -> its replica, until the reply
         self._local = threading.local()
         self._planners = cf.ThreadPoolExecutor(max_workers=planners, thread_name_prefix="flide-plan",
                                                initializer=self._init_planner)
@@ -113,7 +113,7 @@ class RemoteBatcher:
         if len(futs) == 1:
             return futs[0]
         out: cf.Future = cf.Future()
-        cf.wait(futs)
+        cf.wait(futs)   # flushing is for idle servers, so blocking here is fine
         out.set_result([f.result() for f in futs])
         return out
 
@@ -264,7 +264,7 @@ def serve_replicas(build, gpus: list[str], fronts) -> None:
     before = os.environ.get("CUDA_VISIBLE_DEVICES")
     try:
         for i, devices in enumerate(gpus):
-            os.environ["CUDA_VISIBLE_DEVICES"] = devices
+            os.environ["CUDA_VISIBLE_DEVICES"] = devices   # a spawned process takes the environment of its start
             w = ctx.Process(target=run_replica, name=f"flide-replica-{i}", args=(i, build, requests[i], replies, ready[i]))
             w.start()
             workers.append(w)

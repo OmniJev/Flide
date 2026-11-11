@@ -73,7 +73,7 @@ class TokenRows:
         else:
             out = hidden.float() @ self.weight.T
         out = out if self.bias is None else out + self.bias
-        if self.softcap:
+        if self.softcap:   # models that soft-cap their logits (Gemma 4) read the capped values
             out = (out / self.softcap).tanh() * self.softcap
         return out
 
@@ -166,10 +166,11 @@ class NextToken(Format):
         weight, bias = backbone.output_head()
         softcap = getattr(backbone, "logit_softcap", None)
         heads = {"letters": TokenRows(weight, self.letter_ids, bias, softcap=softcap)}
-        if self.pairs:
+        if self.pairs:   # requests with labels past the single ones read every label through this head
             heads["wide"] = TokenRows(weight, self.letter_ids + self.pair_ids, bias, softcap=softcap)
         return heads
 
+    # ---- rendering ----------------------------------------------------------------------------
 
     def _plain(self, entry: Any) -> str:
         if self.style == "sglang" and entry is not None and not isinstance(entry, str):
@@ -191,7 +192,7 @@ class NextToken(Format):
         else:
             raise TypeError(f"unknown question type {type(q).__name__}")
         labels, reply = VLLM_LABELS[kind], VLLM_REPLY[kind]
-        if kind != "noul" and len(names) > len(labels):
+        if kind != "noul" and len(names) > len(labels):   # past the single labels: letters, then two-letter labels
             labels = tuple(LETTERS) + tuple(self.pairs)
             word = "option" if kind == "choice" else "level"
             reply = f"Answer with the {'letter' if len(names) <= len(LETTERS) else 'label'} of one {word} only."
@@ -248,7 +249,7 @@ class NextToken(Format):
         return kind, names, suffix
 
     def _render(self, state: Any, suffix: str, images: int = 0) -> str:
-        if images:
+        if images:   # vLLM's order: the images, then the text of the user turn
             user = (state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)) + "\n\n" + suffix
             content = [{"type": "image"}] * images + [{"type": "text", "text": user}]
             return self.processor.apply_chat_template([{"role": "user", "content": content}], tokenize=False,
@@ -297,7 +298,7 @@ class NextToken(Format):
         try:
             with Image.open(io.BytesIO(raw)) as im:
                 return im.convert("RGB")
-        except Exception as exc:
+        except Exception as exc:   # not an image PIL reads, or one past its pixel limit: the request's fault (a 422)
             raise ValueError(f"images: not a readable image ({type(exc).__name__})") from None
 
     def _vision(self, prefix: list[int], images: list, text: str, suffix: list[int]) -> tuple[list[int], dict]:
@@ -324,7 +325,7 @@ class NextToken(Format):
         expanded, k = [], 0
         for t in prefix:
             if t == pad:
-                if k == len(counts):
+                if k == len(counts):   # the request's own text spells the placeholder: a 422, not an IndexError
                     raise ValueError(f"more image placeholders in the shared prefix than the {len(counts)} images")
                 expanded.extend([pad] * counts[k])
                 k += 1
@@ -368,11 +369,12 @@ class NextToken(Format):
         marked = self._render(request.state, MARK, len(refs))
         end = marked.index(MARK)
         texts = self._prompts(request.state, marked, end, [suffix for _, _, _, suffix in questions], len(refs))
+        # the state is tokenized once, up to a cut where tokens restart, then each prompt from there
         shared = marked[:end]
         c = self._pieces.last_cut(marked, end - 1) if all(t.startswith(shared) for t in texts) else 0
         head, prefix_tail, *tails = self._pieces.encode(self.tokenizer,
                                                         [marked[:c], shared[c:]] + [t[c:] for t in texts])
-        if c and self._cut_checks < self.CUT_CHECKS:
+        if c and self._cut_checks < self.CUT_CHECKS:   # the first plans also tokenize one prompt whole
             self._cut_checks += 1
             if head + tails[0] != self.tokenizer.backend_tokenizer.encode(texts[0], add_special_tokens=False).ids:
                 self._pieces.ok = False

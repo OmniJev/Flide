@@ -25,8 +25,10 @@ import json
 import re
 
 CUT = re.compile(r"(?<=\n)(?=\S)|(?<=[A-Za-z0-9]) ")
+# whitespace places a one-word BPE may cut at (before a space after another character, before or after a newline run)
 WS_CUT = re.compile(r"(?<=[^ ])(?= )|(?<=\n)(?=[^\n])|(?<=[^\n])(?=\n)")
-SPACE = "\u2581"
+SPACE = "\u2581"   # a space as such a tokenizer's vocabulary writes it
+# the split patterns this holds for: Qwen 2 to 3.5 as tokenizer.json writes it, as transformers rebuilds it, Llama 3
 _HEAD = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|"
 _TAIL = r"|\s*[\r\n]+|\s+(?!\S)|\s+"
 PATTERNS = (
@@ -34,9 +36,9 @@ PATTERNS = (
     _HEAD + r"[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*" + _TAIL,
     _HEAD + r"[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*" + _TAIL,
 )
-PIECE = 1024
-LONG = 4 * PIECE
-SERIAL = 8
+PIECE = 1024       # characters per piece of a long text
+LONG = 4 * PIECE   # texts at least this long are tokenized in pieces
+SERIAL = 8         # up to this many short texts are tokenized one by one
 
 
 def splits_like_gpt(tokenizer) -> bool:
@@ -90,6 +92,7 @@ def one_word_pairs(tokenizer) -> set[str] | None:
     return {s[i: i + 2] for s in model.get("vocab", {}) for i in range(len(s) - 1)}
 
 
+
 class Pieces:
     def __init__(self, tokenizer):
         self.ok = splits_like_gpt(tokenizer)
@@ -133,7 +136,7 @@ class Pieces:
             parts = self._split(t) if self.ok and len(t) >= LONG else [t]
             pieces += parts
             owner += [k] * len(parts)
-        if len(pieces) == len(texts) and len(texts) <= SERIAL:
+        if len(pieces) == len(texts) and len(texts) <= SERIAL:   # nothing long: a batch costs more than it saves
             return [bt.encode(t, add_special_tokens=False).ids for t in texts]
         out: list[list[int]] = [[] for _ in texts]
         for k, e in zip(owner, bt.encode_batch(pieces, add_special_tokens=False)):

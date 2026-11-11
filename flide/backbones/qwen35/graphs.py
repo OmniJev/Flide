@@ -62,16 +62,22 @@ WIDTH_LADDER = (16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 20
 BATCH_LADDER = (2, 3, 4, 6, 8, 12, 16)
 CONT_LADDER = (64, 96, 128, 160, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
                3584, 4096)
+# two-segment continuation: segment A runs between save points, which sit on multiples of 256, so its widths are the
+# continuation rungs that are multiples of 256; padding segment B costs little (60 tokens in 64 or 256 rows: +2%)
 TAIL_LADDER = (256, 512, 1024)
+# flat graphs: stream lengths; from 2048 tokens up the padding at the end is at most 1/16 of the round (every token
+# of padding costs as much as a real one in the matrix products)
 FLAT_LADDER = (tuple(range(128, 512, 64)) + tuple(range(512, 2048, 128)) + tuple(range(2048, 4096, 128))
                + tuple(range(4096, 8192, 256)) + tuple(range(8192, 16385, 512)))
 FLAT_REQUESTS = 64
 CHUNK = 64
+# session flat graphs (the session cache on): requests resuming from saved states or saving theirs, per replay, and
+# the keys their prefixes may hold in all (saved ones included)
 SESSION_REQUESTS = 16
 SESSION_CTX = 65536
 KMAX = 32768
 BRANCH_TOKENS = 16384
-_OFF = -1.0e4
+_OFF = -1.0e4   # gate inputs of continuation padding: softplus and sigmoid of it are exactly 0 in float32
 
 
 def _causal(q, k, v, scale: float):
@@ -145,9 +151,9 @@ def _flat_layout(T: int, sess: bool = False) -> dict:
 
 
 class RequestGraphs:
-    block_attention = True
-    prefix_attention = True
-    read_spots = True
+    block_attention = True   # in flat graphs
+    prefix_attention = True   # in flat graphs
+    read_spots = True        # flat graphs read a request at the positions its fifth field lists
 
     def __init__(self, bb, sequence_ladder=SEQUENCE_LADDER, width_ladder=WIDTH_LADDER, batch_ladder=BATCH_LADDER,
                  kmax: int = KMAX, branch_tokens: int = BRANCH_TOKENS, cont_ladder=CONT_LADDER,
@@ -172,9 +178,10 @@ class RequestGraphs:
         self.ids_branch = torch.zeros(self.branch_tokens, dtype=torch.long, device=dev)
         self.lens = torch.ones(self.bmax, dtype=torch.long, device=dev)
         self.P = torch.zeros((), dtype=torch.long, device=dev)
-        self.pos_start = torch.zeros((), dtype=torch.long, device=dev)
+        self.pos_start = torch.zeros((), dtype=torch.long, device=dev)   # rotary position of the first branch token
         self.media = bb.vlm is not None
         if self.media:
+            # Requests with images or videos enter as embeddings with M-RoPE positions instead of token ids.
             self.emb_seq = torch.zeros(self.seq_ladder[-1], cfg.hidden_size, device=dev, dtype=dt)
             self.pos3_seq = torch.zeros(3, self.seq_ladder[-1], dtype=torch.long, device=dev)
         ncont = self.cont_ladder[-1] + self.tail_ladder[-1]
@@ -185,6 +192,8 @@ class RequestGraphs:
         self.host_seq = torch.zeros(self.seq_ladder[-1], dtype=torch.long, pin_memory=True)
         self.host_branch = torch.zeros(self.branch_tokens, dtype=torch.long, pin_memory=True)
         self.host_lens = torch.ones(self.bmax, dtype=torch.long, pin_memory=True)
+        # Host-to-device copies from the pinned buffers are asynchronous; the buffers are rewritten only after
+        # the last copy that reads them has finished.
         self.staged = torch.cuda.Event()
         self.staged.record()
         self.out = torch.zeros(self.bmax, cfg.hidden_size, device=dev, dtype=dt)
@@ -192,7 +201,7 @@ class RequestGraphs:
         hd = cfg.head_dim
         self.attn_cfg = attn_kernel.config(dev, dt, hd)
         self.K, self.V, self.conv, self.S = {}, {}, {}, {}
-        self.conv_mark, self.S_mark = {}, {}
+        self.conv_mark, self.S_mark = {}, {}    # the state at the end of segment A of a two-segment continuation
         for i, layer in enumerate(bb.layers):
             if bb.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
@@ -204,6 +213,7 @@ class RequestGraphs:
                 self.S_mark[i] = torch.zeros_like(self.S[i])
             else:
                 nkv = bb._w[i]["heads"][1]
+                # slot kmax takes the writes of padding tokens
                 self.K[i] = torch.zeros(kmax + 1, nkv, hd, device=dev, dtype=dt)
                 self.V[i] = torch.zeros(kmax + 1, nkv, hd, device=dev, dtype=dt)
         nflat = max(_flat_layout(FLAT_LADDER[-1])["size"], _flat_layout(FLAT_LADDER[-1], True)["size"])
@@ -212,13 +222,15 @@ class RequestGraphs:
         P, B, _ = flat_dims(FLAT_LADDER[-1])
         self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=dt)
         self.flat_max = FLAT_LADDER[-1]
-        self.out_whole = None
+        self.out_whole = None   # final-norm hidden states of the whole stream, for rounds read at every position
+        # token embeddings of the round (vision features in place for requests with media), filled before each replay
         self.emb_flat = torch.zeros(FLAT_LADDER[-1], cfg.hidden_size, device=dev, dtype=dt)
-        self.sess = None
+        self.sess = None   # session flat buffers, made with the first session graph
         self.pool = torch.cuda.graph_pool_handle()
         self.graphs: dict[tuple, torch.cuda.CUDAGraph] = {}
         self.failed: set[tuple] = set()
 
+    # ---- what fits ----------------------------------------------------------------------------
 
     def fits(self, prefix_len: int, suffix_lens: list[int]) -> bool:
         if len(suffix_lens) == 1:
@@ -243,6 +255,7 @@ class RequestGraphs:
     def flat_shapes(self) -> list[tuple]:
         return [("flat", T) for T in FLAT_LADDER]
 
+    # ---- forward bodies (captured) ------------------------------------------------------------
 
     def _sequence(self, L: int, media: bool = False):
         """Sequence graph body: tokens right-aligned in the last L slots of `ids_seq` (or, with media, their
@@ -346,6 +359,8 @@ class RequestGraphs:
                     sb["conv"][i] = torch.zeros(3 * R + 1, cd, device=dev, dtype=dt)
                     sb["snapS"][i] = torch.zeros(R, *sb["S"][i].shape[1:], device=dev, dtype=torch.float32)
                     sb["snapconv"][i] = torch.zeros(4 * R, cd, device=dev, dtype=dt)
+                    # the save points' windows and the resumed ones in the Entry layout ([cd, 4], oldest input first),
+                    # so a round's saves and restores are contiguous copies grouped by dtype
                     sb["snapconvT"][i] = torch.zeros(R, cd, 4, device=dev, dtype=dt)
                     sb["convT"][i] = torch.zeros(R, cd, 4, device=dev, dtype=dt)
                 else:
@@ -371,6 +386,9 @@ class RequestGraphs:
         cos, sin = cos[0], sin[0]
         tok = (f["job"], f["branch"], f["pos"])
         r = f["ranges"].view(4, T)
+        # tiles never span two requests: a round's prefixes, branches (grouped by request) and padding are at most
+        # 2P + 1 runs of one group (session rounds: 3 * SESSION_REQUESTS + 1 <= 2P + 1); with tiles of one branch each,
+        # at most P + B + 1
         R = None if whole else attn_kernel.block_ranges(r[0], r[1], r[2], r[3], self.attn_cfg["BLOCK_M"],
                                                         self.attn_cfg["BLOCK_N"], exact=True,
                                                         groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
@@ -380,21 +398,27 @@ class RequestGraphs:
             sb = self._session_buffers()
             ctx_meta = (sb["meta"][0], sb["meta"][1], sb["meta"][2])
             ctx_idx = f["ctx"].long()
-            for i in sb["convT"]:
+            for i in sb["convT"]:   # resumed windows: rows 1, 2, 3 back from the resume point, from the staged Entry layout
                 sb["conv"][i][: 3 * SESSION_REQUESTS].view(SESSION_REQUESTS, 3, -1).copy_(
                     sb["convT"][i][:, :, 1:].flip(2).transpose(1, 2))
         reads = f["reads"]
         top = -1 if whole else self._last_layer()
         n0 = bb.layers[0].input_layernorm
         x = rms(h, n0.weight, n0.eps)
-        for i, layer in enumerate(bb.layers):
+        order, start = bb.layer_order(len(bb.layers)), None
+        for p, (i, first, end) in enumerate(order):
+            layer = bb.layers[i]
+            if first:
+                start = h
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
+                # a whole round is one sequence from position 0: fla's chunked recurrence over the stream, its padding
+                # after the last real token (the fused one runs each sequence's chunks in one program, 2x slower on one)
                 d = (self._gdn(layer.linear_attn, w, x, i, None, False) if whole
                      else self._gdn_flat(layer.linear_attn, w, x, src, slots, i, f if sess else None))
             else:
                 m = layer.self_attn
-                if i == top:
+                if i == top:   # queries at the reads only
                     q, gate, k, v = last_qkv(m, w, x, reads, cos, sin)
                     Rq, rq = rows_ranges(r, reads, self.attn_cfg)
                     tq = tuple(t.index_select(0, reads) for t in tok)
@@ -402,7 +426,7 @@ class RequestGraphs:
                     q, gate, k, v = self._qkv(m, w, x)
                     q, k = qk_norm_rope(q, k, cos, sin, m.q_norm.weight, m.k_norm.weight, m.q_norm.eps)
                     Rq, rq, tq = R, r, tok
-                if sess:
+                if sess:   # prefix keys into the context buffer, after the saved ones; branches read both
                     Kc, Vc = sb["K"][i], sb["V"][i]
                     Kc.index_copy_(0, ctx_idx, k)
                     Vc.index_copy_(0, ctx_idx, v)
@@ -415,7 +439,7 @@ class RequestGraphs:
                 d = mm(gate_out(o, gate), w["o"])
                 if i == top:
                     h = h.index_select(0, reads)
-            h, x = self._mlp(i, layer, w, h, d)
+            h, x = self._mlp(i, layer, w, h, d, (order[p + 1][0] if p + 1 < len(order) else None, start if end else None))
         if whole:
             self.out_whole[:T].copy_(final_norm(lm.norm, h))
         else:
@@ -438,9 +462,9 @@ class RequestGraphs:
                          v.view(1, T, nv, m.head_v_dim), a, beta, m.A_log, m.dt_bias, cu, chunks, levels, h0,
                          resume=None if sb is None else sb["S"][i],
                          resume_idx=None if sb is None else sess["resume"], prepared=True)
-        if sb is not None:
+        if sb is not None:   # the state and the last four convolution inputs at every save point
             sb["snapS"][i].copy_(ht.index_select(0, sess["snap"]))
-            idx = sess["snapconv"]
+            idx = sess["snapconv"]   # rows of p (< T) or of the resumed windows (T + row)
             rows = torch.where((idx < T)[:, None], p[:, :cd].index_select(0, idx.clamp(max=T - 1)),
                                sb["conv"][i].index_select(0, (idx - T).clamp(min=0)))
             sb["snapconv"][i].copy_(rows)
@@ -474,6 +498,8 @@ class RequestGraphs:
         ak = self.ar[: self.kmax]
         k1 = (torch.where(ak < self.P, 0, -1 - ak).int(), self.k1_branch, ak.int())
         zero = torch.zeros_like(ar)
+        # B's queries also span A's padding keys; those carry their own job ids, so the kernel masks them (the
+        # ranges are exact with one segment only)
         R = attn_kernel.block_ranges(zero, torch.where(real, self.P, 0), zero, torch.where(real, ar + 1, 0),
                                      self.attn_cfg["BLOCK_M"], self.attn_cfg["BLOCK_N"], exact=not Wb)
         dst = torch.where(real, pos, self.kmax)
@@ -486,7 +512,7 @@ class RequestGraphs:
                 d = self._gdn_continue(layer.linear_attn, w, x, i, real, W, Wb)
             else:
                 m = layer.self_attn
-                if i == top:
+                if i == top:   # the query of the last real token only
                     rows = last.view(1)
                     q, gate, k, v = last_qkv(m, w, x, rows, cos, sin)
                     qr = torch.stack([zero, torch.where(real, self.P, 0), zero, torch.where(real, ar + 1, 0)])
@@ -535,6 +561,7 @@ class RequestGraphs:
                 init = conv[j]
                 y, _ = causal_conv1d(xj, w["conv"][clo:chi], None, activation=m.activation, initial_state=init,
                                      output_final_state=False)
+                # new window: columns n .. n + Wk - 1 of [old window | inputs], gathered without building it
                 Wk = init.shape[-1]
                 src = n + self.ar[:Wk]
                 from_x = xj[0].index_select(0, (src - Wk).clamp(min=0)).T
@@ -558,11 +585,15 @@ class RequestGraphs:
         y = gated_rms(o.reshape(T, nv, m.head_v_dim), z, m.norm.weight, m.norm.variance_epsilon)
         return mm(y, w["out"])
 
-    def _mlp(self, i, layer, w, h, d):
+    def _mlp(self, i, layer, w, h, d, step=None):
+        """`step` (next layer or None, the stream a midloop pass ending here started from): layers run in the
+        backbone's layer_order (flat graphs); without it, layer i + 1 follows."""
         bb = self.bb
         n2 = layer.post_attention_layernorm
         h, x = add_rms(h, d, n2.weight, n2.eps)
         d = ffn(w, x)
+        if step is not None:
+            return bb.next_input(h, d, *step)
         if i + 1 < len(bb.layers):
             n1 = bb.layers[i + 1].input_layernorm
             return add_rms(h, d, n1.weight, n1.eps)
@@ -615,10 +646,10 @@ class RequestGraphs:
         return qg[..., :hd], qg[..., hd:], k, v
 
     def _last_layer(self) -> int:
-        """Index of the last layer when it runs at the read rows only, else -1."""
+        """Index of the last layer when it runs at the read rows only (once, after any midloop), else -1."""
         bb = self.bb
         i = len(bb.layers) - 1
-        return i if bb.layer_types[i] != "linear_attention" else -1
+        return i if bb.layer_types[i] != "linear_attention" and not bb.layer_order(i + 1)[-1][2] else -1
 
     def _rows_qkv(self, m, w, x, cos, sin, tok, R, rows, qr):
         """q, gate, k, v and the query side of the kernel call (metadata, tiles, exact ranges): every row, or
@@ -646,6 +677,7 @@ class RequestGraphs:
                                   0, self.attn_cfg, qranges=rq)
         return mm(gate_out(o, gate), w["o"])
 
+    # ---- capture and replay -------------------------------------------------------------------
 
     def _body(self, shape):
         if shape[0] == "branch":
@@ -681,13 +713,13 @@ class RequestGraphs:
             self.lens.fill_(1)
             self.clen.fill_(1)
             self.clen2.fill_(1)
-            if shape[0] in ("flat", "flatw"):
+            if shape[0] in ("flat", "flatw"):   # a valid round: one sequence of every token
                 self._stage_flat([(list(range(shape[1])), [])], shape[1])
                 torch.cuda.synchronize()
             if shape[0] == "sflat":
                 self._stage_sflat([(list(range(shape[1])), [], None, 0, None)], shape[1])
                 torch.cuda.synchronize()
-            body()
+            body()      # compiles what is not compiled yet and allocates the libraries' scratch memory before capture
             torch.cuda.synchronize()
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g, pool=self.pool, capture_error_mode=capture_mode()):
@@ -705,6 +737,8 @@ class RequestGraphs:
     def capture_all(self, log_fn=None, max_tokens: int | None = None) -> None:
         """Capture every shape up to `max_tokens` (all when None), largest first so the shared pool is sized
         once. Shapes left out are captured on first use."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return
         t0 = time.perf_counter()
         size = lambda s: s[1] * s[2] if s[0] == "branch" else s[1]
         shapes = sorted((s for s in self.shapes() if max_tokens is None or size(s) <= max_tokens), key=lambda s: -size(s))
@@ -725,6 +759,8 @@ class RequestGraphs:
 
     def capture_sessions(self, log_fn=None) -> None:
         """Capture the two-segment continuation graphs that sessions use (only when the session cache is on)."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return
         t0 = time.perf_counter()
         shapes = [("cont2", a, b) for a in self.mark_ladder for b in self.tail_ladder]
         for s in sorted(shapes, key=lambda s: -(s[1] + s[2])):
@@ -740,6 +776,8 @@ class RequestGraphs:
 
         Every graph the request needs is captured before any of its data is staged: capturing runs the
         graph body on the shared buffers and would overwrite the request's lengths and the prefix state."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return None
         n = len(suffixes)
         if n == 1:
             seq = prefix + suffixes[0]
@@ -787,6 +825,7 @@ class RequestGraphs:
             out.append(self.out[: len(chunk)].clone())
         return torch.cat(out)
 
+    # ---- several requests: flat graphs ----------------------------------------------------------
 
     @staticmethod
     def whole(req) -> bool:
@@ -818,9 +857,10 @@ class RequestGraphs:
         for T in FLAT_LADDER:
             if T < tokens:
                 continue
-            if T > 2 * tokens + 256:
+            if T > 2 * tokens + 256:   # many short branches: slots would cost more padding than the request holds
                 return None
             P, B, C = flat_dims(T)
+            # a branch slot for the padding and one empty slot for the padded chunk list
             if requests <= P and branches + 2 <= B and chunks + -(-(T - tokens) // CHUNK) <= C and reads <= P + B:
                 return T
         return None
@@ -875,6 +915,7 @@ class RequestGraphs:
             job[s] = j
             br[s] = -1
             r[0, s] = at
+            # blocks: the branch part of a merged sequence sees all of itself; prefix: it stays one-way
             r[1, s] = np.where(ar < p, at + p, ar + at + 1 if blk == "prefix" else at + n) if blk else ar + at + 1
             r[2:, s] = 0
             for d in (1, 2, 3):
@@ -914,7 +955,7 @@ class RequestGraphs:
                     nread += 1
                 at += m
                 b += 1
-        if at < T:
+        if at < T:   # padding: its own sequence (zero ids), each token its own job attending only to itself
             s = slice(at, T)
             ar = np.arange(at, T)
             ids[s] = 0
@@ -940,7 +981,7 @@ class RequestGraphs:
         slot = np.repeat(np.arange(S), nch)
         chunks[:total, 0] = slot
         chunks[:total, 1] = np.arange(total) - offsets[:-1][slot]
-        chunks[total:, 0] = S - 1
+        chunks[total:, 0] = S - 1     # an empty slot (the last branch slot is never used)
         chunks[total:, 1] = 0
         n = lay["size"]
         self.flat_in[:n].copy_(self.host_flat[:n], non_blocking=True)
@@ -960,7 +1001,7 @@ class RequestGraphs:
         for a one-branch request, else per branch in that branch). None when it does not fit."""
         T = self.flat_shape(reqs)
         whole = [self.whole(r) for r in reqs]
-        if any(whole):
+        if any(whole):   # a round read at every position: one request (the engine runs each in a round of its own)
             if T is None or len(reqs) > 1 or not self.capture(("flatw", T)):
                 return None
             self._stage_flat([r[:4] for r in reqs], T)
@@ -973,6 +1014,7 @@ class RequestGraphs:
         n = sum(max(1, len(r[1])) if len(r) < 5 else len(r[4]) if len(r[1]) == 1 else sum(map(len, r[4])) for r in reqs)
         return self.out_flat[:n].clone()
 
+    # ---- sessions in flat graphs -----------------------------------------------------------------
 
     @staticmethod
     def _sflat_parts(req):
@@ -1032,11 +1074,11 @@ class RequestGraphs:
         lens = np.zeros(S, np.int64)
         c_at, starts1, starts2, cstart = 0, [], [], []
         at = 0
-        for j, (seq, _, _, entry, start, m) in enumerate(parts):
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 1: resume point to save point
             starts1.append(at)
             at += m - start
             lens[j] = m - start
-        for j, (seq, _, _, entry, start, m) in enumerate(parts):
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 2: the rest of each prefix
             starts2.append(at)
             at += len(seq) - m
             lens[R + j] = len(seq) - m
@@ -1102,12 +1144,12 @@ class RequestGraphs:
                     back = ar - d
                     src[d - 1, s_] = [at + x if x >= 0 else where(j, n + x) for x in back]
                 lens[P + b] = k_
-                h0[R + b] = R + j if len(seq) > m else j
+                h0[R + b] = R + j if len(seq) > m else j      # from the end of the prefix: level 2, or level 1
                 reads[nread] = at + k_ - 1
                 nread += 1
                 at += k_
                 b += 1
-        if at < T:
+        if at < T:   # padding: its own sequence, each token its own job attending only to itself
             s_ = slice(at, T)
             ar = np.arange(at, T)
             ids[s_] = 0
@@ -1123,12 +1165,12 @@ class RequestGraphs:
             lens[P + b] = T - at
             h0[R + b] = 0
             b += 1
-        h0[:R] = np.arange(R)
+        h0[:R] = np.arange(R)                                 # level 2 starts from level 1's end
         h0[R + b:] = 0
         reads[nread:] = 0
         resume[:] = R
         snap[:] = 0
-        snapconv[:] = T + 3 * R
+        snapconv[:] = T + 3 * R                               # the zero row
         out = []
         for j, (seq, _, _, entry, start, m) in enumerate(parts):
             if entry is not None:
@@ -1157,14 +1199,14 @@ class RequestGraphs:
         dev_ids = self.flat_in[lay["ids"][0]: lay["ids"][1]]
         torch.index_select(self.lm.embed_tokens.weight, 0, dev_ids, out=self.emb_flat[:T])
         pairs = []
-        for j, (seq, _, _, entry, start, m) in enumerate(parts):
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # saved states, windows and keys of the resumed
             if entry is None:
                 continue
             st = entry.states[start]
             for i in sb["S"]:
                 pairs.append((sb["S"][i][j], st["S"][i].view_as(sb["S"][i][j])))
                 at = 0
-                for c in st["conv"][i]:
+                for c in st["conv"][i]:   # [rows, W] pieces of the window, right-aligned into [cd, 4]
                     c2 = c.reshape(c.shape[-2], c.shape[-1])
                     pairs.append((sb["convT"][i][j, at: at + c2.shape[0], 4 - c2.shape[1]:], c2))
                     at += c2.shape[0]
@@ -1181,7 +1223,7 @@ class RequestGraphs:
         sb = self.sess
         parts = [sb["snapS"][i][j] for i in sb["snapS"]]
         for i in sb["snapconvT"]:
-            win = sb["snapconvT"][i][j]
+            win = sb["snapconvT"][i][j]                                     # [cd, 4]: oldest input first
             kd = self.conv[i][0].shape[1]
             parts += [win[:kd], win[kd: 2 * kd], win[2 * kd:]]
         parts += [t[cstart: cstart + mark] for i in sb["K"] for t in (sb["K"][i], sb["V"][i])]
@@ -1203,6 +1245,8 @@ class RequestGraphs:
         """One replay for a round of session requests (prefix, branches, entry or None, start, mark or None): (final-norm
         hidden states at the last token of every branch, in request and branch order; per request (states, kv) at its
         save point or None). None when the round does not fit."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return None
         T = self.sflat_shape(reqs)
         if T is None or not self.capture(("sflat", T)):
             return None
@@ -1217,11 +1261,14 @@ class RequestGraphs:
 
     def capture_sflat(self, log_fn=None) -> None:
         """Capture the session flat graphs (the session cache on)."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return
         t0 = time.perf_counter()
         for T in sorted(FLAT_LADDER, reverse=True):
             self.capture(("sflat", T))
         (log_fn or log.info)(f"captured {len(FLAT_LADDER)} session flat graphs in {time.perf_counter() - t0:.1f}s")
 
+    # ---- sessions ---------------------------------------------------------------------------------
 
     def _cont_chunks(self, n: int) -> list[tuple[int, int]]:
         """(tokens, width rung) per continuation step for n tokens."""
@@ -1306,6 +1353,8 @@ class RequestGraphs:
         one two-segment continuation; with several branches the branch graph follows from the end of the prefix.
         Returns (final-norm hidden states at every branch's last token, (states, kv) at the mark or None), or None
         when a shape does not fit."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return None
         upto = mark if mark else start
         if upto < start:
             return None
@@ -1356,10 +1405,10 @@ class RequestGraphs:
             return None
         rest = prefix[upto:]
         if len(suffixes) > 1:
-            more, branches = rest, suffixes
+            more, branches = rest, suffixes        # computed once, every branch from the end of the prefix
         elif self._branch_shape(1, len(rest) + len(suffixes[0])) is not None:
             more, branches = [], [rest + suffixes[0]]
-        else:
+        else:                                       # one long branch: continue to its last token
             seq = rest + suffixes[0]
             more, branches = seq[:-1], [seq[-1:]]
         end = upto + len(more)
@@ -1389,6 +1438,8 @@ class RequestGraphs:
         """As `run`, for a prefix holding images or videos: the vision tower and the embedding run eagerly, the
         decoder from the graphs with the M-RoPE positions of the prefix; suffix tokens continue at position
         P + offset."""
+        if self.bb.midloop is not None:   # midloop: the flat graphs only
+            return None
         n, P = len(suffixes), len(prefix)
         dev = self.device
         N = self.ids_seq.shape[0]

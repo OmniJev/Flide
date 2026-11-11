@@ -51,11 +51,11 @@ def load_plugins() -> None:
     if _loaded:
         return
     _loaded = True
-    from . import next_token, template
+    from . import next_token, template  # noqa: F401  built in
     for ep in entry_points(group=GROUP):
         try:
             ep.load()
-        except Exception as exc:
+        except Exception as exc:  # a broken plugin must not take the others down
             log.warning("format plugin %s (%s) failed to load: %s: %s", ep.name, ep.value, type(exc).__name__, exc)
 
 

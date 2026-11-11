@@ -86,6 +86,7 @@ class _Ctx:
         if module.is_kv_shared_layer:
             return self.shared[module.layer_type]
         b, C, Tp, i = self.b, self.b.ctx, self.b.n_prefix_tokens, module.layer_idx
+        # a sliding layer's saves leave older rows unwritten; zeros there, as a query tile can span them
         new = k.new_zeros if module.is_sliding and b.resumes else k.new_empty
         Kc, Vc = new((C["len"],) + k.shape[1:]), new((C["len"],) + v.shape[1:])
         Kc.index_copy_(0, C["index"], k[:Tp])
@@ -159,7 +160,7 @@ class Gemma4(Backbone):
         elif vision:
             arch = (transformers.Gemma4UnifiedForConditionalGeneration if config.model_type == "gemma4_unified"
                     else transformers.Gemma4ForConditionalGeneration)
-            cfg, key_map = config, ([(r"^model\.vision_embedder\.", "model.embed_vision."),
+            cfg, key_map = config, ([(r"^model\.vision_embedder\.", "model.embed_vision."),   # transformers' renames
                                      (r"^model\.embed_vision\.embedding_projection",
                                       "model.embed_vision.multimodal_embedder.embedding_projection")]
                                     if config.model_type == "gemma4_unified" else [])
@@ -185,7 +186,7 @@ class Gemma4(Backbone):
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
                 model = None
                 torch.cuda.empty_cache()
-        if model is None:
+        if model is None:   # transformers maps checkpoint names only for the class the checkpoint was saved from
             if config.model_type == "gemma4_text":
                 arch = transformers.Gemma4ForCausalLM
             elif config.model_type == "gemma4_unified":
@@ -194,7 +195,7 @@ class Gemma4(Backbone):
                 arch = transformers.Gemma4ForConditionalGeneration
             model = arch.from_pretrained(model_dir, config=config, dtype=getattr(torch, dtype), device_map={"": str(device)},
                                          low_cpu_mem_usage=True, local_files_only=True, attn_implementation=IMPL)
-        if vision:
+        if vision:   # flide's attention takes the packed decoder only; the towers keep transformers' own
             for sub in ("vision_config", "audio_config"):
                 c = getattr(model.config, sub, None)
                 if c is not None:
@@ -224,7 +225,10 @@ class Gemma4(Backbone):
         self.placeholders = {i for i in (getattr(top, k, None) for k in ("image_token_id", "video_token_id",
                                                                           "audio_token_id")) if i is not None}
         self.pad_id = self.config.pad_token_id
+        # the tokens of one image see each other in the sliding layers (the sizes trained that way)
         self.bidir = getattr(self.config, "use_bidirectional_attention", None) == "vision"
+        # mixture-of-experts blocks (26B-A4B) run in the fused decoder in 16 bits (kernels/moe.py), and in float32 as
+        # transformers' modules, its loop over the hit experts
         self.moe = bool(getattr(self.config, "enable_moe_block", False))
         self._experts()
         self._fused = None
@@ -382,7 +386,7 @@ class Gemma4(Backbone):
                       attention_mask=masks, use_cache=False, output_hidden_states=need_hidden, return_dict=True)
         res = {}
         if need_hidden:
-            hs = out.hidden_states
+            hs = out.hidden_states          # embeddings, then after every layer (the last before the final norm)
             for k in ints:
                 res[k] = hs[k][0, b.reads[k]]
         if FINAL in b.reads:

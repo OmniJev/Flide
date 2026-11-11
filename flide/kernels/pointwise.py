@@ -253,7 +253,7 @@ def _geglu_kernel(A, B, OUT, N, sa, sb, so, BLOCK: tl.constexpr):
     a = tl.load(A + row * sa + cols, mask=m, other=0.0).to(tl.float32)
     b = tl.load(B + row * sb + cols, mask=m, other=0.0).to(tl.float32)
     z = 0.7978845608028654 * (a + 0.044715 * a * a * a)
-    g = 0.5 * a * (2.0 - 2.0 / (1.0 + tl.exp(2.0 * z)))
+    g = 0.5 * a * (2.0 - 2.0 / (1.0 + tl.exp(2.0 * z)))   # 0.5 a (1 + tanh z)
     tl.store(OUT + row * so + cols, (g * b).to(OUT.dtype.element_ty), mask=m)
 
 

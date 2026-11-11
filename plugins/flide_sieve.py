@@ -218,7 +218,7 @@ class Sieve(Format):
         if longest > self.max_len:
             raise ValueError(f"prompt is {longest} tokens, limit is {self.max_len}")
         data = {"questions": questions, "rotated": [i for i, q in enumerate(questions) if q["shift"]]}
-        if len(questions) == 1:
+        if len(questions) == 1:   # one block, read both ways whole
             return Plan([], [block0 + b for b in branches + rotated], (READ,), data, attention="blocks")
         return Plan(block0, branches + rotated, (READ,), data, attention="blocks")
 

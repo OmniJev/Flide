@@ -452,7 +452,7 @@ class KnowLine(Format):
         self.temperature = float(temperature)
         serve = Path(model_dir) / "serve_knowline.sh"
         script = serve.read_text() if serve.is_file() else ""
-        if header_when_long is None:
+        if header_when_long is None:   # as the release's serve_knowline.sh starts its front end
             m = re.search(r"--header-when-long\s+(\d+)", script)
             header_when_long = int(m[1]) if m else 0
         self.header_when_long = int(header_when_long)
@@ -571,7 +571,7 @@ class KnowLine(Format):
         texts = [prefix + b + ending + ANSWER for b, _ in blocks.values()]
         head, tail, rest = self._encode(prefix, texts)
         twice = False
-        if self.read_twice and not media:
+        if self.read_twice and not media:   # read twice and the header are for text-only requests
             p = len(head) + len(tail)
             once = p + sum(len(head) + len(r) - p for r in rest)
             if once <= self.twice_max_tokens:
@@ -580,7 +580,8 @@ class KnowLine(Format):
                 texts = [prefix + b + middle + b + ending + ANSWER for b, _ in blocks.values()]
                 head, tail, rest = self._encode(prefix, texts)
         header = False
-        if self.read_twice and not media and not twice and self.header_when_long:
+        if self.read_twice and not media and not twice and self.header_when_long:   # read twice does not cover it (its
+            # --no-read-twice reads every request once without a header): the header, read once, if it fits
             hprefix, _, hending, _ = self._scaffold(state, False, header_text(request.questions))
             htexts = [hprefix + b + hending + ANSWER for b, _ in blocks.values()]
             if len(self.tokenizer.encode(max(htexts, key=len), add_special_tokens=False)) <= self.header_when_long:

@@ -84,7 +84,7 @@ def _decode(raw: bytes):
     try:
         with Image.open(io.BytesIO(raw)) as im:
             return im.convert("RGB")
-    except Exception as exc:
+    except Exception as exc:   # not an image PIL reads, or one past its pixel limit: the request's fault (a 422)
         raise MediaError(f"not a readable image ({type(exc).__name__})") from None
 
 
@@ -112,7 +112,7 @@ def open_image(ref: Any, root: str | Path | None = None, allow_paths: bool = Tru
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw = r.read(cap + 1)
-        except OSError as exc:
+        except OSError as exc:   # unreachable, refused, timed out, an HTTP error status
             raise MediaError(f"could not fetch {ref!r}: {exc}") from None
         if len(raw) > cap:
             raise MediaError(f"{ref!r} is larger than {cap / 2 ** 20:g} MiB")

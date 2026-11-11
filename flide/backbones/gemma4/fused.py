@@ -62,7 +62,7 @@ class FusedDecoder:
         self.lm = lm
         self.cfg = lm.config
         self.ple = bool(self.cfg.hidden_size_per_layer_input)
-        self.dtype = lm.layers[0].mlp.gate_proj.weight.dtype
+        self.dtype = lm.layers[0].mlp.gate_proj.weight.dtype   # merged at this dtype; a cast needs a new decoder
         self.w = []
         for layer in lm.layers:
             a, mlp = layer.self_attn, layer.mlp
@@ -80,6 +80,7 @@ class FusedDecoder:
                 w["ple_proj"] = lora.attached(layer.per_layer_projection.weight, [layer.per_layer_projection])
             if getattr(layer, "enable_moe_block", False):
                 r, ex = layer.router, layer.experts
+                # the router's norm has no weight of its own; its scale and 1 / sqrt(hidden) are one float32 weight
                 w["moe"] = {"router": r.proj.weight, "router_norm": (r.scale.float() * r.scalar_root_size).contiguous(),
                             "expert_scale": r.per_expert_scale, "experts": ex.gate_up_proj,
                             "experts_down": ex.down_proj, "inter": ex.intermediate_dim, "topk": self.cfg.top_k_experts}
@@ -97,6 +98,8 @@ class FusedDecoder:
         ids = lm.get_per_layer_inputs(llm[None], None)[0]
         if not settings.batch_invariant:
             return lm.project_per_layer_inputs(emb[None], ids[None])[0]
+        # transformers' projection and norm, with the batch-invariant product and a norm of one program per row (the
+        # Linear and the torch reduction pick their kernels by the number of rows)
         T, n = ids.shape[0], ids.shape[-1]
         norm = lm.per_layer_projection_norm
         p = mm(emb, lm.per_layer_model_projection.weight) * lm.per_layer_model_projection_scale
@@ -128,7 +131,7 @@ class FusedDecoder:
             nh, nkv, hd = w["nh"], w["nkv"], w["hd"]
             cos, sin = tabs[a.layer_type]
             last = rows is not None and i == len(layers) - 1
-            if last:
+            if last:   # queries only at the read rows; keys and values of every row
                 Tq = rows.shape[0]
                 q = pw.gemma_norm_rope(rmm(x.index_select(0, rows), w["qkv"][: nh * hd]).view(Tq, nh, hd),
                                        cos.index_select(0, rows), sin.index_select(0, rows), a.q_norm.weight,
@@ -160,7 +163,7 @@ class FusedDecoder:
             else:
                 o = attn_kernel.attention(q, k1, v1, k, v, meta.tok, meta.k1, meta.tok, meta.R(ac), 1.0, w["window"],
                                           ac)
-            m_ = rmm if last else mm
+            m_ = rmm if last else mm   # the read rows of the last layer: products whose sums ignore the row count
             d = m_(o.reshape(Tq, nh * hd), w["o"])
             h, x = pw.sandwich(d, h, layer.post_attention_layernorm.weight, eps,
                                w2=layer.pre_feedforward_layernorm.weight)

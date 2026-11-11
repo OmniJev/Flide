@@ -30,7 +30,7 @@ from flide.formats import register
 from flide.formats.base import Plan
 from flide.formats.template import KNOWN, Template
 
-SPEC = KNOWN / "joyindustrial__jdi-decision.json"
+SPEC = KNOWN / "joyindustrial__jdi-decision.json"   # the release's prompt; its "match" is empty, this family claims the checkpoint
 REPO = "JoyIndustrial/JDI-Decision-V1"
 FILES = ("readout.safetensors", "decision_config.json", "d3_format.py")
 DECISION_CONFIG = {"format_version": 1, "format_id": "d3-code-readout-v1", "prompt": "d3",
@@ -111,7 +111,7 @@ def _ocr_worker(conn, root: str, device: str) -> None:
                         device=device, enable_mkldnn=False, cpu_threads=2, text_det_limit_side_len=960,
                         text_det_limit_type="max", text_recognition_batch_size=8)
         conn.send(("ready", None))
-    except Exception as exc:
+    except Exception as exc:   # reported to the caller, which turns image requests down
         conn.send(("error", f"{type(exc).__name__}: {exc}"))
         return
     while True:
@@ -187,7 +187,7 @@ class JDI(Template):
             import multiprocessing as mp
 
             try:
-                import paddleocr
+                import paddleocr  # noqa: F401
             except ImportError:
                 raise ValueError(f"images: JDI-Decision-V1 reads the text in images with PaddleOCR, which is not "
                                  f"installed ({INSTALL})") from None

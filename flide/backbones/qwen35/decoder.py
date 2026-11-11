@@ -32,7 +32,7 @@ from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm, mm_into
-from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, merge, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu
 from .ops import gate as gate_out
 
 
@@ -66,6 +66,57 @@ class Qwen35(Backbone):
     model_types = ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
     block_attention = True
     prefix_attention = True
+    midloop = None   # (passes, blocks) once set_midloop is called
+
+    def set_midloop(self, cfg: dict) -> None:
+        """Recurrent depth, a checkpoint's decision_config "midloop" (its parameter-free damped Euler form): each block
+        [a, b] of layers (inclusive) runs `passes` times over the whole sequence, every pass from the stream x that
+        entered it, x <- x + (G(x) - x) / passes in float32, rounded back; blocks in order, apart."""
+        c = dict(cfg or {})
+        if c.get("strategy", "euler") != "euler" or c.get("conv", "A") != "A":
+            raise ValueError(f"midloop {c}: only the damped Euler form (strategy euler, conv A)")
+        if int(c.get("n_gate") or 0) or int(c.get("n_lora") or 0):
+            raise ValueError("midloop: only the parameter-free form (n_gate = n_lora = 0)")
+        if float(c.get("gamma", 1.0)) != 1.0:
+            raise ValueError(f"midloop gamma {c['gamma']}: only 1")
+        blocks = sorted(((int(a), int(b)) for a, b in (c.get("blocks") or [[c["a"], c["b"]]])), key=lambda w: w[1])
+        passes = int(c.get("passes") or 1)
+        if passes < 1 or any(not 0 <= a <= b < self.num_layers for a, b in blocks) or \
+                any(blocks[k][0] <= blocks[k - 1][1] for k in range(1, len(blocks))):
+            raise ValueError(f"midloop {c}: blocks apart and inside the {self.num_layers} layers, passes >= 1")
+        if self.tp is not None:
+            raise ValueError("midloop: no tensor parallelism")
+        self.midloop = (passes, blocks) if passes > 1 else None
+
+    def layer_order(self, top: int) -> list[tuple[int, bool, bool]]:
+        """(layer, a midloop pass starts there, one ends there) in the order layers 0 .. top - 1 run."""
+        if self.midloop is None:
+            return [(i, False, False) for i in range(top)]
+        passes, blocks = self.midloop
+        out, i = [], 0
+        for a, b in blocks:
+            if a >= top:
+                break
+            if b >= top:
+                raise ValueError(f"midloop: a read inside the block of layers {a} to {b}")
+            out += [(j, False, False) for j in range(i, a)]
+            out += [(j, j == a, j == b) for _ in range(passes) for j in range(a, b + 1)]
+            i = b + 1
+        return out + [(j, False, False) for j in range(i, top)]
+
+    def next_input(self, h, d, nxt: int | None, start=None):
+        """The stream after a layer's feed-forward output d and layer `nxt`'s normed input (None after the last one);
+        `start`: the stream that entered the midloop pass ending here, which the pass's output steps from."""
+        if start is None:
+            if nxt is None:
+                return h + d, None
+            n1 = self.layers[nxt].input_layernorm
+            return add_rms(h, d, n1.weight, n1.eps)
+        h = lerp(start, h + d, 1.0 / self.midloop[0])
+        if nxt is None:
+            return h, None
+        n1 = self.layers[nxt].input_layernorm
+        return h, rms(h, n1.weight, n1.eps)
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -84,12 +135,12 @@ class Qwen35(Backbone):
         if vision is None:
             vision = getattr(config, "vision_config", None) is not None
         archs = getattr(config, "architectures", None) or []
-        moe = config.model_type.startswith("qwen3_5_moe")
+        moe = config.model_type.startswith("qwen3_5_moe")   # a mixture of experts in every layer (kernels/moe.py)
         if moe and tp is not None:
             raise ValueError("Qwen3.5 MoE: no tensor parallelism yet")
         pre = "Qwen3_5Moe" if moe else "Qwen3_5"
         headless = f"{pre}Model" in archs or f"{pre}TextModel" in archs
-        if headless:
+        if headless:   # a backbone without an output head (decision checkpoints that ship their own readout)
             arch = getattr(transformers, f"{pre}Model" if f"{pre}Model" in archs else f"{pre}TextModel")
             cfg, key_map, skip = config, [], ("mtp.",)
         elif vision:
@@ -98,7 +149,7 @@ class Qwen35(Backbone):
             arch, cfg = getattr(transformers, f"{pre}ForCausalLM"), config.get_text_config()
             key_map, skip = [(r"^model\.language_model\.", "model.")], ("model.visual.", "mtp.")
         model = None
-        lean_fp8 = quantize == "fp8" and tp is None and not moe
+        lean_fp8 = quantize == "fp8" and tp is None and not moe   # experts are read in 16 bits, then quantized
         store = {} if lean_fp8 else None
         lean = _fp8_target if lean_fp8 else None
         if loader == "none":
@@ -119,7 +170,7 @@ class Qwen35(Backbone):
                 model, store = None, ({} if lean_fp8 else None)
                 torch.cuda.empty_cache()
         if model is None:
-            store = None
+            store = None   # transformers loads 16 bits; the forward quantizes them after
             model = arch.from_pretrained(model_dir, config=cfg, dtype=getattr(torch, dtype),
                                          device_map={"": str(device)}, low_cpu_mem_usage=True, local_files_only=True)
             model.eval()
@@ -132,7 +183,7 @@ class Qwen35(Backbone):
                  tp: tuple[int, int] | None = None):
         self.causal_lm = causal_lm
         inner = causal_lm.model
-        self.vlm = inner if hasattr(inner, "visual") else None
+        self.vlm = inner if hasattr(inner, "visual") else None   # Qwen3_5Model: vision tower and M-RoPE indexing
         self.lm = inner.language_model if self.vlm is not None else inner
         self.config = self.lm.config
         self.layers = self.lm.layers[: self.config.num_hidden_layers]
@@ -175,14 +226,14 @@ class Qwen35(Backbone):
         def keep(param, idx, dim=0):
             return torch.nn.Parameter(take(param.data, idx, dim), requires_grad=False)
 
-        def rows(lin, idx):
+        def rows(lin, idx):   # a LoRA keeps its A and the same rows of its B
             if lin.bias is not None:
                 raise ValueError("tensor parallel: projections with a bias")
             lin.weight = keep(lin.weight, idx)
             if getattr(lin, "lora", None) is not None:
                 lin.lora = (lin.lora[0], take(lin.lora[1], idx))
 
-        def cols(lin, idx):
+        def cols(lin, idx):   # a LoRA keeps the same columns of its A and its B (the ranks' partial sums add up)
             lin.weight = keep(lin.weight, idx, 1)
             if getattr(lin, "lora", None) is not None:
                 lin.lora = (take(lin.lora[0], idx, 1), lin.lora[1])
@@ -242,6 +293,8 @@ class Qwen35(Backbone):
 
     def _stop_layer(self, b: PackedBatch) -> int:
         ints = [k for k in b.reads if k is not FINAL]
+        if self.midloop is not None and (any(ints) or b.resumes or b.marks):
+            raise ValueError("midloop: reads after the final layer only, no session states")
         if FINAL in b.reads:
             return self.num_layers
         top = max(ints) if ints else 0
@@ -345,7 +398,7 @@ class Qwen35(Backbone):
     def _prepare_fused(self):
         """Per layer, the weights of every matrix product (projections that read the same input merged into one) and
         the sizes the forward needs, so the products go through `mm` whatever the weights are stored as."""
-        def merged(mods):
+        def merged(mods):   # weights read as float8 stay on the meta device; their products come from the FP8 store
             return None if any(m.weight.is_meta for m in mods) else lora.attached(merge(mods), mods)
 
         def single(mod):
@@ -354,7 +407,7 @@ class Qwen35(Backbone):
         self._w = []
         for i, layer in enumerate(self.layers):
             mlp = layer.mlp
-            if hasattr(mlp, "experts"):
+            if hasattr(mlp, "experts"):   # a mixture of experts: router, experts as [E, out, in], shared expert
                 se = mlp.shared_expert
                 w = {"router": single(mlp.gate), "topk": mlp.gate.top_k, "experts": mlp.experts.gate_up_proj,
                      "experts_down": mlp.experts.down_proj, "inter": mlp.experts.intermediate_dim,
@@ -403,7 +456,7 @@ class Qwen35(Backbone):
         store.clear()
         self.fp8 = True
 
-    @torch.no_grad()
+    @torch.no_grad()   # weights built by transformers' classes require grad
     def quantize_fp8(self) -> int:
         """Every decoder matrix product to float8 weights (kernels/fp8.py): the merged projections, the
         output projections and the MLP; the small gate projections of Gated DeltaNet (the last rows of its merged
@@ -417,7 +470,8 @@ class Qwen35(Backbone):
         n = 0
         for i, layer in enumerate(self.layers):
             w = self._w[i]
-            if "experts" in w:
+            if "experts" in w:   # a mixture of experts: its routed experts (kernels/moe.py) alone; the rest of the
+                # layer keeps 16 bits, which in float8 moves the answers more than the experts do
                 from ...kernels.moe import quantize_experts
 
                 for key in ("experts", "experts_down"):
@@ -442,7 +496,7 @@ class Qwen35(Backbone):
             else:
                 m = layer.self_attn
                 mods += [m.q_proj, m.k_proj, m.v_proj, m.o_proj]
-            for mod in mods:
+            for mod in mods:   # the modules held views of the 16-bit weights; only the float8 ones are used now
                 mod.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
         self.fp8 = True
         torch.cuda.empty_cache()
@@ -458,11 +512,17 @@ class Qwen35(Backbone):
         if top == 0:
             return out
         mask = None
+        order = self.layer_order(top)
+        # the last layer only at the final reads, when nothing else reads after it
         last = (top - 1 if top == self.num_layers and set(b.reads) <= {FINAL, 0}
-                and self.layer_types[top - 1] != "linear_attention" else -1)
+                and self.layer_types[top - 1] != "linear_attention" and not order[-1][2] else -1)
         n0 = self.layers[0].input_layernorm
         x = rms(h, n0.weight, n0.eps)
-        for i, layer in enumerate(self.layers[:top]):
+        start = None
+        for p, (i, first, end) in enumerate(order):
+            layer = self.layers[i]
+            if first:
+                start = h
             w = self._w[i]
             if self.layer_types[i] == "linear_attention":
                 if len(b.levels) > 1 or b.resumes:
@@ -484,11 +544,7 @@ class Qwen35(Backbone):
             n2 = layer.post_attention_layernorm
             h, x = add_rms(h, d, n2.weight, n2.eps)
             d = ffn(w, x)
-            if i + 1 < top:
-                n1 = self.layers[i + 1].input_layernorm
-                h, x = add_rms(h, d, n1.weight, n1.eps)
-            else:
-                h = h + d
+            h, x = self.next_input(h, d, order[p + 1][0] if p + 1 < len(order) else None, start if end else None)
             if i + 1 in b.reads:
                 out[i + 1] = h[b.reads[i + 1]]
         if FINAL in b.reads:
@@ -641,6 +697,7 @@ class Qwen35(Backbone):
         if b is None or b.ctx is None:
             o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, R, m.scaling, 0, cfg, qranges=qr)
             return mm(gate_out(o, gate), w["o"])
+        # prefix keys and values from the context buffer: saved ones for resumed jobs, the stream's for the rest
         C, Tp = b.ctx, b.n_prefix_tokens
         Kc = k.new_empty((C["len"], nkv, hd))
         Vc = v.new_empty((C["len"], nkv, hd))

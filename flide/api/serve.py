@@ -53,7 +53,7 @@ def run(args) -> None:
     from ..runtime.offline import parse_kv
     from .server import create_app
 
-    if args.max_media_mb is not None:
+    if args.max_media_mb is not None:   # in the environment too, for the planning processes of --frontends
         if not args.max_media_mb > 0:
             raise SystemExit("--max-media-mb is a positive number")
         os.environ["FLIDE_MAX_MEDIA_MB"] = str(args.max_media_mb)
@@ -67,7 +67,7 @@ def run(args) -> None:
     options = {k: v for k, v in options.items() if v is not None}
     name = args.name or default_name(args.model)
     fronts = None
-    if args.frontends > 0:
+    if args.frontends > 0:   # the front ends load their tokenizers while the GPU process loads the model
         from . import frontend
 
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,

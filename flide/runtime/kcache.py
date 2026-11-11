@@ -34,8 +34,8 @@ FORMAT = 2
 MANIFEST = "flide-kernels.json"
 SHIPPED = Path(__file__).resolve().parent.parent / "kernels" / "prebuilt" / "gpu"
 
-_picks: dict[str, list] = {}
-_matched = False
+_picks: dict[str, list] = {}   # autotuner picks from applied bundles, by kernel, until its module is loaded
+_matched = False   # a bundle for this GPU and Triton was found
 
 
 def cache_dir() -> Path:
@@ -152,7 +152,7 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
         from triton.runtime.cache import get_cache_manager, triton_key
 
         target = target or _target()
-    except Exception as e:
+    except Exception as e:   # no GPU or no Triton: nothing to seed
         log.debug("no kernel seeding: %s", e)
         return 0
     added = 0
@@ -253,6 +253,37 @@ def tune() -> int:
     return done
 
 
+class _Progress:
+    """Counts the kernels the JIT builds and says how many every few seconds, so a first start that compiles them
+    shows it is moving; a hook that was there (the exporter's recorder) still runs."""
+
+    def __init__(self, inner, every: float = 10.0):
+        self.inner, self.every, self.n = inner, every, 0
+        self.t0 = self.last = time.perf_counter()
+
+    def __call__(self, **kw):
+        self.n += 1
+        now = time.perf_counter()
+        if now - self.last >= self.every:
+            self.last = now
+            log.info("compiling kernels: %d so far, %.0f s", self.n, now - self.t0)
+        return self.inner(**kw) if self.inner is not None else None
+
+
+def progress(on: bool) -> None:
+    """Start counting the kernels the JIT builds, or stop and say how many were built."""
+    try:
+        from triton import knobs
+    except ImportError:
+        return
+    hook = knobs.runtime.jit_post_compile_hook
+    if on and not isinstance(hook, _Progress):
+        knobs.runtime.jit_post_compile_hook = _Progress(hook)
+    elif not on and isinstance(hook, _Progress):
+        knobs.runtime.jit_post_compile_hook = hook.inner
+        log.info("compiled %d kernels in %.0f s", hook.n, time.perf_counter() - hook.t0)
+
+
 class _Recorder:
     """Every kernel the JIT compiles in this process, with what it takes to find it in another machine's cache."""
 
@@ -281,7 +312,7 @@ def _pack(rec: _Recorder, out: Path) -> tuple[int, int]:
     for i, ((src, opts), (fn, name)) in enumerate(sorted(rec.seen.items())):
         options = json.loads(opts)
         group = get_cache_manager(_hash(src, options, backend, env_vars)).get_group(f"{name[:150]}.json")
-        if group is None:
+        if group is None:   # the portable recipe does not give back the key this kernel was filed under
             missing += 1
             continue
         meta = f"{name[:150]}.json"
@@ -348,7 +379,7 @@ def export(args) -> None:
     tmp = tempfile.mkdtemp(prefix="flide-kernels-")
     os.environ["TRITON_CACHE_DIR"] = tmp
     os.environ["TRITON_STORE_BINARY_ONLY"] = "1"
-    os.environ["TRITON_DISABLE_LINE_INFO"] = "1"
+    os.environ["TRITON_DISABLE_LINE_INFO"] = "1"   # line tables name this machine's source paths
     import torch
     from triton import knobs
 

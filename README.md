@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-12** We added [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) and [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) in Flide 0.1.14, and GLiDE-27B also reads images.
 - 🔥 **2026-11-11** We added [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) and [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) in Flide 0.1.13, and precompiled kernels for RTX 40 series GPUs.
 - 🔥 **2026-11-10** We added [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) and [clef-flash](https://huggingface.co/Cloudflare/clef-flash) in Flide 0.1.12, and precompiled kernels for RTX 50 series and RTX PRO 6000 GPUs.
-- 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
 - 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
 - 🔥 **2026-11-09** We added [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) and [JEV-35B](https://huggingface.co/autotrust/JEV-35B) in Flide 0.1.9, and `/v1/systemone` now takes several requests in one body.
 - 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
@@ -51,7 +52,7 @@
 
 ## Quick start
 
-See the [docs](https://docs.flide.org) for every model, images, the API and all options.
+Flide runs on an NVIDIA GPU under Linux or Windows WSL2. See the [docs](https://docs.flide.org) for every model, images, the API and all options.
 
 ```bash
 uv venv -p 3.12 && source .venv/bin/activate
@@ -108,7 +109,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | text | 1.1× | 2.0× | 2.8× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | text, images | ~1.3× | ~1.7× | ~1.0× |
-| [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b) | text | ~6.4× | ~1.9× | ~1.8× |
+| [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b) | text, images | ~4.1× | ~1.6× | ~1.6× |
 | [Intern-Decision](https://huggingface.co/collections/internlm/intern-decision-6ab75776af19ca84df0bc004) | text, images | 4.4× | 1.1× | 1.5× |
 | [JADE](https://huggingface.co/theunnecessarythings/JADE) | text | 2.0× | 9.2× | 1.7× |
 | [JDI-Decision](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) | text, images | 1.3× | 2.8× | 1.3× |

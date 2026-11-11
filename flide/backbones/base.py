@@ -6,7 +6,9 @@ from typing import Any, ClassVar
 
 class Backbone:
     model_types: ClassVar[tuple[str, ...]] = ()
+    # runs plans with block attention (formats.base.Plan.attention "blocks")
     block_attention: ClassVar[bool] = False
+    # runs plans whose prefix alone is read both ways (formats.base.Plan.attention "prefix")
     prefix_attention: ClassVar[bool] = False
 
     device: Any

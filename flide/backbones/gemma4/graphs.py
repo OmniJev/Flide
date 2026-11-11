@@ -26,15 +26,17 @@ from . import _Meta, window_ranges
 
 log = logging.getLogger("flide.graphs")
 
+# stream lengths: the padding at the end is under 32 tokens below 512, under 64 below 4096 and at most 1/32 of the
+# round from there on (every token of padding costs as much as a real one in the matrix products)
 LADDER = (tuple(range(64, 512, 32)) + tuple(range(512, 4096, 64)) + tuple(range(4096, 8192, 128))
           + tuple(range(8192, 16385, 256)))
-BMAX = 1024
-REQUESTS = 64
+BMAX = 1024   # reads per replay (the branches of a round), at most an eighth of its length
+REQUESTS = 64   # requests per replay, at most one per 32 tokens of its length
 
 
 class GemmaGraphs:
-    block_attention = True
-    alone_reads = True
+    block_attention = True   # rounds of block-attention requests replay the graphs in `bgraphs`
+    alone_reads = True   # a sequence read whole under block attention, as its own request read at its last token
 
     def __init__(self, bb, ladder=LADDER, bmax: int = BMAX):
         self.bb = bb
@@ -43,15 +45,17 @@ class GemmaGraphs:
         self.bmax = bmax
         dev = bb.device
         n = self.ladder[-1]
-        self.ids = torch.zeros(n, dtype=torch.long, device=dev)
-        self.raw = torch.zeros(n, dtype=torch.long, device=dev)
+        self.ids = torch.zeros(n, dtype=torch.long, device=dev)       # placeholders as padding (per-layer inputs)
+        self.raw = torch.zeros(n, dtype=torch.long, device=dev)       # as the request has them (where features go)
         self.pos = torch.zeros(n, dtype=torch.long, device=dev)
-        self.meta = torch.zeros(4, n, dtype=torch.int32, device=dev)
+        self.meta = torch.zeros(4, n, dtype=torch.int32, device=dev)  # job, branch, position, image block
         self.ranges = torch.zeros(n, 4, dtype=torch.int32, device=dev)
-        self.gblk = torch.zeros(n, dtype=torch.int32, device=dev)
+        self.gblk = torch.zeros(n, dtype=torch.int32, device=dev)     # the global layers' block number (block attention)
         self.reads = torch.zeros(bmax, dtype=torch.long, device=dev)
+        # embeddings of the round, vision features in place, filled before each replay
         self.emb = torch.zeros(n, bb.config.hidden_size, device=dev, dtype=bb.dtype)
-        self.host = torch.zeros(12, n, dtype=torch.long, pin_memory=True)
+        self.host = torch.zeros(12, n, dtype=torch.long, pin_memory=True)  # ids, pos, job, branch, pos, block,
+        # 4 ranges, raw ids, global block
         self.host_reads = torch.zeros(bmax, dtype=torch.long, pin_memory=True)
         self.out = torch.zeros(bmax, bb.config.hidden_size, device=dev, dtype=bb.dtype)
         self.staged = torch.cuda.Event()
@@ -106,8 +110,10 @@ class GemmaGraphs:
         bb = self.bb
         tok = (self.meta[0, :L], self.meta[1, :L], self.meta[2, :L])
         r = self.ranges[:L]
+        # with the batch-invariant products every branch is a group of its own
         groups = self.nreq(L) + self.nread(L) + 1 if settings.batch_invariant else 2 * self.nreq(L) + 1
-        if blocks:
+        if blocks:   # each block whole on the global layers; the sliding layers causal (prefix rows to their position,
+            # branch rows to themselves), then cut to the window
             br, qpos = self.meta[1, :L], self.meta[2, :L]
             ar = torch.arange(L, device=r.device, dtype=r.dtype)
             c = r.clone()
@@ -117,7 +123,7 @@ class GemmaGraphs:
             sliding = _Meta(tok, window_ranges(c, qpos, bb.config.sliding_window or 0), groups=groups, tiles=c)
             self._decode(L, full, sliding)
             return
-        if bb.bidir:
+        if bb.bidir:   # the image-widened ranges are the sliding layers'; the global layers stay causal
             r = r.clone()
             r[:, 1] = torch.minimum(r[:, 1], r[:, 0] + self.meta[2, :L] + 1)
         full = _Meta(tok, r, groups=groups)
@@ -208,9 +214,9 @@ class GemmaGraphs:
         L = self.flat_shape(reqs)
         blocks = any(len(r) > 3 and r[3] for r in reqs)
         if blocks and any(len(r) > 2 and r[2] is not None for r in reqs):
-            return None
+            return None   # block attention takes text only
         if any(len(r) > 4 and r[4] is not None and (len(r[1]) != 1 or len(r[4]) != 1) for r in reqs):
-            return None
+            return None   # positions to read: one, in a one-branch request (`alone_reads`)
         if L is None or not self.capture(L, blocks):
             return None
         self._stage(reqs, L)
@@ -232,11 +238,13 @@ class GemmaGraphs:
         items = []
         for req in reqs:
             media = req[2] if len(req) > 2 else None
+            # one branch runs with its prefix as one sequence; with the batch-invariant products a branch of its own,
+            # as when it has siblings, so a question gets the bits it gets forked from its state
             one = len(req[1]) == 1 and not (settings.batch_invariant and req[0])
             items.append((req[0] + req[1][0], [], media) if one else (req[0], req[1], media))
         blocks = [len(req) > 3 and bool(req[3]) for req in reqs]
         blk[:] = -1
-        if any(blocks):
+        if any(blocks):   # only rounds with block attention read the global layers' block numbers
             gblk[:] = -1
         at, starts, nblk = 0, [], 0
         for j, (seq, _, media) in enumerate(items):
@@ -250,11 +258,11 @@ class GemmaGraphs:
             r[0, s] = at
             r[1, s] = ar + at + 1
             r[2:, s] = 0
-            if blocks[j]:
+            if blocks[j]:   # the prefix whole; a one-branch request's branch, run as part of its sequence, whole too
                 p = len(reqs[j][0])
                 r[1, s] = np.where(ar < p, at + p, at + n)
                 gblk[s] = (ar >= p).astype(np.int64)
-            if media is not None and bb.bidir:
+            if media is not None and bb.bidir:   # the tokens of one image see each other (sliding layers)
                 for a, e in vision_runs(ids[s], bb.placeholders):
                     blk[at + a: at + e] = nblk
                     r[1, at + a: at + e] = at + e
@@ -264,7 +272,7 @@ class GemmaGraphs:
         nread = b = 0
         for j, (seq, sufs, _) in enumerate(items):
             n, p0 = len(seq), starts[j]
-            if not sufs:
+            if not sufs:   # a one-branch request read at its last token, or at the position its fifth field gives
                 spot = reqs[j][4] if len(reqs[j]) > 4 else None
                 reads[nread] = p0 + (spot[0] if spot else n - 1)
                 nread += 1
@@ -286,6 +294,9 @@ class GemmaGraphs:
                 nread += 1
                 at += m
                 b += 1
+        # padding: jobs of their own seeing themselves through the second key range (a self-range in the first one,
+        # the prefixes', would stretch a query tile's prefix range over branch tokens, which its branch queries would
+        # then read through both ranges)
         s = slice(at, L)
         ar = np.arange(at, L)
         ids[s] = 0

@@ -51,7 +51,7 @@ PERMUTATIONS = 3
 CUT_CHECKS = 8
 PROFILES = {"qwen": {"prefix": "", "image": "<|vision_start|><|image_pad|><|vision_end|>", "strategy": "single"},
             "gemma": {"prefix": "<bos>", "image": "<|image|>", "strategy": "tournament"}}
-CONTEXT = {"gemma4": 65536, "qwen3_5_moe": 65536}
+CONTEXT = {"gemma4": 65536, "qwen3_5_moe": 65536}   # each release's --max-model-len; 32768 for the others
 READS = (Read("decide"),)
 
 
@@ -214,6 +214,7 @@ class AutoTrust(Format):
         weight, bias = backbone.output_head()
         return {"decide": TokenRows(weight, self.ids, bias, softcap=getattr(backbone, "logit_softcap", None))}
 
+    # ---- requests -------------------------------------------------------------------------------
 
     def _question(self, q) -> dict:
         ins = _plain(q.instructions)
@@ -300,7 +301,7 @@ class AutoTrust(Format):
             texts.append(shared + f"\n[question] {q['question']}\n[options]\n" + "\n".join(lines) + "\n[decision]:")
         c = self._pieces.last_cut(texts[0], len(shared) - 1) if shared else 0
         head, prefix_tail, *tails = self._pieces.encode(self.tokenizer, [shared[:c], shared[c:]] + [t[c:] for t in texts])
-        if c and self._cut_checks < CUT_CHECKS:
+        if c and self._cut_checks < CUT_CHECKS:   # the first plans also tokenize one prompt whole
             self._cut_checks += 1
             if head + tails[0] != self.tokenizer.backend_tokenizer.encode(texts[0], add_special_tokens=False).ids:
                 self._pieces.ok = False

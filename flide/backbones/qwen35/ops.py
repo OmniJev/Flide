@@ -9,6 +9,10 @@ from ... import settings
 from ...kernels import pointwise as pw
 
 
+
+
+
+
 def merge(linears) -> torch.Tensor:
     """One weight matrix for several nn.Linear that read the same input; each module's weight
     becomes a row slice of it, so the HF modules keep working and no memory is added."""
@@ -24,8 +28,15 @@ def merge(linears) -> torch.Tensor:
     return w
 
 
+
+
+
 def rms(x, w, eps: float):
     return pw.rms_norm(x, w, eps)
+
+
+# with the batch-invariant products the final norm is the Triton kernel (one program per row): torch's reduction
+# changes its order with the number of rows, so a question read with its siblings would not keep its bits
 
 
 def final_norm(norm, h):
@@ -34,6 +45,12 @@ def final_norm(norm, h):
 
 def add_rms(h, d, w, eps: float):
     return pw.rms_norm(h, w, eps, residual=d)
+
+
+def lerp(x, y, g: float):
+    """x + g (y - x) in float32, rounded to x's type: one step of a checkpoint's recurrent depth (midloop)."""
+    xf = x.float()
+    return (xf + g * (y.float() - xf)).to(x.dtype)
 
 
 def swiglu(gu, n: int):
@@ -69,6 +86,11 @@ def norm_rope(x, cos, sin, w, eps: float):
 
 def gate(o, g):
     return pw.gate(o, g)
+
+
+# The last layer when a forward is read only at some rows: every row's keys and values (what the layer's attention
+# reads), but queries, attention, output projection and MLP for the read rows only. Nothing else uses the other rows'
+# outputs of the last layer.
 
 
 def split_rows(w, n: int):

@@ -173,6 +173,7 @@ class Clef(Format):
     def plan(self, request: SystemOneRequest, **_) -> Plan:
         if getattr(request, "videos", None):
             raise ValueError("videos: the clef family reads text and images")
+        # every piece on its own, as encode_record tokenizes them, in one call: the state, then the schema in order
         texts, opts = [render(request.state), "\n\nSCHEMA FIELDS:\n"], []
         for i, (name, q) in enumerate(request.questions.items()):
             instructions = q.instructions

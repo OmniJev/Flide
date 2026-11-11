@@ -25,6 +25,7 @@ class Calibration:
         return cls(temperatures={k: float(v) for k, v in data.get("temperatures", {}).items()}, source=str(path))
 
 
+
 def softmax(logits: Sequence[float], temperature: float = 1.0) -> list[float]:
     z = [float(x) / temperature for x in logits]
     m = max(z)

@@ -4,9 +4,8 @@ Thank you for helping. Please read this page before you open a pull request.
 
 ## How changes land
 
-Accepted pull requests are applied by the maintainers and shipped in the next release, with you credited as a co-author
-of the release commit. We then close the pull request with a link to that release. Maintainers review pull requests in
-batches before each release, so a reply can take a few days.
+Accepted pull requests are merged by the maintainers and shipped in the next release. Maintainers review pull requests
+in batches before each release, so a reply can take a few days.
 
 ## Open an issue first
 
@@ -21,6 +20,7 @@ A bug fix with a test can go straight to a pull request.
 ## What a pull request needs
 
 - One change per pull request.
+- You can use AI help. But please leave its Co-Authored-By lines out of your commit messages.
 - A bug fix comes with a test, or the smallest command that shows the bug, and the GPU you ran it on.
 - An engine change lists every engine file it touches and says why the change cannot live in a plugin. We check on our
   GPUs that every supported model keeps bit-identical answers and its speed within 2%. A change that moves another
