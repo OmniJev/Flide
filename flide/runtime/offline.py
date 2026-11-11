@@ -63,12 +63,17 @@ def parse_kv(items) -> dict:
     return out
 
 
+# Request inputs the families read besides state and questions; the server passes them through as sent.
+_INPUTS = ("media", "images", "videos", "video", "assets")
+
+
 def _request(row):
     from ..api.schema import SystemOneRequest
 
     req = {"model": "flide", "state": row.get("state"), "questions": row["questions"]}
-    if row.get("media"):
-        req["media"] = row["media"]
+    for key in _INPUTS:
+        if row.get(key):
+            req[key] = row[key]
     return SystemOneRequest.model_validate(req)
 
 
