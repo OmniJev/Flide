@@ -10,9 +10,13 @@ batches before each release, so a reply can take a few days.
 
 ## Open an issue first
 
-Every pull request starts from an issue. Open one, wait until a maintainer agrees and labels it `accepted`, and then
-write the code. Link that issue in the pull request, for example with `Fixes #12`. A pull request without an accepted
-issue is closed automatically.
+Open an issue and wait for a maintainer to agree before you write code for any of these:
+
+- a new model family
+- a change to the engine, which is everything under `flide/` (model plugins live in `plugins/`)
+- a new dependency, or a wider version range of an existing one
+
+A bug fix with a test can go straight to a pull request.
 
 ## What a pull request needs
 
