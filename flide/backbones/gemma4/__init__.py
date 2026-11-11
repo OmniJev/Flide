@@ -204,8 +204,8 @@ class Gemma4(Backbone):
         return cls(model, **options)
 
     def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, **_):
-        if quantize is not None:
-            raise NotImplementedError("gemma4: FP8 is not supported yet")
+        if quantize is not None and quantize != "fp8":
+            raise ValueError(f"gemma4: unknown quantization {quantize!r}")
         if tp is not None and tp[1] > 1:
             raise NotImplementedError("gemma4: tensor parallel is not supported yet")
         _register()
@@ -228,6 +228,12 @@ class Gemma4(Backbone):
         self.moe = bool(getattr(self.config, "enable_moe_block", False))
         self._experts()
         self._fused = None
+        if quantize is not None:
+            if self.moe:
+                raise NotImplementedError(
+                    "gemma4: --quantize fp8 covers the dense decoder; a mixture-of-experts checkpoint stays "
+                    "unquantized for now")
+            self.quantize_fp8()
         self.decoder()
 
     def decoder(self):
@@ -240,6 +246,28 @@ class Gemma4(Backbone):
         if self._fused is None or self._fused.dtype != self.lm.layers[0].mlp.gate_proj.weight.dtype:
             self._fused = FusedDecoder(self.lm)
         return self._fused
+
+    @torch.no_grad()
+    def quantize_fp8(self) -> int:
+        """The dense decoder's matrix products to float8 weights (kernels/fp8.py): the merged qkv and gate/up
+        projections, the output projection and the down projection. The token embedding, the norms, the per-layer
+        input gate and projection and the output head stay in the model's dtype, and the 16-bit copies of the
+        converted weights are freed. Returns the number of weights converted."""
+        from ...kernels import fp8
+        from .fused import FusedDecoder, quantize_dense
+
+        if not fp8.supported(self.device):
+            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        fused = FusedDecoder(self.lm)
+        n = quantize_dense(fused.w)
+        self._fused = fused
+        for layer in self.lm.layers:
+            a, mlp = layer.self_attn, layer.mlp
+            mods = [a.q_proj, a.o_proj, mlp.gate_proj, mlp.up_proj, mlp.down_proj]
+            mods += [m for m in (getattr(a, "k_proj", None), getattr(a, "v_proj", None)) if m is not None]
+            for m in mods:
+                m.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        return n
 
     def _experts(self) -> str | None:
         """The experts implementation for the current dtype (set on the config the expert modules read)."""
