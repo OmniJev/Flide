@@ -76,7 +76,7 @@ def main():
         man = {"format": kcache.FORMAT, "triton": triton.__version__, "target": tdict, "tuning": {},
                "kernels": [{"fn": "t:_axpy", "src": src.hash(), "options": options, "meta": "_axpy.json",
                             "dir": "k00000", "files": ["_axpy.cubin", "_axpy.json"]}]}
-        bundle = Path(b) / "k.tgz"
+        bundle = Path(b) / "k.tar.xz"
         kcache._write(bundle, man, {"k00000/_axpy.cubin": Path(group["_axpy.cubin"]).read_bytes(),
                                     "k00000/_axpy.json": json.dumps(meta).encode()})
         stored = json.loads(json.dumps(man))
@@ -107,6 +107,28 @@ def main():
     ok = n == 1 and got is not None and kcache._config(got) == pick and got in _tuned.configs and not kcache._picks
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} an autotuner pick reaches the autotuner through a launch wrapper")
+
+    with tempfile.TemporaryDirectory() as c:   # an export started from an earlier release's picks
+        import io
+        import tarfile
+
+        old = {"BLOCK": 64, "num_warps": 4, "num_ctas": 1, "num_stages": 3}
+        man = {"format": kcache.FORMAT, "triton": triton.__version__, "target": tdict, "kernels": [],
+               "tuning": {f"{__name__}:_wrapped": [[[2048, "torch.float32", "torch.float32"], pick]]}}
+        kcache._write(Path(c) / "prev.tar.xz", man, {})
+        gz = json.dumps({**man, "tuning": {f"{__name__}:_wrapped": [[[1024, "torch.float32", "torch.float32"], old]]}})
+        with tarfile.open(Path(c) / "older.tgz", "w:gz") as tar:   # a bundle from before xz
+            info = tarfile.TarInfo(kcache.MANIFEST)
+            info.size = len(gz)
+            tar.addfile(info, io.BytesIO(gz.encode()))
+        held = kcache.hold_picks(c, target=tdict)
+        a = _tuned.cache.get((2048, "torch.float32", "torch.float32"))
+        b = _tuned.cache.get((1024, "torch.float32", "torch.float32"))
+        none = kcache.hold_picks(c, target={**tdict, "arch": 80})
+        ok = held == 2 and none == 0 and a is not None and kcache._config(a) == pick and b is not None \
+            and kcache._config(b) == old
+        fails += not ok
+        print(f"{'PASS' if ok else 'FAIL'} an earlier bundle's picks are held for an export, xz or gzip")
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)
 
