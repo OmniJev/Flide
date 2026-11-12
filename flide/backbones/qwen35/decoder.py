@@ -433,8 +433,8 @@ class Qwen35(Backbone):
         their scales; the gate projections of Gated DeltaNet's input projection as 16-bit tail rows)."""
         from ...kernels import fp8
 
-        def get(mod):
-            return store[names[id(mod)] + ".weight"]
+        def get(mod):   # each copy leaves the store as it is joined, so the float8 weights are never held twice
+            return store.pop(names[id(mod)] + ".weight")
 
         def joined(mods, tail=None, tail_mods=None):
             qs, ss = zip(*(get(m) for m in mods))

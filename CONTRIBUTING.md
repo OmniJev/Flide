@@ -7,6 +7,9 @@ Thank you for helping. Please read this page before you open a pull request.
 Accepted pull requests are merged by the maintainers and shipped in the next release. Maintainers review pull requests
 in batches before each release, so a reply can take a few days.
 
+We are a small team, so please keep one pull request open at a time. Maintainers may close those that do not fit our
+plans.
+
 ## Open an issue first
 
 Open an issue and wait for a maintainer to agree before you write code for any of these:
@@ -16,6 +19,14 @@ Open an issue and wait for a maintainer to agree before you write code for any o
 - a new dependency, or a wider version range of an existing one
 
 A bug fix with a test can go straight to a pull request.
+
+## New model families
+
+We add new model families together with the teams who make them or the people who really use them, since they know
+the model best. When you ask for one, please say which you are.
+
+A family you need for your own work can also live in its own package. Flide loads any plugin registered under the
+`flide.formats` entry point, so it works with a plain `pip install flide`, and it does not have to wait for a release.
 
 ## What a pull request needs
 

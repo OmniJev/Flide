@@ -19,6 +19,8 @@ import json
 import random
 from pathlib import Path
 
+from .runtime.session import cache_size as _cache_size
+
 TIE = 0.05
 ROUNDS = (2, 8, 32)
 STEPS = 4
@@ -199,5 +201,5 @@ def add_parser(sub) -> None:
     v.add_argument("--quantize", choices=("fp8",), default=None,
                    help="check the quantized model the server runs, as serve --quantize does")
     v.add_argument("--batch-invariant", action="store_true", help="check the batch-invariant mode, bit for bit")
-    v.add_argument("--session-cache-gb", type=float, default=0.0, help="also check the session cache, this large")
+    v.add_argument("--session-cache-gb", type=_cache_size, default=0.0, help="also check the session cache, this large (GiB or auto)")
     v.set_defaults(func=run)

@@ -29,6 +29,18 @@ from ...runtime.pack import PackedBatch
 from ..base import Backbone
 
 IMPL = "flide"
+# the decoder projections `--quantize fp8` reads straight into float8 (the towers' own layers are not under model.layers)
+_FP8_RE = None
+
+
+def _fp8_target(name: str) -> bool:
+    global _FP8_RE
+    if _FP8_RE is None:
+        import re
+
+        _FP8_RE = re.compile(r"^model\.(language_model\.)?layers\.\d+\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|"
+                             r"mlp\.(gate_proj|up_proj|down_proj))\.weight$")
+    return bool(_FP8_RE.match(name))
 
 
 class _Meta:
@@ -168,25 +180,34 @@ class Gemma4(Backbone):
             arch, cfg = transformers.Gemma4ForCausalLM, config.get_text_config()
             key_map = [(r"^model\.language_model\.", "model.")]
         cfg._attn_implementation = IMPL
+        # FP8 of the dense decoder: its projections go to float8 as they are read, so the 16-bit copies never sit
+        # on the device (a mixture of experts loads 16 bits and stays unquantized)
+        text = config.get_text_config() if hasattr(config, "get_text_config") else config
+        tp = options.get("tp")
+        lean_fp8 = (options.get("quantize") == "fp8" and not getattr(text, "enable_moe_block", False)
+                    and (tp is None or tp[1] <= 1))
+        lean = _fp8_target if lean_fp8 else None
+        store = {} if lean_fp8 else None
         model = None
         if loader == "none":
             from ..load import blank, build
 
-            model = build(arch, cfg, torch.device(device), getattr(torch, dtype))
-            blank(model)
+            model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
+            blank(model, torch.device(device), lean=lean, fp8=store)
         elif loader == "direct":
             from ..load import build, load_into
 
             try:
-                model = build(arch, cfg, torch.device(device), getattr(torch, dtype))
-                load_into(model, model_dir, device, key_map=key_map, merge=merge_lora)
+                model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
+                load_into(model, model_dir, device, key_map=key_map, merge=merge_lora, lean=lean, fp8=store)
             except (ValueError, FileNotFoundError) as exc:
                 import logging
 
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
-                model = None
+                model, store = None, ({} if lean_fp8 else None)
                 torch.cuda.empty_cache()
-        if model is None:   # transformers maps checkpoint names only for the class the checkpoint was saved from
+        if model is None:
+            store = None   # transformers loads 16 bits; quantize_fp8 converts them after   # transformers maps checkpoint names only for the class the checkpoint was saved from
             if config.model_type == "gemma4_text":
                 arch = transformers.Gemma4ForCausalLM
             elif config.model_type == "gemma4_unified":
@@ -202,11 +223,12 @@ class Gemma4(Backbone):
                     c._attn_implementation = "sdpa"
         model.config.get_text_config()._attn_implementation = IMPL
         model.eval()
-        return cls(model, **options)
+        names = {id(m): n for n, m in model.named_modules()}
+        return cls(model, fp8_store=(store, names) if store else None, **options)
 
-    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, **_):
-        if quantize is not None:
-            raise NotImplementedError("gemma4: FP8 is not supported yet")
+    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, fp8_store=None, **_):
+        if quantize is not None and quantize != "fp8":
+            raise ValueError(f"gemma4: unknown quantization {quantize!r}")
         if tp is not None and tp[1] > 1:
             raise NotImplementedError("gemma4: tensor parallel is not supported yet")
         _register()
@@ -232,6 +254,21 @@ class Gemma4(Backbone):
         self.moe = bool(getattr(self.config, "enable_moe_block", False))
         self._experts()
         self._fused = None
+        if quantize is not None:
+            if self.moe:
+                raise NotImplementedError(
+                    "gemma4: --quantize fp8 covers the dense decoder; a mixture-of-experts checkpoint stays "
+                    "unquantized for now")
+            if fp8_store is not None:   # read as float8 already (load)
+                from ...kernels import fp8
+                from .fused import FusedDecoder
+
+                if not fp8.supported(self.device):
+                    raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+                self._fused = FusedDecoder(self.lm, store=fp8_store)
+                fp8_store[0].clear()
+            else:
+                self.quantize_fp8()
         self.decoder()
 
     def decoder(self):
@@ -244,6 +281,28 @@ class Gemma4(Backbone):
         if self._fused is None or self._fused.dtype != self.lm.layers[0].mlp.gate_proj.weight.dtype:
             self._fused = FusedDecoder(self.lm)
         return self._fused
+
+    @torch.no_grad()
+    def quantize_fp8(self) -> int:
+        """The dense decoder's matrix products to float8 weights (kernels/fp8.py): the merged qkv and gate/up
+        projections, the output projection and the down projection. The token embedding, the norms, the per-layer
+        input gate and projection and the output head stay in the model's dtype, and the 16-bit copies of the
+        converted weights are freed. Returns the number of weights converted."""
+        from ...kernels import fp8
+        from .fused import FusedDecoder, quantize_dense
+
+        if not fp8.supported(self.device):
+            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        fused = FusedDecoder(self.lm)
+        n = quantize_dense(fused.w)
+        self._fused = fused
+        for layer in self.lm.layers:
+            a, mlp = layer.self_attn, layer.mlp
+            mods = [a.q_proj, a.o_proj, mlp.gate_proj, mlp.up_proj, mlp.down_proj]
+            mods += [m for m in (getattr(a, "k_proj", None), getattr(a, "v_proj", None)) if m is not None]
+            for m in mods:
+                m.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        return n
 
     def _experts(self) -> str | None:
         """The experts implementation for the current dtype (set on the config the expert modules read)."""
@@ -259,8 +318,11 @@ class Gemma4(Backbone):
         return None, 0
 
     def vision_graphs(self):
-        """The vision tower from CUDA graphs (vision.py), built on first use; None without CUDA graphs."""
+        """The vision tower from CUDA graphs (vision.py), built on first use; None without CUDA graphs, and on the unified
+        checkpoints (12B), whose images go through their embed_vision encoder instead of a vision tower."""
         if self.vlm is None or not self.cuda_graphs or self.device.type != "cuda":
+            return None
+        if not hasattr(self.vlm.model, "vision_tower"):
             return None
         if getattr(self, "_vision_graphs", None) is None:
             from .vision import GemmaVisionGraphs

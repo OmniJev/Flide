@@ -34,9 +34,14 @@ def _geglu(a, b):
 
 def rmm(x, w):
     """The products of the last layer at the read rows: the batch-invariant kernel, whose sums do not depend on the
-    number of rows (a replay holds as many read rows as its length allows, so the count changes with the round)."""
+    number of rows (a replay holds as many read rows as its length allows, so the count changes with the round).
+    A quantized weight has no batch-invariant product (a pair the engine refuses), so it runs its own."""
+    from ...kernels.fp8 import Fp8Weight, mm as fp8_mm
     from ...kernels.invariant import mm as imm
 
+    base = getattr(w, "base", w)
+    if isinstance(base, Fp8Weight):
+        return fp8_mm(x, w)
     return imm(x, w) if isinstance(w, torch.Tensor) else w(x, imm)
 
 
@@ -57,20 +62,51 @@ def _merge(linears):
     return w
 
 
+DENSE_KEYS = ("qkv", "o", "gate_up", "down")
+
+
+def quantize_dense(weights: list[dict]) -> int:
+    """Each layer's dense projections to float8 weights in place, returning how many were converted. The per-layer
+    input gate and projection stay in the model's dtype (the keys picked here), as do the embedding and the head."""
+    from ...kernels.fp8 import Fp8Weight
+
+    n = 0
+    for layer in weights:
+        for key in DENSE_KEYS:
+            weight = layer[key]
+            base = weight.base if hasattr(weight, "base") else weight
+            wrapped = Fp8Weight.from_weight(base)
+            layer[key] = weight.with_base(wrapped) if hasattr(weight, "with_base") else wrapped
+            n += 1
+    return n
+
+
 class FusedDecoder:
-    def __init__(self, lm):
+    def __init__(self, lm, store=None):
+        """`store`: (float8 copies by parameter name, module names) for projections the loader read as float8 (their
+        modules' weights stay on the meta device); their merged weights are built from those copies."""
+        from ...kernels.fp8 import Fp8Weight
+
         self.lm = lm
         self.cfg = lm.config
         self.ple = bool(self.cfg.hidden_size_per_layer_input)
         self.dtype = lm.layers[0].mlp.gate_proj.weight.dtype   # merged at this dtype; a cast needs a new decoder
         self.w = []
+
+        def fused(mods):
+            if store is not None and mods[0].weight.is_meta:
+                # each copy leaves the store as it is joined, so the float8 weights are never held twice
+                qs, ss = zip(*(store[0].pop(store[1][id(m)] + ".weight") for m in mods))
+                return Fp8Weight(torch.cat(qs), torch.cat(ss), None, self.dtype)
+            return _merge(mods)
+
         for layer in lm.layers:
             a, mlp = layer.self_attn, layer.mlp
             mods = ([a.q_proj] if a.is_kv_shared_layer else
                     [a.q_proj, a.k_proj] + ([a.v_proj] if a.v_proj is not None else []))
             gu = [mlp.gate_proj, mlp.up_proj]
-            w = {"qkv": lora.attached(_merge(mods), mods), "o": lora.attached(a.o_proj.weight, [a.o_proj]),
-                 "gate_up": lora.attached(_merge(gu), gu), "down": lora.attached(mlp.down_proj.weight, [mlp.down_proj]),
+            w = {"qkv": lora.attached(fused(mods), mods), "o": lora.attached(fused([a.o_proj]), [a.o_proj]),
+                 "gate_up": lora.attached(fused(gu), gu), "down": lora.attached(fused([mlp.down_proj]), [mlp.down_proj]),
                  "inter": mlp.gate_proj.weight.shape[0], "hd": a.head_dim,
                  "nh": a.q_proj.weight.shape[0] // a.head_dim,
                  "nkv": 0 if a.is_kv_shared_layer else a.k_proj.weight.shape[0] // a.head_dim,

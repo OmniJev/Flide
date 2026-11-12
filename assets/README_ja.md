@@ -29,12 +29,13 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
 - 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。
 - 🔥 **2026-11-11** Flide 0.1.13 で [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3)、[JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) に対応し、RTX 40 シリーズ向けのコンパイル済みカーネルを同梱しました。
-- 🔥 **2026-11-10** Flide 0.1.12 で [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max)、[clef-flash](https://huggingface.co/Cloudflare/clef-flash) に対応し、RTX 50 シリーズと RTX PRO 6000 向けのコンパイル済みカーネルを同梱しました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-10** Flide 0.1.12 で [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max)、[clef-flash](https://huggingface.co/Cloudflare/clef-flash) に対応し、RTX 50 シリーズと RTX PRO 6000 向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.11 で[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)を追加しました。H200 1 枚で 1 万通のメールそれぞれの 8 つの質問に 28 秒で答えます。
 - 🔥 **2026-11-09** Flide 0.1.10 で [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision)、[KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) に対応し、KnowLine ファミリーが画像を読めるようになりました。
 - 🔥 **2026-11-09** Flide 0.1.9 で [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b)、[JEV-35B](https://huggingface.co/autotrust/JEV-35B) に対応し、`/v1/systemone` が 1 つのリクエスト本文で複数のリクエストを受け付けるようになりました。
@@ -105,6 +106,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | テキスト | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | ~1.7× | ~1.1× | ~1.0× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | 1.7× | 1.4× | 1.1× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト、画像 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | テキスト | 1.1× | 2.0× | 2.8× |

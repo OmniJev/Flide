@@ -87,6 +87,13 @@ def build(cls, config, device, dtype, lean=None):
             for bn, b in list(mod._buffers.items()):
                 if b is not None:
                     mod._buffers[bn] = torch.empty(b.shape, device=device, dtype=b.dtype)
+        # buffers a module with parameters sets in __init__ (Gemma 4's embedding scale) were lost on the meta device: the
+        # model's own _init_weights sets them again (the parameters it also fills are read from the checkpoint after)
+        init = getattr(model, "_init_weights", None)
+        if init is not None:
+            for mod in model.modules():
+                if getattr(mod, "_non_persistent_buffers_set", None) and next(mod.parameters(recurse=False), None) is not None:
+                    init(mod)
     return model.eval()
 
 

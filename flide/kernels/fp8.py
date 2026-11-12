@@ -70,6 +70,16 @@ class Fp8Weight:
         q, s = quantize_rows(w[:n])
         return cls(q, s, w[n:].clone() if tail_rows else None, w.dtype)
 
+    def __getitem__(self, rows) -> "Fp8Weight":
+        """A row slice (the q rows of a merged qkv projection, its kv rows): no tail rows may be involved."""
+        if self.tail is not None:
+            raise ValueError("a weight with tail rows does not slice")
+        if isinstance(rows, slice):
+            idx = torch.arange(self.q.shape[0], device=self.q.device)[rows]
+        else:
+            idx = rows
+        return Fp8Weight(self.q[idx], self.scale[0, idx].reshape(1, -1).contiguous(), None, self.out_dtype)
+
     def split(self, n: int) -> tuple["Fp8Weight", "Fp8Weight"]:
         """The first n output rows and the rest, sharing this weight's storage (no tail rows)."""
         if self.tail is not None:
