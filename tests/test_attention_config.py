@@ -35,7 +35,7 @@ def main():
     # 256-dim heads on a 99 KB card: 32-query tiles with four warps on Blackwell, the older tile elsewhere
     check("blackwell, 99 KB, bf16, 256-dim gets four warps on the same tile", config(99 * 1024, (12, 0), torch.bfloat16, 256),
           {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2})
-    check("hopper, 99 KB, bf16, 256-dim keeps 64-query tiles", config(99 * 1024, (9, 0), torch.bfloat16, 256),
+    check("Hopper, 99 KB, bf16, 256-dim keeps 64-query tiles", config(99 * 1024, (9, 0), torch.bfloat16, 256),
           {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1})
     check("blackwell, 227 KB, bf16, 256-dim keeps the 128-query tile", config(227 * 1024, (12, 0), torch.bfloat16, 256),
           {"BLOCK_M": 128, "BLOCK_N": 64, "num_warps": 8, "num_stages": 2})

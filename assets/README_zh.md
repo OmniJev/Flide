@@ -29,12 +29,13 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
 - 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。
 - 🔥 **2026-11-11** Flide 0.1.13 新增 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) 和 [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)，并为 RTX 40 系显卡提供预编译内核。
-- 🔥 **2026-11-10** Flide 0.1.12 新增 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) 和 [clef-flash](https://huggingface.co/Cloudflare/clef-flash)，并为 RTX 50 系和 RTX PRO 6000 显卡提供预编译内核。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-10** Flide 0.1.12 新增 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) 和 [clef-flash](https://huggingface.co/Cloudflare/clef-flash)，并为 RTX 50 系和 RTX PRO 6000 显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.11 新增[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)，在一张 H200 上 28 秒给 1 万封邮件各回答 8 个问题。
 - 🔥 **2026-11-09** Flide 0.1.10 支持 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) 和 [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)，KnowLine 系列也能读图片了。
 - 🔥 **2026-11-09** Flide 0.1.9 支持 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) 和 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)，`/v1/systemone` 也能在一个请求体里接收多个请求。
@@ -105,6 +106,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 文本 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.7× | ~1.1× | ~1.0× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | 1.7× | 1.4× | 1.1× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 文本 | 1.1× | 2.0× | 2.8× |

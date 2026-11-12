@@ -8,9 +8,9 @@ labels: enhancement
 
 <!-- Hugging Face link, size, and the engine its release uses. -->
 
-## What you use it for (optional)
+## Who you are
 
-<!-- One or two lines, and how many questions a request usually carries. -->
+<!-- Are you one of the model's authors, or do you really use it? Say which, and what you use it for. -->
 
 ## Plan (optional, only if you want to add it yourself)
 

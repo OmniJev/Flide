@@ -29,12 +29,13 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-12** Flide 0.1.15에 LiquidAI의 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)를 추가하고, Gemma 4도 `--quantize fp8`로 FP8로 실행되어 Gemma 4 12B가 24 GB 카드 한 장에 들어갑니다.
 - 🔥 **2026-11-12** Flide 0.1.14에 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B), [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)를 추가하고, GLiDE-27B는 이미지도 읽습니다.
 - 🔥 **2026-11-11** Flide 0.1.13에 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3), [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)를 추가하고, RTX 40 시리즈 GPU용 사전 컴파일 커널을 넣었습니다.
-- 🔥 **2026-11-10** Flide 0.1.12에 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max), [clef-flash](https://huggingface.co/Cloudflare/clef-flash)를 추가하고, RTX 50 시리즈와 RTX PRO 6000 GPU용 사전 컴파일 커널을 넣었습니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-10** Flide 0.1.12에 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max), [clef-flash](https://huggingface.co/Cloudflare/clef-flash)를 추가하고, RTX 50 시리즈와 RTX PRO 6000 GPU용 사전 컴파일 커널을 넣었습니다.
 - 🔥 **2026-11-10** Flide 0.1.11에 [이메일 분류 데모](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)를 추가했습니다. H200 한 장으로 이메일 10,000통에 각각 8개의 질문을 28초 만에 답합니다.
 - 🔥 **2026-11-09** Flide 0.1.10에 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision), [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)를 추가했고, KnowLine 계열이 이제 이미지를 읽습니다.
 - 🔥 **2026-11-09** Flide 0.1.9에 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b)와 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)를 추가했고, `/v1/systemone`이 이제 하나의 본문에 여러 요청을 받습니다.
@@ -105,6 +106,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 텍스트 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 텍스트 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 텍스트, 이미지 | ~1.7× | ~1.1× | ~1.0× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | 텍스트, 이미지 | 1.7× | 1.4× | 1.1× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 텍스트 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 텍스트, 이미지 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 텍스트 | 1.1× | 2.0× | 2.8× |

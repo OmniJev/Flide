@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.14"
+version = "0.1.15"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,13 +48,14 @@ flexdm = "flide_flexdm:FlexDM"
 sieve = "flide_sieve:Sieve"
 jdi = "flide_jdi:JDI"
 glide = "flide_glide:Glide"
+d1 = "flide_d1:D1"
 
 [tool.setuptools]
 package-dir = {"" = "plugins", "flide" = "flide"}
-py-modules = ["flide_autotrust", "flide_clef", "flide_flexdm", "flide_glide", "flide_intern_decision", "flide_jdi", "flide_jeffan", "flide_kev", "flide_knowline", "flide_pplx", "flide_sieve", "flide_torchcast", "flide_wald", "flide_xor"]
+py-modules = ["flide_autotrust", "flide_clef", "flide_d1", "flide_flexdm", "flide_glide", "flide_intern_decision", "flide_jdi", "flide_jeffan", "flide_kev", "flide_knowline", "flide_pplx", "flide_sieve", "flide_torchcast", "flide_wald", "flide_xor"]
 
 [tool.setuptools.package-data]
-flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tgz", "formats/known/*.json"]
+flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tar.xz", "formats/known/*.json"]
 
 [tool.setuptools.packages.find]
 where = [".", "plugins"]
