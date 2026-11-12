@@ -81,7 +81,8 @@ def main():
         "r": {"type": "score", "instructions": "rate", "criteria": ["low", "mid", "high"]}}})
     fam = family.ThisThat.__new__(family.ThisThat)
     fam.temperature = family.DEFAULT_TEMPERATURE
-    response, _ = fam.finish(req, plan, [[rows]])
+    fam.layout = "state_first"
+    response, _ = fam.finish(req, plan, [[[rows[0]]], [[rows[1]]]])   # one branch per question
     expected_yes = 1.0 / (1.0 + math.exp(-2.0 / family.DEFAULT_TEMPERATURE))   # the logits are divided by tau
     check("noul reads P(yes) at the second label", abs(response.answers["u"].noul - expected_yes) < 1e-5,
           response.answers["u"].noul)
@@ -89,6 +90,31 @@ def main():
           response.answers["r"].score)
     check("score keeps the whole distribution", len(response.answers["r"].probabilities) == 3,
           response.answers["r"].probabilities)
+
+    # the schema_first layout: the questions are a state-independent prefix, the slots sit after the state
+    first = family.build(tok, "state one", [("pick?", ["a", "b"])], layout="schema_first")
+    second = family.build(tok, "state two", [("pick?", ["a", "b"])], layout="schema_first")
+    check("schema_first starts with the question", tok.decode(first["ids"]).startswith("Question: pick?"),
+          tok.decode(first["ids"])[:24])
+    check("the question prefix does not depend on the state",
+          first["ids"][: first["prefix_len"]] == second["ids"][: second["prefix_len"]], first["prefix_len"])
+    check("the prefix ends before the context", tok.decode(first["ids"][first["prefix_len"]:]).startswith("\n\nContext:"))
+    check("the slots still point at the answer cues",
+          all(tok.decode([first["ids"][at]]).endswith("(") for at in first["slots"]), first["slots"])
+
+    fam_schema = family.ThisThat.__new__(family.ThisThat)
+    fam_schema.tokenizer = tok
+    fam_schema.max_state_tokens = family.DEFAULT_MAX_STATE_TOKENS
+    fam_schema.temperature, fam_schema.layout = family.DEFAULT_TEMPERATURE, "schema_first"
+    req2 = SystemOneRequest.model_validate({"state": "s", "questions": {
+        "u": {"type": "noul", "instructions": "is it?"},
+        "c": {"type": "choice", "instructions": "pick", "criteria": {"x": "first", "y": "second"}}}})
+    plan2 = fam_schema.plan(req2)
+    check("schema_first keeps the questions as the plan prefix", len(plan2.prefix) > 0, len(plan2.prefix))
+    check("schema_first reads every slot from one branch", len(plan2.suffixes) == 1
+          and len(plan2.reads[0].positions) == 2, (len(plan2.suffixes), plan2.reads))
+    response2, _ = fam_schema.finish(req2, plan2, [[rows]])        # one branch holding every slot
+    check("schema_first maps one row per question", response2.answers["u"].noul == response.answers["u"].noul)
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)
