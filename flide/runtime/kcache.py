@@ -8,8 +8,10 @@ options) with the binary (cubin and Triton's metadata), and files each kernel un
 computes. It also keeps every autotuner's picks, which go into the autotuners once their modules are loaded, so
 nothing is benchmarked at start either.
 
-`flide kernels export --model M [--model M2 ...] --out K.tgz` warms the models on a GPU and packs every kernel
-they ran (`--no-weights` builds each model from its config alone: kernels depend on shapes, not on values).
+`flide kernels export --model M [--model M2 ...] --out K.tar.xz` warms the models on a GPU and packs every kernel
+they ran (`--no-weights` builds each model from its config alone: kernels depend on shapes, not on values);
+`--tuning` starts its autotuners from an earlier bundle's picks, so a new bundle keeps the configs (and so the bits)
+of the one it replaces wherever the keys recur. Bundles are xz-compressed tar files; gzip ones (`.tgz`) still load.
 Bundles are applied at engine start from the
 package's `kernels/prebuilt/gpu`; entries for another Triton version or GPU are skipped.
 """
@@ -21,6 +23,7 @@ import importlib
 import io
 import json
 import logging
+import lzma
 import os
 import sys
 import tarfile
@@ -33,6 +36,7 @@ log = logging.getLogger("flide.kernels")
 FORMAT = 2
 MANIFEST = "flide-kernels.json"
 SHIPPED = Path(__file__).resolve().parent.parent / "kernels" / "prebuilt" / "gpu"
+PATTERNS = ("*.tar.xz", "*.tgz")   # bundle files in a directory
 
 _picks: dict[str, list] = {}   # autotuner picks from applied bundles, by kernel, until its module is loaded
 _matched = False   # a bundle for this GPU and Triton was found
@@ -131,13 +135,13 @@ def bundles(extra: str | None = None) -> list[Path]:
             continue
         p = Path(part)
         if p.is_dir():
-            out += sorted(p.glob("*.tgz"))
+            out += sorted(x for pat in PATTERNS for x in p.glob(pat))
         elif p.is_file():
             out.append(p)
         else:
             log.warning("kernel bundle %s not found; kernels compile on first use", part)
     if SHIPPED.is_dir():
-        out += sorted(SHIPPED.glob("*.tgz"))
+        out += sorted(x for pat in PATTERNS for x in SHIPPED.glob(pat))
     return out
 
 
@@ -161,7 +165,7 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
     for path in paths:
         t0 = time.perf_counter()
         try:
-            with tarfile.open(path, "r:gz") as tar:
+            with tarfile.open(path, "r:*") as tar:
                 man = json.load(tar.extractfile(MANIFEST))
                 if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
                     continue
@@ -202,6 +206,28 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
         log.info("seeded %s with %d kernels from %s in %.1fs", cache_dir(), n, path.name, time.perf_counter() - t0)
     tune()
     return added
+
+
+def hold_picks(extra: str, target: dict | None = None) -> int:
+    """Hold the autotuner picks of the bundles in `extra` (files or directories, ':'-separated) made for this GPU and
+    Triton, their kernels left out, and put them into the autotuners now. An export started this way keeps an earlier
+    bundle's configs wherever its keys recur, so answers do not move between releases for a tuner's pick alone; keys
+    it lacks are tuned as usual. Returns the picks held."""
+    import triton
+
+    target, n = target or _target(), 0
+    for path in bundles(extra):
+        if path.parent == SHIPPED:
+            continue
+        with tarfile.open(path, "r:*") as tar:
+            man = json.load(tar.extractfile(MANIFEST))
+        if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
+            continue
+        for fn, picks in man.get("tuning", {}).items():
+            _picks.setdefault(fn, []).extend(picks)
+            n += len(picks)
+    tune()
+    return n
 
 
 def no_bundle() -> str | None:
@@ -271,7 +297,7 @@ class _Progress:
 
 
 def progress(on: bool) -> None:
-    """Start counting the kernels the JIT builds, or stop and say how many were built."""
+    """Start counting the kernels the JIT builds, or stop and say how many were built, if any."""
     try:
         from triton import knobs
     except ImportError:
@@ -281,7 +307,8 @@ def progress(on: bool) -> None:
         knobs.runtime.jit_post_compile_hook = _Progress(hook)
     elif not on and isinstance(hook, _Progress):
         knobs.runtime.jit_post_compile_hook = hook.inner
-        log.info("compiled %d kernels in %.0f s", hook.n, time.perf_counter() - hook.t0)
+        if hook.n:
+            log.info("compiled %d kernels in %.0f s", hook.n, time.perf_counter() - hook.t0)
 
 
 class _Recorder:
@@ -345,7 +372,7 @@ def _pack(rec: _Recorder, out: Path) -> tuple[int, int]:
 
 def _write(out: Path, man: dict, buf: dict) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(out, "w:gz") as tar:
+    with tarfile.open(out, "w:xz", preset=9 | lzma.PRESET_EXTREME) as tar:
         for name, data in [(MANIFEST, json.dumps(man).encode())] + sorted(buf.items()):
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -385,6 +412,11 @@ def export(args) -> None:
 
     from .engine import Engine
 
+    if args.tuning:
+        held = hold_picks(args.tuning)
+        if not held:
+            raise SystemExit(f"--tuning {args.tuning}: no bundle there for this GPU and Triton")
+        log.info("%d autotuner picks held from %s", held, args.tuning)
     rec = _Recorder()
     knobs.runtime.jit_post_compile_hook = rec
     for model in args.model:
@@ -404,7 +436,7 @@ def export(args) -> None:
     out = Path(args.out)
     print(f"{out}: {n} kernels, {out.stat().st_size / 1e6:.1f} MB" + (f", {missing} not found in the cache" if missing else ""))
     marks = {str(Path.home()).encode(), b"site-packages", os.getcwd().encode()} - {b"/", b""}
-    with tarfile.open(out, "r:gz") as tar:
+    with tarfile.open(out, "r:*") as tar:
         named = [m.name for m in tar.getmembers() if m.isfile() and any(x in tar.extractfile(m).read() for x in marks)]
     if named:
         print(f"{len(named)} files name a path of this machine, e.g. {named[0]}")
@@ -414,7 +446,7 @@ def merge(args) -> None:
     """One bundle from several made with the same Triton on the same GPU target (kernels and picks united)."""
     man, buf, seen = None, {}, set()
     for path in args.bundles:
-        with tarfile.open(path, "r:gz") as tar:
+        with tarfile.open(path, "r:*") as tar:
             m = json.load(tar.extractfile(MANIFEST))
             if man is None:
                 man = {**m, "kernels": [], "tuning": {}}
@@ -437,7 +469,7 @@ def merge(args) -> None:
 
 
 def info(args) -> None:
-    with tarfile.open(args.bundle, "r:gz") as tar:
+    with tarfile.open(args.bundle, "r:*") as tar:
         m = json.load(tar.extractfile(MANIFEST))
     t = m["target"]
     picks = sum(len(v) for v in m["tuning"].values())
@@ -457,6 +489,8 @@ def add_parser(sub) -> None:
     e.add_argument("--sessions", action="store_true", help="also compile the session (save / resume) path")
     e.add_argument("--no-weights", action="store_true", help="build each model from its config, weights unread")
     e.add_argument("--quantize", default=None, choices=["fp8"], help="the kernels of FP8 serving")
+    e.add_argument("--tuning", default=None, metavar="BUNDLES",
+                   help="start the autotuners from these bundles' picks (files or directories, ':'-separated)")
     e.set_defaults(func=export)
     s = ks.add_parser("seed", help="file a bundle's kernels into this machine's kernel cache")
     s.add_argument("bundle")
