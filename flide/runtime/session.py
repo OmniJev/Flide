@@ -10,10 +10,13 @@ at the position, plus the full-attention keys and values before it. Nothing is a
 request computes the same function as a fresh one (rounding differs as it does between any two packings).
 
 Lookup hashes the prefix in blocks of 64 tokens, so a probe costs one pass over the request's tokens; a hit is
-confirmed token by token. Entries live on the GPU and are evicted least recently used under a byte budget.
+confirmed token by token. Entries live on the GPU and are evicted least recently used under a byte budget. An entry
+saved by a request that resumed from another, over the same tokens and further, replaces that one: an agent's step
+holds every key and value its previous step held, so one agent keeps one entry.
 """
 from __future__ import annotations
 
+import argparse
 from collections import OrderedDict
 
 
@@ -35,6 +38,30 @@ def reserve(nbytes: int, device) -> None:
 
     if nbytes > 0 and torch.device(device).type == "cuda":
         torch.empty(nbytes, dtype=torch.uint8, device=device)
+
+
+KEEP = 0.10   # of the device's memory that an "auto" cache leaves free, for requests larger than the warm-up's
+
+
+def cache_size(text: str) -> float | str:
+    """A --session-cache-gb value: a size in GiB, or "auto"."""
+    if str(text).strip().lower() == "auto":
+        return "auto"
+    try:
+        gib = float(text)
+    except ValueError:
+        gib = -1.0
+    if not gib >= 0:
+        raise argparse.ArgumentTypeError(f"--session-cache-gb takes 'auto' or a size in GiB, not {text!r}")
+    return gib
+
+
+def auto_bytes(free: int, total: int, reserved: int, allocated: int, peak: int, keep: float = KEEP) -> int:
+    """Bytes an "auto" session cache takes: what the device has left once the weights, the graphs and the warm-up's
+    peak work space are in (free on the device plus what the caching allocator holds unused, less that work space),
+    less `keep` of the device's memory; 0 when that is under 512 MiB."""
+    room = free + (reserved - allocated) - (peak - allocated) - int(keep * total)
+    return room if room >= 2 ** 29 else 0
 
 
 class Entry:
@@ -77,6 +104,7 @@ class SessionCache:
         self.used = 0
         self._next = 0
         self.hits = self.misses = self.saved_tokens = 0
+        self.evictions = self.replaced = 0
 
     def mark(self, n_prefix: int, start: int = 0) -> int | None:
         """Where to save the state of a prefix of n tokens that starts computing at `start`: the last stride multiple
@@ -111,11 +139,20 @@ class SessionCache:
         self.misses += 1
         return None, 0
 
-    def insert(self, entry: Entry) -> None:
+    def insert(self, entry: Entry, parent: Entry | None = None) -> None:
+        """Keep `entry`, evicting the least recently used ones it needs room from; `parent`, the entry the request
+        that saved it resumed from, goes first when `entry` covers its tokens."""
         if entry.bytes > self.budget or not entry.states:
             return
+        if parent is not None and len(parent.tokens) <= len(entry.tokens) \
+                and entry.tokens[:len(parent.tokens)] == parent.tokens:
+            eid = next((k for k, e in self.entries.items() if e is parent), None)
+            if eid is not None:
+                self._remove(eid)
+                self.replaced += 1
         while self.used + entry.bytes > self.budget and self.entries:
-            self._evict()
+            self._remove(next(iter(self.entries)))
+            self.evictions += 1
         eid = self._next
         self._next += 1
         self.entries[eid] = entry
@@ -125,8 +162,8 @@ class SessionCache:
             self.index[hashes.key(pos)] = eid
             self.positions[pos] = self.positions.get(pos, 0) + 1
 
-    def _evict(self) -> None:
-        eid, entry = self.entries.popitem(last=False)
+    def _remove(self, eid: int) -> None:
+        entry = self.entries.pop(eid)
         self.used -= entry.bytes
         hashes = _Hashes(entry.tokens)
         for pos in entry.states:
@@ -148,4 +185,4 @@ class SessionCache:
 
     def stats(self) -> dict:
         return {"entries": len(self.entries), "bytes": self.used, "hits": self.hits, "misses": self.misses,
-                "saved_tokens": self.saved_tokens}
+                "saved_tokens": self.saved_tokens, "evictions": self.evictions, "replaced": self.replaced}

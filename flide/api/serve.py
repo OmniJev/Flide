@@ -10,6 +10,8 @@ import logging
 import os
 from pathlib import Path
 
+from ..runtime.session import cache_size as _cache_size
+
 log = logging.getLogger("flide.serve")
 
 
@@ -109,8 +111,8 @@ def add_parser(sub) -> None:
                         "changes the numbers a little")
     s.add_argument("--max-branch-tokens", type=int, default=None)
     s.add_argument("--max-request-tokens", type=int, default=None)
-    s.add_argument("--session-cache-gb", type=float, default=0.0,
-                   help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it")
+    s.add_argument("--session-cache-gb", type=_cache_size, default=0.0,
+                   help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it; auto: the memory left once the model is up")
     s.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
     s.add_argument("--planners", type=int, default=4, help="CPU threads that render and tokenize requests")
     s.add_argument("--frontends", type=int, default=0,

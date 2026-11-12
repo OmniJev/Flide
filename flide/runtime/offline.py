@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import formats
+from .session import cache_size as _cache_size
 from ..formats.base import check_limits
 
 _worker = None
@@ -273,6 +274,11 @@ def run(args) -> None:
 
     rows = read_rows(args.rows, args.every, args.limit)
     log(f"{len(rows)} rows from {len(args.rows)} file(s)")
+    if args.workers is None:
+        from .env import default_workers
+
+        args.workers = default_workers()
+    log(f"{args.workers} planning worker(s)")
     model_dir = resolve_model(args.model)
     name = formats.detect(model_dir, model_config(model_dir), args.format).name
     if args.stream_block > 0:
@@ -365,11 +371,12 @@ def add_parser(sub) -> None:
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--budget", type=int, default=None,
                    help="tokens per micro-batch (default 65536, or 16384 on a card of 24 GB or less)")
-    p.add_argument("--session-cache-gb", type=float, default=0.0,
+    p.add_argument("--session-cache-gb", type=_cache_size, default=0.0,
                    help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
                         "(a block is scheduled whole, so --stream-block decides how often that can happen)")
     p.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
-    p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    p.add_argument("--workers", type=int, default=None,
+                   help="processes that render and tokenize (default: usable CPUs less two, within free memory)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--batch-invariant", action="store_true",

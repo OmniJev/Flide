@@ -10,6 +10,8 @@ class Backbone:
     block_attention: ClassVar[bool] = False
     # runs plans whose prefix alone is read both ways (formats.base.Plan.attention "prefix")
     prefix_attention: ClassVar[bool] = False
+    # saves and resumes prefix states (the session cache); without, the cache stays empty
+    session_states: ClassVar[bool] = True
 
     device: Any
     dtype: Any

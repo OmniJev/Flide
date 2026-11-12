@@ -52,6 +52,32 @@ def _total_memory(device) -> int:
     return torch.cuda.get_device_properties(device).total_memory
 
 
+def _rooted(plan: Plan) -> Plan:
+    """A causal text plan without a prefix as the same computation with one: the start its sequences share (each keeps
+    at least the tokens its reads look at, and one token) becomes the prefix, so the flat graphs and the session cache
+    take it (a family whose prompt is one stream read at several positions). Other plans as they are."""
+    if (plan is None or plan.prefix or plan.attention != "causal" or plan.vision is not None or plan.positions is not None
+            or plan.offset or not plan.suffixes):
+        return plan
+    need = 1
+    for b in range(len(plan.suffixes)):
+        for r in plan.branch_reads(b):
+            for pos in r.positions:
+                if pos >= 0:   # counted from the branch's start: a cut would move it
+                    return plan
+                need = max(need, -pos)
+    s0 = plan.suffixes[0]
+    cut = min(len(s) for s in plan.suffixes) - need
+    n = 0
+    while n < cut and all(s[n] == s0[n] for s in plan.suffixes[1:]):
+        n += 1
+    if n < 1:
+        return plan
+    import dataclasses
+
+    return dataclasses.replace(plan, prefix=list(s0[:n]), suffixes=[s[n:] for s in plan.suffixes])
+
+
 def _blocks(plan: Plan) -> bool:
     """Whether a plan reads any of its prefix both ways, attention "blocks" or "prefix" (formats.base.Plan); ValueError
     for an attention no backbone runs."""
@@ -152,7 +178,7 @@ class Engine:
         if missing:   # said on every start, a warm Triton cache or not, so a slow first start never looks hung
             log.info("no precompiled kernels ship for %s: kernels not yet in %s compile on first use, so the first start "
                      "on this machine takes a few minutes and later ones read them from the cache", missing, cache_dir())
-            progress(True)
+        progress(True)   # kernels a bundle lacks (or all, without one) are counted as they compile
         t0 = time.perf_counter()
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
@@ -166,7 +192,7 @@ class Engine:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
         if tp_size > 1:   # rank 0 here, the other ranks in worker processes (runtime/tp.py)
-            if session_cache_gb > 0:
+            if session_cache_gb == "auto" or session_cache_gb > 0:
                 raise ValueError("tensor parallel runs without the session cache")
             from . import tp
 
@@ -192,10 +218,14 @@ class Engine:
         if budget is None and self.budget != 65536:
             log.info("budget %d tokens per micro-batch on a card of 24 GB or less (--budget sets it)", self.budget)
         self.sessions = None
-        if session_cache_gb > 0:
+        auto = session_cache_gb == "auto"   # sized from the memory left once the model is up and warm
+        if (auto or session_cache_gb > 0) and not getattr(self.backbone, "session_states", True):
+            log.info("%s keeps no session states yet: the session cache is off", config.model_type)
+            auto, session_cache_gb = False, 0.0
+        if auto or session_cache_gb > 0:
             from .session import SessionCache
 
-            self.sessions = SessionCache(int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
+            self.sessions = SessionCache(0 if auto else int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         tune()
         if graphs is not None and capture is not False:
@@ -212,15 +242,16 @@ class Engine:
                 graphs.capture_sflat()
         n_graphs = len(getattr(graphs, "graphs", None) or {}) if graphs is not None else 0
         mem_graphs = _gib()
-        if self.sessions is not None:
+        if self.sessions is not None and not auto:
             from .session import reserve
 
             reserve(self.sessions.budget, self.backbone.device)
         if capture is not False:
             tune()
             self.warmup()
-        if missing:
-            progress(False)
+        if auto:
+            self.sessions.budget = self._auto_cache()
+        progress(False)
         log.info("loaded %s as %s on %s in %.1fs", self.model_dir, family.name, config.model_type,
                  time.perf_counter() - t0)
         end = _gib()
@@ -269,6 +300,7 @@ class Engine:
         import torch
 
         budget = budget or self.budget
+        plans = [_rooted(p) for p in plans]
         for p in plans:
             if p is not None and _blocks(p) and not getattr(self.backbone, "prefix_attention" if p.attention == "prefix"
                                                            else "block_attention", False):
@@ -293,7 +325,8 @@ class Engine:
                 from .session import Entry
 
                 for j, saved in batch.saved.items():
-                    self.sessions.insert(Entry(mb.pieces[j].job.prefix, saved["states"], saved["kv"]))
+                    self.sessions.insert(Entry(mb.pieces[j].job.prefix, saved["states"], saved["kv"]),
+                                         parent=mb.pieces[j].job.resume)
             ys = []
             for g in batch.groups:
                 h = hidden[g.layer][g.start: g.end]
@@ -414,6 +447,8 @@ class Engine:
         """Sessions take text-only plans whose reads all fall inside the branches."""
         if self.sessions is None or plan.vision is not None or plan.positions is not None or plan.offset:
             return False
+        if not getattr(self.backbone, "session_states", True):
+            return False
         if getattr(self.backbone, "midloop", None) is not None:
             return False
         if _blocks(plan):
@@ -437,6 +472,23 @@ class Engine:
             if start or marks:
                 out[i] = {"start": start, "resume": entry, "marks": marks}
         return out
+
+    def _auto_cache(self) -> int:
+        """The "auto" session cache's bytes, held at once (`session.reserve`), and said in the log."""
+        import torch
+
+        from .session import auto_bytes, reserve
+
+        dev = self.backbone.device
+        if torch.device(dev).type != "cuda":
+            return 0
+        torch.cuda.synchronize(dev)
+        free, total = torch.cuda.mem_get_info(dev)
+        n = auto_bytes(free, total, torch.cuda.memory_reserved(dev), torch.cuda.memory_allocated(dev),
+                       torch.cuda.max_memory_allocated(dev))
+        reserve(n, dev)
+        log.info("session cache %.2f GiB (auto)%s", n / 2 ** 30, "" if n else ": too little memory left, so it saves nothing")
+        return n
 
     def _graph_hidden(self, plan: Plan, lazy: bool = True):
         """Head outputs at the last token of every branch from CUDA graphs (still on the device): a flat graph (one
@@ -496,7 +548,7 @@ class Engine:
             if snap is not None:
                 from .session import Entry
 
-                self.sessions.insert(Entry(plan.prefix[:mark], *snap))
+                self.sessions.insert(Entry(plan.prefix[:mark], *snap), parent=entry)
             head = read[0].head
             return self.heads[head](hidden) if head is not None else hidden
         item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
@@ -697,7 +749,7 @@ class Engine:
                     from .session import Entry
 
                     mark = next(iter(snap[0]))
-                    self.sessions.insert(Entry(plans[i].prefix[:mark], *snap))
+                    self.sessions.insert(Entry(plans[i].prefix[:mark], *snap), parent=items[i][2])
         return out
 
     def _graph_outputs(self, plan: Plan):
@@ -720,6 +772,7 @@ class Engine:
         batcher queues the next round before collecting this one, so the GPU does not wait for the host."""
         import torch
 
+        plans = [_rooted(p) for p in plans]
         outs: list[Any] = [None] * len(plans)
         paths = ["packed"] * len(plans)
         rest = list(range(len(plans)))
@@ -770,6 +823,7 @@ class Engine:
         return outs, paths
 
     def _run_one(self, plan):
+        plan = _rooted(plan)
         if settings.batch_invariant:
             outs, paths = self.forward([plan], "batch")
             return outs[0], paths[0]
