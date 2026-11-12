@@ -82,19 +82,31 @@ def quantize_dense(weights: list[dict]) -> int:
 
 
 class FusedDecoder:
-    def __init__(self, lm):
+    def __init__(self, lm, store=None):
+        """`store`: (float8 copies by parameter name, module names) for projections the loader read as float8 (their
+        modules' weights stay on the meta device); their merged weights are built from those copies."""
+        from ...kernels.fp8 import Fp8Weight
+
         self.lm = lm
         self.cfg = lm.config
         self.ple = bool(self.cfg.hidden_size_per_layer_input)
         self.dtype = lm.layers[0].mlp.gate_proj.weight.dtype   # merged at this dtype; a cast needs a new decoder
         self.w = []
+
+        def fused(mods):
+            if store is not None and mods[0].weight.is_meta:
+                # each copy leaves the store as it is joined, so the float8 weights are never held twice
+                qs, ss = zip(*(store[0].pop(store[1][id(m)] + ".weight") for m in mods))
+                return Fp8Weight(torch.cat(qs), torch.cat(ss), None, self.dtype)
+            return _merge(mods)
+
         for layer in lm.layers:
             a, mlp = layer.self_attn, layer.mlp
             mods = ([a.q_proj] if a.is_kv_shared_layer else
                     [a.q_proj, a.k_proj] + ([a.v_proj] if a.v_proj is not None else []))
             gu = [mlp.gate_proj, mlp.up_proj]
-            w = {"qkv": lora.attached(_merge(mods), mods), "o": lora.attached(a.o_proj.weight, [a.o_proj]),
-                 "gate_up": lora.attached(_merge(gu), gu), "down": lora.attached(mlp.down_proj.weight, [mlp.down_proj]),
+            w = {"qkv": lora.attached(fused(mods), mods), "o": lora.attached(fused([a.o_proj]), [a.o_proj]),
+                 "gate_up": lora.attached(fused(gu), gu), "down": lora.attached(fused([mlp.down_proj]), [mlp.down_proj]),
                  "inter": mlp.gate_proj.weight.shape[0], "hd": a.head_dim,
                  "nh": a.q_proj.weight.shape[0] // a.head_dim,
                  "nkv": 0 if a.is_kv_shared_layer else a.k_proj.weight.shape[0] // a.head_dim,
