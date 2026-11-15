@@ -198,13 +198,16 @@ class Template(Format):
         self.images = spec.get("images")
         if self.images is not None and self.prompt is not None:
             raise ValueError("images go in a user turn: a configuration with images has messages")
-        if spec.get("attention", "causal") not in ("causal", "bidirectional", "prefix"):
-            raise ValueError("attention is causal, bidirectional or prefix")
-        self.attention = {"bidirectional": "blocks", "prefix": "prefix"}.get(spec.get("attention"), "causal")
-        if (self.attention == "prefix") != ("prefix_ends" in spec) or (self.attention == "prefix" and self.images):
+        if spec.get("attention", "causal") not in ("causal", "bidirectional", "prefix", "prefix_bidir"):
+            raise ValueError("attention is causal, bidirectional, prefix or prefix_bidir")
+        self.attention = {"bidirectional": "blocks", "prefix": "prefix",
+                          "prefix_bidir": "prefix_bidir"}.get(spec.get("attention"), "causal")
+        if (self.attention in ("prefix", "prefix_bidir")) != ("prefix_ends" in spec):
+            raise ValueError("attention prefix and prefix_bidir take prefix_ends")
+        if self.attention == "prefix" and self.images:
             raise ValueError("attention prefix takes prefix_ends and no images")
         self.prefix_ends = (self.tokenizer(spec["prefix_ends"], add_special_tokens=False)["input_ids"]
-                            if self.attention == "prefix" else None)
+                            if self.attention in ("prefix", "prefix_bidir") else None)
         st = spec.get("state")
         self.state_text = env.from_string(st["text"]) if st else None
         if st:
@@ -460,6 +463,12 @@ class Template(Format):
             if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
                 raise ValueError("the prompts differ before their requested parts end")
             return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data, attention="prefix")
+        if self.attention == "prefix_bidir":   # the shared prefix both ways, each tail both ways too
+            rows = [head + t for t in tails]
+            end = self._prefix_end(rows[0])
+            if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
+                raise ValueError("the prompts differ before their requested parts end")
+            return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data, attention="blocks")
         m = min(len(t) for t in tails) - 1   # where the prompts part, past the head they share
         for i in range(m):
             if any(t[i] != tails[0][i] for t in tails):
@@ -476,9 +485,32 @@ class Template(Format):
         longest = len(prefix) + max(len(x) for x in suffixes)
         if longest > self.max_prompt_tokens:
             raise ValueError(f"prompt is {longest} tokens with its images, limit is {self.max_prompt_tokens}")
+        if self.attention == "prefix_bidir":   # the shared head (with its images) both ways, each tail both ways too
+            rows = [prefix + s for s in suffixes]
+            end = self._prefix_end(rows[0])
+            if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
+                raise ValueError("the prompts differ before their requested parts end")
+            return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data,
+                        vision=self._cut_vision(vision, end), attention="blocks")
         if self.attention == "blocks":   # sequences of their own, each starting with the head that holds the images
             return Plan([], [prefix + s for s in suffixes], (READ,), data, vision=vision, attention="blocks")
         return Plan(prefix, suffixes, (READ,), data, vision=vision)
+
+    @staticmethod
+    def _cut_vision(vision: dict | None, end: int) -> dict | None:
+        """`vision` with its token types cut to a prefix of ``end`` ids.
+
+        The backbone derives the prefix's rotary positions from these types, so they must cover
+        exactly the prefix once it is shorter than the sequence they were built for.
+        """
+        if not vision or "mm_token_type_ids" not in vision:
+            return vision
+        types = vision["mm_token_type_ids"]
+        if types.shape[-1] < end:
+            raise ValueError(f"token types of {types.shape[-1]} cover fewer than the {end}-id prefix")
+        cut = dict(vision)
+        cut["mm_token_type_ids"] = types[..., :end]
+        return cut
 
     def _prefix_end(self, ids: list) -> int:
         """The index just past the last occurrence of the prefix_ends tokens."""
