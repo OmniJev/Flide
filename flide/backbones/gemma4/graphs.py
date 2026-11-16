@@ -30,6 +30,14 @@ log = logging.getLogger("flide.graphs")
 # round from there on (every token of padding costs as much as a real one in the matrix products)
 LADDER = (tuple(range(64, 512, 32)) + tuple(range(512, 4096, 64)) + tuple(range(4096, 8192, 128))
           + tuple(range(8192, 16385, 256)))
+
+
+def fine_ladder(step: int, up_to: int = 1024) -> tuple[int, ...]:
+    """LADDER with a length every `step` tokens below `up_to` (at least 8 tokens apart)."""
+    step = max(8, int(step))
+    return tuple(range(LADDER[0], up_to, step)) + tuple(x for x in LADDER if x >= up_to)
+
+
 BMAX = 1024   # reads per replay (the branches of a round), at most an eighth of its length
 REQUESTS = 64   # requests per replay, at most one per 32 tokens of its length
 
@@ -38,11 +46,17 @@ class GemmaGraphs:
     block_attention = True   # rounds of block-attention requests replay the graphs in `bgraphs`
     alone_reads = True   # a sequence read whole under block attention, as its own request read at its last token
 
-    def __init__(self, bb, ladder=LADDER, bmax: int = BMAX):
+    def __init__(self, bb, ladder=LADDER, bmax: int = BMAX, pick: int = 0):
+        """`pick`: capture_all times each graph below that many tokens, and a round then replays the fastest length
+        within 64 tokens above its own (the matrix products' kernels change with the length, and at some lengths a
+        longer one runs faster: on an H200 Gemma 4 31B replays 416 tokens 5 ms slower than 424)."""
         self.bb = bb
         self.media = bb.vlm is not None
         self.ladder = tuple(ladder)
         self.bmax = bmax
+        self.pick = int(pick or 0)
+        self.cost: dict[int, float] = {}
+        self.best: list[int] | None = None
         dev = bb.device
         n = self.ladder[-1]
         self.ids = torch.zeros(n, dtype=torch.long, device=dev)       # placeholders as padding (per-layer inputs)
@@ -82,7 +96,36 @@ class GemmaGraphs:
         i = bisect.bisect_left(self.ladder, tokens)
         while i < len(self.ladder) and (self.nread(self.ladder[i]) < reads or self.nreq(self.ladder[i]) < requests):
             i += 1
+        if i < len(self.ladder) and self.best is not None:   # a longer length holds the round too, and replays faster
+            i = self.best[i]
         return self.ladder[i] if i < len(self.ladder) else None
+
+    def _time(self, L: int, g) -> None:
+        """The replay time of the graph of length L, its dummy round staged (capture_all with `pick`)."""
+        g.replay()
+        a, b = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        a.record()
+        for _ in range(3):
+            g.replay()
+        b.record()
+        b.synchronize()
+        self.cost[L] = a.elapsed_time(b) / 3
+
+    def _pick(self) -> None:
+        """For each length, the length within 64 tokens above it to replay instead: the first that runs at least 5%
+        faster than the best so far, among the lengths timed."""
+        best = []
+        for i, L in enumerate(self.ladder):
+            b = i
+            if L in self.cost:
+                for j in range(i + 1, len(self.ladder)):
+                    M = self.ladder[j]
+                    if M - L > 64 or M not in self.cost:
+                        break
+                    if self.cost[M] < 0.95 * self.cost[self.ladder[b]]:
+                        b = j
+            best.append(b)
+        self.best = best
 
     def fits(self, prefix_len: int, suffix_lens: list[int]) -> bool:
         return self._rung(prefix_len + sum(suffix_lens), max(1, len(suffix_lens))) is not None
@@ -178,8 +221,11 @@ class GemmaGraphs:
         t0 = time.perf_counter()
         lengths = sorted((x for x in self.ladder if max_tokens is None or x <= max_tokens), reverse=True)
         for i, L in enumerate(lengths, 1):
-            self.capture(L)
+            if self.capture(L) and L < self.pick and L not in self.cost:
+                self._time(L, self.graphs[L])
             capture_progress(i, len(lengths), t0, "CUDA graphs (gemma4)", log_fn or log.info)
+        if self.cost:
+            self._pick()
         (log_fn or log.info)(f"captured {len(self.graphs)} CUDA graphs (gemma4) in {time.perf_counter() - t0:.1f}s")
 
     def _stage_dummy(self, L: int) -> None:

@@ -51,7 +51,13 @@ class Plan:
 
     `attention` "prefix": in the full-attention layers the prefix sees all of itself, as under "blocks", and each suffix
     sees the prefix and itself one way (a request read both ways, then a question's tail read one way). It needs a
-    prefix and a backbone with `prefix_attention`, and takes no session states."""
+    prefix and a backbone with `prefix_attention`, and takes no session states.
+
+    `attention` "set": no prefix; each suffix is one sequence, a state and the questions packed after it, cut by
+    `segments` (one tuple per suffix: the state's end, then each question's end, the last the sequence's length). In
+    the full-attention layers a state token sees the whole sequence and a question's token the state and its own
+    question; every other layer reads the sequence causally, so a question still hears the ones before it there. It
+    needs a backbone with `set_attention`, and takes no session states."""
 
     prefix: list[int]
     suffixes: list[list[int]]
@@ -61,6 +67,7 @@ class Plan:
     positions: Any = None
     offset: int = 0
     attention: str = "causal"
+    segments: Any = None
 
     @property
     def tokens(self) -> int:
@@ -87,6 +94,9 @@ class Format:
     # A LoRA adapter merged into the weights as they are read, as the family's release serves it; else it runs beside
     # them (flide/lora.py).
     merge_lora: ClassVar[bool] = False
+    # Options the family's checkpoints load their backbone with (the backbone's own keywords); the caller's
+    # backbone_options win over them.
+    backbone_options: ClassVar[dict] = {}
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:

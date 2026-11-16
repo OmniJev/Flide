@@ -36,11 +36,11 @@ def _rms_kernel(X, D, W, H_OUT, Y, N, sx, sd, sh, sy, eps, ADD: tl.constexpr, OF
     tl.store(Y + row * sy + cols, (xf * inv * w).to(Y.dtype.element_ty), mask=m)
 
 
-def rms_norm(x, w, eps: float, residual=None, offset: bool = True):
-    """y = RMSNorm(x [+ residual]) with weight (1 + w) when `offset` (Qwen3.5's zero-centred norm), else w.
-    With a residual, returns (x + residual, y)."""
+def rms_norm(x, w, eps: float, residual=None, offset: bool = True, dtype=None):
+    """y = RMSNorm(x [+ residual]) with weight (1 + w) when `offset` (Qwen3.5's zero-centred norm), else w; y in
+    `dtype` (x's by default). With a residual, returns (x + residual, y)."""
     T, N = x.shape
-    y = torch.empty_like(x)
+    y = torch.empty_like(x) if dtype is None else torch.empty_like(x, dtype=dtype)
     h = torch.empty_like(x) if residual is not None else x
     if T:
         d = residual if residual is not None else x
@@ -231,12 +231,12 @@ def _sandwich_kernel(D, H, W1, S, W2, H_OUT, Y, N, sd, sh, sho, sy, eps, HAS_S: 
                  .to(Y.dtype.element_ty), mask=m)
 
 
-def sandwich(d, h, w1, eps: float, scale=None, w2=None):
+def sandwich(d, h, w1, eps: float, scale=None, w2=None, dtype=None):
     """Gemma 4's post-norm step: h + RMSNorm(d) * w1 (times the layer scalar `scale`, a one-element tensor), and,
-    with w2, the next pre-norm RMSNorm(h) * w2 of the rounded result. Returns (h, y or None)."""
+    with w2, the next pre-norm RMSNorm(h) * w2 of the rounded result, in `dtype` (h's). Returns (h, y or None)."""
     T, N = d.shape
     ho = torch.empty_like(h)
-    y = torch.empty_like(h) if w2 is not None else None
+    y = None if w2 is None else torch.empty_like(h) if dtype is None else torch.empty_like(h, dtype=dtype)
     if T:
         yy = y if y is not None else ho
         _sandwich_kernel[(T,)](d, h, w1, scale if scale is not None else w1, w2 if w2 is not None else w1, ho, yy, N,

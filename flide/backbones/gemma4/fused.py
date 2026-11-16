@@ -5,7 +5,9 @@ The weights stay the checkpoint's transformers modules. Projections that read th
 memory is added. Between the products run the kernels of kernels/pointwise.py: per-head RMSNorm with the rotary
 embedding over the whole head (q, k) and the value norm, then after the attention and after the MLP (and the per-layer
 input) one pass for the post-norm, the residual add, the layer scalar and the next pre-norm, and GELU-tanh times the
-up projection. Each kernel computes in float32 and rounds once at its output; the rotary tables are float32.
+up projection. Each kernel computes in float32 and rounds once at its output; the rotary tables are float32. With
+`float32_residual` the residual stream stays in float32 between the layers (the input of each product and the final
+norm's output rounded once from it), a dense decoder without per-layer inputs only.
 Keys-shared layers read the keys and values of the layer they share with, as transformers does. A mixture-of-experts
 layer (26B-A4B) runs its dense MLP and its experts side by side as transformers does: the router reads the layer's
 input normed and scaled, its top k weights renormalized and scaled per expert, the experts (kernels/moe.py) read
@@ -82,7 +84,7 @@ def quantize_dense(weights: list[dict]) -> int:
 
 
 class FusedDecoder:
-    def __init__(self, lm, store=None):
+    def __init__(self, lm, store=None, float32_residual: bool = False):
         """`store`: (float8 copies by parameter name, module names) for projections the loader read as float8 (their
         modules' weights stay on the meta device); their merged weights are built from those copies."""
         from ...kernels.fp8 import Fp8Weight
@@ -91,6 +93,9 @@ class FusedDecoder:
         self.cfg = lm.config
         self.ple = bool(self.cfg.hidden_size_per_layer_input)
         self.dtype = lm.layers[0].mlp.gate_proj.weight.dtype   # merged at this dtype; a cast needs a new decoder
+        self.float32_residual = bool(float32_residual)
+        if self.float32_residual and (self.ple or getattr(self.cfg, "enable_moe_block", False)):
+            raise ValueError("gemma4: a float32 residual stream runs on a dense decoder without per-layer inputs")
         self.w = []
 
         def fused(mods):
@@ -155,10 +160,11 @@ class FusedDecoder:
         pli = self.per_layer_inputs(llm, emb)
         eps = cfg.rms_norm_eps
         out = {}
-        h = emb
+        h = emb.float() if self.float32_residual else emb
+        dt = self.dtype if self.float32_residual else None   # the products' inputs, rounded once from the stream
         if reads and 0 in reads:
-            out[0] = h[reads[0]]
-        x = pw.rms_norm(h, layers[0].input_layernorm.weight, layers[0].input_layernorm.eps, offset=False)
+            out[0] = emb[reads[0]]
+        x = pw.rms_norm(h, layers[0].input_layernorm.weight, layers[0].input_layernorm.eps, offset=False, dtype=dt)
         shared: dict[str, tuple] = {}
         for i in range(top):
             layer, w = layers[i], self.w[i]
@@ -202,7 +208,7 @@ class FusedDecoder:
             m_ = rmm if last else mm   # the read rows of the last layer: products whose sums ignore the row count
             d = m_(o.reshape(Tq, nh * hd), w["o"])
             h, x = pw.sandwich(d, h, layer.post_attention_layernorm.weight, eps,
-                               w2=layer.pre_feedforward_layernorm.weight)
+                               w2=layer.pre_feedforward_layernorm.weight, dtype=dt)
             n = w["inter"]
             gu = m_(x, w["gate_up"])
             d = m_(_geglu(gu[:, :n], gu[:, n:]), w["down"])
@@ -216,9 +222,9 @@ class FusedDecoder:
                                    scale=layer.layer_scalar, w2=nxt)
             else:
                 h, x = pw.sandwich(d, h, layer.post_feedforward_layernorm.weight, eps, scale=layer.layer_scalar,
-                                   w2=nxt)
+                                   w2=nxt, dtype=dt)
             if reads and i + 1 in reads:
-                out[i + 1] = h[reads[i + 1]]
+                out[i + 1] = h[reads[i + 1]].to(self.dtype)
         return h, out
 
     @staticmethod
@@ -235,4 +241,4 @@ class FusedDecoder:
 
     def final(self, h: torch.Tensor) -> torch.Tensor:
         norm = self.lm.norm
-        return pw.rms_norm(h, norm.weight, norm.eps, offset=False)
+        return pw.rms_norm(h, norm.weight, norm.eps, offset=False, dtype=self.dtype)

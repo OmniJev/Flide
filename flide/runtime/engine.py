@@ -29,10 +29,27 @@ def resolve_model(name: str) -> str:
     return lora.view(d, resolve_model) if lora.is_adapter(d) else d
 
 
+class FileConfig:
+    """A config.json transformers has no class for (a model that ships its code, LFM3), its fields as attributes."""
+
+    def __init__(self, d: dict):
+        self.__dict__.update({k: FileConfig(v) if k.endswith("_config") and isinstance(v, dict) else v
+                              for k, v in d.items()})
+
+    def get_text_config(self):
+        return getattr(self, "text_config", self)
+
+
 def model_config(model_dir: str):
+    import json
+
     import transformers
 
-    return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
+    try:
+        # trust_remote_code=False refuses a checkpoint's own code at once instead of asking on the terminal
+        return transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
+    except ValueError:   # a model type of its own code (trust_remote_code), which flide does not run
+        return FileConfig(json.loads((Path(model_dir) / "config.json").read_text()))
 
 
 SMALL_CARD = 25 * 2 ** 30
@@ -81,11 +98,18 @@ def _rooted(plan: Plan) -> Plan:
 def _blocks(plan: Plan) -> bool:
     """Whether a plan reads any of its prefix both ways, attention "blocks" or "prefix" (formats.base.Plan); ValueError
     for an attention no backbone runs."""
-    if plan.attention not in ("causal", "blocks", "prefix"):
+    if plan.attention not in ("causal", "blocks", "prefix", "set"):
         raise ValueError(f"unknown attention {plan.attention!r}")
     if plan.attention == "prefix" and not plan.prefix:
         raise ValueError("attention \"prefix\" needs a prefix")
+    if plan.attention == "set" and (plan.prefix or plan.segments is None or len(plan.segments) != len(plan.suffixes)):
+        raise ValueError("attention \"set\" takes no prefix and one segments tuple per sequence")
     return plan.attention != "causal"
+
+
+def _capability(plan: Plan) -> str:
+    """The backbone or graphs attribute that says it runs the plan's attention."""
+    return {"prefix": "prefix_attention", "set": "set_attention"}.get(plan.attention, "block_attention")
 
 
 def _flag(plan: Plan):
@@ -187,7 +211,7 @@ class Engine:
         if family.backbones and config.model_type not in family.backbones:
             raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
-        options = dict(backbone_options or {})
+        options = {**family.backbone_options, **(backbone_options or {})}
         if family.merge_lora:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
@@ -302,8 +326,7 @@ class Engine:
         budget = budget or self.budget
         plans = [_rooted(p) for p in plans]
         for p in plans:
-            if p is not None and _blocks(p) and not getattr(self.backbone, "prefix_attention" if p.attention == "prefix"
-                                                           else "block_attention", False):
+            if p is not None and _blocks(p) and not getattr(self.backbone, _capability(p), False):
                 raise ValueError(f"this backbone does not run attention {p.attention!r}")
             if p is not None and p.vision is not None and p.positions is None:
                 p.positions, p.offset = self._media_positions(p)
@@ -423,7 +446,10 @@ class Engine:
         return tuple(out)
 
     def _counts(self, plan: Plan) -> list[int] | None:
-        """Graph head outputs per branch of a plan read at several positions (`_spots`, `_branch_spots`), else None."""
+        """Graph head outputs per branch of a plan read at several positions (`_spots`, `_branch_spots`, attention
+        "set"), else None."""
+        if plan.attention == "set":
+            return [len(plan.branch_reads(b)[0].positions) for b in range(len(plan.suffixes))]
         spots = self._spots(plan)
         if spots is not None:
             return [len(spots)]
@@ -498,6 +524,16 @@ class Engine:
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         if graphs is None or (plan.vision is not None and not graphs.media) or self._eager(plan):
             return None
+        if plan.attention == "set":   # one replay of all its sequences, read at every slot, on graphs that run "set"
+            reads = [plan.branch_reads(b) for b in range(len(plan.suffixes))]
+            if (not getattr(graphs, "set_attention", False) or plan.vision is not None
+                    or any(len(r) != 1 or r[0].layer is not FINAL or r[0].head != reads[0][0].head for r in reads)):
+                return None
+            hidden = graphs.run_set(plan.suffixes, plan.segments, [r[0].positions for r in reads], lazy=lazy)
+            if hidden is None:
+                return None
+            head = reads[0][0].head
+            return self.heads[head](hidden) if head is not None else hidden
         if not plan.prefix:   # sequences of their own: flat graphs under block attention (`_alone_items`), else none
             items = self._alone_items(plan, graphs) if hasattr(graphs, "run_flat") else None
             if items is None:
@@ -514,7 +550,7 @@ class Engine:
             head = plan.branch_reads(0)[0].head
             return self.heads[head](hidden) if head is not None else hidden
         blocks = _blocks(plan)
-        if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
+        if blocks and not getattr(graphs, _capability(plan), False):
             return None
         if self._branch_spots(plan) is not None:   # flat graphs only
             item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
@@ -581,7 +617,7 @@ class Engine:
         if not plan.suffixes or not plan.prefix or self._eager(plan):
             return None
         blocks = _blocks(plan)
-        if blocks and not getattr(graphs, "prefix_attention" if plan.attention == "prefix" else "block_attention", False):
+        if blocks and not getattr(graphs, _capability(plan), False):
             return None
         bspots = self._branch_spots(plan)
         if bspots is not None:   # the session cache reads last tokens only
@@ -615,7 +651,7 @@ class Engine:
         """Flat graph items of a plan without a prefix under block attention, one per branch: its whole sequence as the
         prefix, a copy of its last token as the branch, read at the sequence's last token (on graphs with
         `read_spots` or `alone_reads`); None when the plan is not one of those or reads elsewhere."""
-        if plan.prefix or not _blocks(plan) or settings.batch_invariant:
+        if plan.prefix or not _blocks(plan) or plan.attention == "set" or settings.batch_invariant:
             return None
         if not ((getattr(graphs, "read_spots", False) or getattr(graphs, "alone_reads", False))
                 and getattr(graphs, "block_attention", False)):

@@ -226,7 +226,13 @@ class Gemma4(Backbone):
         names = {id(m): n for n, m in model.named_modules()}
         return cls(model, fp8_store=(store, names) if store else None, **options)
 
-    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, fp8_store=None, **_):
+    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, fp8_store=None,
+                 float32_residual: bool = False, graph_step: int = 0, **_):
+        """`float32_residual`: the fused decoder keeps the residual stream in float32 (fused.py). `graph_step`: the
+        request graphs' lengths every `graph_step` tokens up to 1024 (graphs.fine_ladder), each timed as it is
+        captured and a round replayed at the fastest length a little above its own (GemmaGraphs `pick`), for a model
+        whose matrix products cost enough that padding a round to the next length on the default ladder costs more
+        than the launches the graph saves."""
         if quantize is not None and quantize != "fp8":
             raise ValueError(f"gemma4: unknown quantization {quantize!r}")
         if tp is not None and tp[1] > 1:
@@ -242,6 +248,8 @@ class Gemma4(Backbone):
         self.device, self.dtype = p0.device, p0.dtype
         self.logit_softcap = getattr(self.config, "final_logit_softcapping", None)
         self.cuda_graphs = cuda_graphs
+        self.float32_residual = bool(float32_residual)
+        self.graph_step = int(graph_step or 0)
         top = model.config
         self.vlm = model if hasattr(inner, "get_image_features") else None
         self.placeholders = {i for i in (getattr(top, k, None) for k in ("image_token_id", "video_token_id",
@@ -265,7 +273,7 @@ class Gemma4(Backbone):
 
                 if not fp8.supported(self.device):
                     raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
-                self._fused = FusedDecoder(self.lm, store=fp8_store)
+                self._fused = FusedDecoder(self.lm, store=fp8_store, float32_residual=self.float32_residual)
                 fp8_store[0].clear()
             else:
                 self.quantize_fp8()
@@ -279,7 +287,7 @@ class Gemma4(Backbone):
         if self.moe and self.lm.layers[0].mlp.gate_proj.weight.dtype == torch.float32:
             return None
         if self._fused is None or self._fused.dtype != self.lm.layers[0].mlp.gate_proj.weight.dtype:
-            self._fused = FusedDecoder(self.lm)
+            self._fused = FusedDecoder(self.lm, float32_residual=self.float32_residual)
         return self._fused
 
     @torch.no_grad()
@@ -293,7 +301,7 @@ class Gemma4(Backbone):
 
         if not fp8.supported(self.device):
             raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
-        fused = FusedDecoder(self.lm)
+        fused = FusedDecoder(self.lm, float32_residual=self.float32_residual)
         n = quantize_dense(fused.w)
         self._fused = fused
         for layer in self.lm.layers:
@@ -413,9 +421,10 @@ class Gemma4(Backbone):
         if not self.cuda_graphs or self.device.type != "cuda" or self._experts() == "eager":
             return None
         if getattr(self, "_graphs", None) is None:
-            from .graphs import GemmaGraphs
+            from .graphs import LADDER, GemmaGraphs, fine_ladder
 
-            self._graphs = GemmaGraphs(self)
+            self._graphs = (GemmaGraphs(self, ladder=fine_ladder(self.graph_step), pick=1024) if self.graph_step
+                            else GemmaGraphs(self, ladder=LADDER))
         return self._graphs
 
     def output_head(self):
