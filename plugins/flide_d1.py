@@ -1,4 +1,4 @@
-"""d1 family (LiquidAI/d1-3B on LFM2-VL): the release's prompt.py and runner.py.
+"""d1 family (LiquidAI/d1-3B on LFM2-VL, LiquidAI/d1-2B on LFM3-VL): the release's prompt.py and runner.py.
 
 A request is the state then each question in the checkpoint's chat turns, read at the answer slot right after the
 assistant header: `<|startoftext|><|im_start|>user\\n`, the pictures' markup, the state (a string as it is, anything
@@ -8,6 +8,14 @@ question is tokenized whole, as the release reads it in one row. Each option sco
 forms (yes, Yes, YES; a choice's code and the code after a space; a score's digit), and the answer is the softmax over
 the options: a noul's P(yes), a choice's pick, a score's expected level. Pictures are capped at 1024 x 1024 pixels
 (bicubic) and go through the checkpoint's processor, as the release does.
+
+An LFM3 checkpoint (d1-2B) adds what its release does: special tokens' text in the state and the questions is broken by
+a zero-width space after its first character; the reply opens with `<think></think>`; past 26 options a choice is
+coded AA, AB and so on (`d1_codes` 2); every score is divided by `calibration.json`'s temperature before the softmax;
+a score question answers its median level.
+Its attention is "set" (`d1_attention`): up to `d1_set_size` questions packed after the state in one sequence, the
+first tokenized with the state, each further one after `QUESTION:\n`, every one read at its last token. Text only for
+now.
 """
 from __future__ import annotations
 
@@ -23,6 +31,8 @@ from flide.formats import register
 from flide.formats.base import Format, Plan, Read
 
 IM_START, IM_END = "<|im_start|>", "<|im_end|>"
+BREAK = "\u200b"
+LFM3 = ("lfm3", "lfm3_vl")
 YES_FORMS, NO_FORMS = ("yes", "Yes", "YES"), ("no", "No", "NO")
 MAX_PIXELS = 1024 * 1024
 HEAD = "logits"
@@ -42,12 +52,16 @@ def _given(model) -> dict:
     return {k: getattr(model, k) for k in model.model_fields_set} | dict(model.model_extra or {})
 
 
-def option_codes(labels: list) -> list[str]:
+def option_codes(labels: list, scheme: int = 1) -> list[str]:
+    """Native letters when the labels are letters, else A..Z, else 00.. (scheme 1) or A..Z then AA, AB.. (scheme 2)."""
     labs = [str(x).strip() for x in labels]
     if labs and all(len(k) == 1 and k.isalpha() for k in labs):
         return labs
+    letters = [chr(ord("A") + i) for i in range(26)]
     if len(labs) <= 26:
-        return [chr(ord("A") + i) for i in range(len(labs))]
+        return letters[: len(labs)]
+    if scheme == 2:
+        return (letters + [a + b for a in letters for b in letters])[: len(labs)]
     return [f"{i:02d}" for i in range(len(labs))]
 
 
@@ -66,14 +80,15 @@ class _Hidden:
 
 @register("d1")
 class D1(Format):
-    backbones = ("lfm2_vl", "lfm2")
+    backbones = ("lfm2_vl", "lfm2", "lfm3_vl", "lfm3")
     max_choice_options = 255
 
     def __init__(self, model_dir: str, tokenizer=None, max_request_tokens: int = 262144):
         import transformers
 
         self.model_dir = model_dir
-        self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True,
+                                                                                     trust_remote_code=False)
         bos = getattr(self.tokenizer, "bos_token", None)
         self.bos = bos if isinstance(bos, str) else ""
         self.max_request_tokens = int(max_request_tokens)
@@ -81,6 +96,22 @@ class D1(Format):
         self.yes, self.no = self._forms(YES_FORMS), self._forms(NO_FORMS)
         if not self.yes or not self.no:
             raise ValueError("the tokenizer has no single-token yes/no")
+        d = Path(model_dir)
+        raw = json.loads((d / "config.json").read_text())
+        self.lfm3 = raw.get("model_type") in LFM3
+        self.codes = int(raw.get("d1_codes", 1))
+        attention = raw.get("d1_attention", "causal")
+        if attention not in ("causal", "set"):
+            raise ValueError(f"d1: attention {attention!r} is not supported")
+        self.set_size = int(raw.get("d1_set_size", 4)) if attention == "set" else None
+        self.lead = "<think></think>" if self.lfm3 else ""
+        self.temperature = 1.0
+        if (d / "calibration.json").is_file():
+            cal = json.loads((d / "calibration.json").read_text())
+            if cal.get("temperatures"):
+                raise ValueError("d1: calibration temperatures per question kind are not supported yet")
+            self.temperature = float(cal.get("default", 1.0))
+        self._specials = None
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -91,7 +122,7 @@ class D1(Format):
             auto = json.loads((d / "config.json").read_text()).get("auto_map") or {}
         except (OSError, ValueError):
             return False
-        return str(auto.get("AutoModel", "")).startswith("modeling_d1.") and (d / "prompt.py").is_file()
+        return str(auto.get("AutoModel", "")).startswith("modeling_d1") and (d / "prompt.py").is_file()
 
     @property
     def processor(self):
@@ -136,7 +167,7 @@ class D1(Format):
             used.add(i)
             return True
 
-        for code in option_codes(labels):
+        for code in option_codes(labels, self.codes):
             if not take(code) and not any(take(raw) for raw in POOL):
                 raise ValueError(f"no single-token code left for {len(labels)} options")
         return out
@@ -153,6 +184,24 @@ class D1(Format):
         return [[tid] + [i for i in self._forms([f" {code}"]) if i != tid] for code, tid in self.aliases(list(q.criteria))]
 
     # ------------------------------------------------------------------ text
+
+    def plain(self, text: str) -> str:
+        """LFM3's releases: the text with no special token in it once encoded, a zero-width space after the first
+        character of each special token's string (again where a break made a new one); unchanged before LFM3."""
+        if not self.lfm3:
+            return text
+        if self._specials is None:
+            tok = self.tokenizer
+            names = set(getattr(tok, "all_special_tokens", ()))
+            names |= {t.content for t in getattr(tok, "added_tokens_decoder", {}).values() if t.special}
+            names = sorted((n for n in names if len(n) > 1 and BREAK not in n), key=len, reverse=True)
+            self._specials = re.compile("|".join(map(re.escape, names))) if names else False
+        if not self._specials:
+            return text
+        n = 1
+        while n:
+            text, n = self._specials.subn(lambda m: m[0][0] + BREAK + m[0][1:], text)
+        return text
 
     def state_block(self, state) -> str:
         if isinstance(state, str):
@@ -176,11 +225,11 @@ class D1(Format):
         return f"{instructions}\n\n{legend}\n\nReply with a single digit 0-{len(q.criteria) - 1} only."
 
     def prefix_text(self, state, images: str = "") -> str:
-        body = "" if state is None else f"{self.state_block(state)}\nQUESTION:\n"
+        body = "" if state is None else f"{self.plain(self.state_block(state))}\nQUESTION:\n"
         return f"{self.bos}{IM_START}user\n{images}{body}"
 
     def suffix_text(self, q) -> str:
-        return f"{self.question_block(q)}{IM_END}\n{IM_START}assistant\n"
+        return f"{self.plain(self.question_block(q))}{IM_END}\n{IM_START}assistant\n{self.lead}"
 
     def image_markup(self, n: int) -> str:
         msgs = [{"role": "user", "content": [*([{"type": "image"}] * n), {"type": "text", "text": "\x00"}]}]
@@ -211,6 +260,27 @@ class D1(Format):
         suffixes = [self.suffix_text(q) for _, q in qs]
         enc = lambda s: self.tokenizer.encode(s, add_special_tokens=False)
         vision = None
+        if self.set_size:   # "set": the state and up to set_size questions one sequence, every one read at its end
+            if refs:
+                raise ValueError("d1: images on LFM3 checkpoints are not supported yet")
+            head = self.prefix_text(state)
+            seqs, segments, reads = [], [], []
+            for k in range(0, len(qs), self.set_size):
+                group = suffixes[k: k + self.set_size]
+                ids = enc(head + group[0])
+                state_end = len(ids) - len(enc(group[0]))
+                ends = [len(ids)]
+                for sfx in group[1:]:
+                    ids = ids + enc("QUESTION:\n" + sfx)
+                    ends.append(len(ids))
+                seqs.append(ids)
+                segments.append((state_end, *ends))
+                reads.append((Read(HEAD, positions=tuple(e - 1 for e in ends)),))
+            total = sum(len(x) for x in seqs)
+            if total > self.max_request_tokens:
+                raise ValueError(f"request is {total} tokens, limit is {self.max_request_tokens}")
+            data = [(name, q.type, groups[k]) for k, (name, q) in enumerate(qs)]
+            return Plan([], seqs, reads, data, attention="set", segments=segments)
         if not refs:
             prefix = enc(self.prefix_text(state))
             if len(qs) == 1:   # the release reads a lone question as one row, tokenized whole
@@ -262,12 +332,17 @@ class D1(Format):
 
         flat = sorted({i for _, _, gs in plan.data for g in gs for i in g})
         at = {t: k for k, t in enumerate(flat)}
-        h = torch.stack([out[0][0] for out in outputs]).float()
+        if plan.attention == "set":   # every sequence's read rows, in question order
+            h = torch.cat([out[0] for out in outputs]).float()
+        else:
+            h = torch.stack([out[0][0] for out in outputs]).float()
         w = self._head.weight.index_select(0, torch.tensor(flat, device=h.device)).float()
         picked = (h @ w.T).tolist()
         answers = {}
         for (name, kind, gs), logits in zip(plan.data, picked):
             scores = [max(logits[at[i]] for i in g) for g in gs]
+            if self.temperature != 1.0:
+                scores = [x / self.temperature for x in scores]
             m = max(scores)
             w = [math.exp(s - m) for s in scores]
             z = sum(w)
@@ -277,6 +352,14 @@ class D1(Format):
                 answers[name] = make_noul(probs[0])
             elif kind == "choice":
                 answers[name] = make_choice([str(k) for k in q.criteria], probs)
+            elif self.lfm3:   # its release answers a score's median level: the first whose cumulative probability is 1/2
+                mass, level = 0.0, len(probs) - 1
+                for i, x in enumerate(probs):
+                    mass += x
+                    if mass >= 0.5:
+                        level = i
+                        break
+                answers[name] = make_score(list(q.criteria), probs).model_copy(update={"score": float(level)})
             else:
                 answers[name] = make_score(list(q.criteria), probs)
         usage = Usage(input_tokens=plan.tokens, output_tokens=0)
