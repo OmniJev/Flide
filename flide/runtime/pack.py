@@ -49,6 +49,7 @@ class Job:
     marks: tuple[int, ...] = ()    # prefix positions to save the state at (the end of a level)
     blocks: bool = False           # full attention block-bidirectional (Plan.attention "blocks")
     prefix_two_way: bool = False   # the prefix alone read both ways, the branches one way (Plan.attention "prefix")
+    segments: tuple[int, ...] = ()  # the prefix as a state then questions (Plan.attention "set"): their ends
 
     @property
     def tokens(self) -> int:
@@ -82,6 +83,7 @@ class PackedBatch:
     n_jobs: int
     n_branches: int
     key_ranges: "torch.Tensor | None" = None  # [T, 4] int32 per query: lo, hi in the prefix part; lo, hi in the branch part
+    set_ranges: "torch.Tensor | None" = None  # [T, 4] int32: key_ranges with "set" jobs' prefixes read state and question
     embeds: "torch.Tensor | None" = None   # [T, hidden] in stream order, when the family supplies embeddings
     pos3: "torch.Tensor | None" = None     # [3, T] M-RoPE positions; None: all three equal `positions`
     vision: list = field(default_factory=list)  # vision inputs of the jobs that have media, in job order
@@ -114,8 +116,11 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
             raise ValueError(f"job {j}: resume start {job.start} needs a saved state and must be inside its {P} prefix tokens")
         if (job.start or job.marks) and (job.positions is not None or job.offset or job.vision is not None):
             raise ValueError(f"job {j}: sessions take text-only prefixes")
-        if (job.blocks or job.prefix_two_way) and (job.start or job.marks):
+        if (job.blocks or job.prefix_two_way or job.segments) and (job.start or job.marks):
             raise ValueError(f"job {j}: block attention takes no session states")
+        if job.segments and (job.blocks or job.prefix_two_way or job.segments[-1] != P
+                             or any(a >= b for a, b in zip((0,) + tuple(job.segments), job.segments))):
+            raise ValueError(f"job {j}: set segments {job.segments} must rise to its {P} prefix tokens, causal otherwise")
         bounds.append([job.start] + sorted({m for m in job.marks if job.start < m < P}) + [P])
     split = any(len(b) > 2 or b[0] > 0 for b in bounds)
     ctx_start, at = [], 0
@@ -215,6 +220,20 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
     def arr(x, dtype=np.int64):
         return torch.from_numpy(np.ascontiguousarray(x, dtype=dtype)).to(device)
 
+    set_ranges = None
+    if any(job.segments for job in jobs):   # "set": a state token sees the whole prefix, a question's the state and itself
+        if split:
+            raise ValueError("set attention takes no session states in its micro-batch")
+        set_ranges = ranges.copy()
+        for j, job in enumerate(jobs):
+            if not job.segments:
+                continue
+            lo = segs[j][0][2]
+            S, P = job.segments[0], len(job.prefix)
+            set_ranges[lo: lo + S] = (lo, lo + P, 0, 0)
+            for a, e in zip(job.segments, job.segments[1:]):
+                set_ranges[lo + a: lo + e] = (lo, lo + S, lo + a, lo + e)
+
     pos3 = None
     if any(j.positions is not None or j.offset for j in jobs):
         cols = []
@@ -250,6 +269,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
                        branch_job=t(branch_job), reads={k: t(v) for k, v in gather.items()},
                        groups=list(groups.values()), n_prefix_tokens=n_prefix, n_jobs=len(jobs), n_branches=b,
                        key_ranges=arr(ranges, np.int32), pos3=pos3,
+                       set_ranges=None if set_ranges is None else arr(set_ranges, np.int32),
                        vision=[j.vision for j in jobs if j.vision is not None], levels=levels, ctx=ctx,
                        resumes=[(j, job.resume, job.start) for j, job in enumerate(jobs) if job.start],
                        marks={j: tuple(bounds[j][1:-1]) for j in range(len(jobs)) if len(bounds[j]) > 2},
