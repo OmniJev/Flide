@@ -149,9 +149,17 @@ class Qwen35(Backbone):
             arch, cfg = getattr(transformers, f"{pre}ForCausalLM"), config.get_text_config()
             key_map, skip = [(r"^model\.language_model\.", "model.")], ("model.visual.", "mtp.")
         model = None
-        lean_fp8 = quantize == "fp8" and tp is None and not moe   # experts are read in 16 bits, then quantized
+        quant_config = getattr(config, "quantization_config", None) or {}
+        checkpoint_fp8 = quant_config.get("quant_method") == "fp8"
+        native_moe_fp8 = moe and checkpoint_fp8 and quantize == "fp8" and tp is None
+        if native_moe_fp8 and quant_config.get("weight_block_size"):
+            raise NotImplementedError("Qwen3.5 MoE: prequantized block FP8 is not supported; use tensor/row scales")
+        lean_fp8 = quantize == "fp8" and tp is None and (not moe or native_moe_fp8)
         store = {} if lean_fp8 else None
-        lean = _fp8_target if lean_fp8 else None
+        if lean_fp8 and moe:
+            lean = lambda name: name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
+        else:
+            lean = _fp8_target if lean_fp8 else None
         if loader == "none":
             from ..load import blank, build
 
@@ -164,6 +172,8 @@ class Qwen35(Backbone):
                 model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
                 load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store, merge=merge_lora)
             except (ValueError, FileNotFoundError) as exc:
+                if native_moe_fp8:
+                    raise RuntimeError(f"FP8 MoE direct load failed: {exc}") from exc
                 import logging
 
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
@@ -442,6 +452,11 @@ class Qwen35(Backbone):
 
         for i, layer in enumerate(self.layers):
             w, mlp = self._w[i], layer.mlp
+            if "experts" in w:
+                prefix = names[id(mlp.experts)]
+                for key, parameter in (("experts", "gate_up_proj"), ("experts_down", "down_proj")):
+                    w[key], w[key + "_scale"] = store.pop(prefix + "." + parameter)
+                continue
             w["gate_up"] = joined([mlp.gate_proj, mlp.up_proj])
             w["down"] = joined([mlp.down_proj])
             if self.layer_types[i] == "linear_attention":

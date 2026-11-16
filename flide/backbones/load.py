@@ -7,6 +7,9 @@ two copies. `key_map` rewrites checkpoint names that differ from the module name
 vision checkpoint). Checkpoint tensors with no home are skipped and reported; module tensors the checkpoint does not
 fill raise, except output heads tied to the embedding.
 
+Split MoE projections are placed in the matching expert and gate/up slice. FP8 expert bytes are kept
+as stored, with scalar scales expanded to output rows; every expert projection must be present.
+
 FP8: the weights `lean(name)` picks are never allocated in 16 bits (they stay on the meta device, shape only); each is
 read into `fp8` as (float8 weight, per-row scale), quantized on the device as it is read, or taken as stored when
 the checkpoint already holds it in float8 with a `weight_scale` (compressed-tensors). Device memory
@@ -119,7 +122,8 @@ def blank(model, device=None, lean=None, fp8: dict | None = None) -> None:
         if lean is not None and lean(name):
             from ..kernels.fp8 import FP8
 
-            fp8[name] = (torch.zeros(p.shape, dtype=FP8, device=device), torch.ones(p.shape[0], 1, device=device))
+            scales = p.shape[:2] if p.ndim == 3 else (p.shape[0], 1)
+            fp8[name] = (torch.zeros(p.shape, dtype=FP8, device=device), torch.ones(scales, device=device))
         else:
             p.zero_()
     _init_buffers(model)
@@ -143,52 +147,183 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
     return out
 
 
+def _expert_slice(name, targets):
+    match = re.fullmatch(r"(.*\.experts)\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight", name)
+    if match is None:
+        return None
+    prefix, index, projection = match.groups()
+    index = int(index)
+    fused = prefix + (".down_proj" if projection == "down_proj" else ".gate_up_proj")
+    target = targets.get(fused)
+    if target is None:
+        return None
+    if target.ndim != 3 or not 0 <= index < target.shape[0]:
+        raise ValueError(f"{name}: invalid expert index or fused shape {tuple(target.shape)}")
+    rows = slice(None)
+    if projection != "down_proj":
+        if target.shape[1] % 2:
+            raise ValueError(f"{fused}: gate/up rows must divide evenly")
+        half = target.shape[1] // 2
+        rows = slice(0, half) if projection == "gate_proj" else slice(half, None)
+    return fused, (index, projection), rows, target[index, rows]
+
+
+class FP8CheckpointError(RuntimeError):
+    """A recognized FP8 tensor cannot be interpreted safely by this loader."""
+
+
+def _check_fp8_dtype(src, key):
+    if str(src.dtype).startswith("torch.float8") and src.dtype != torch.float8_e4m3fn:
+        raise FP8CheckpointError(f"{key}: unsupported FP8 dtype {src.dtype}; expected float8_e4m3fn")
+
+
+def _row_scales(weight, scale, key):
+    """Normalize tensor/expert/row scales without changing the FP8 values."""
+    scale = scale.float()
+    if weight.ndim == 2:
+        n = weight.shape[0]
+        if scale.numel() == 1:
+            return scale.reshape(1, 1).expand(n, 1).contiguous()
+        if tuple(scale.shape) in ((n,), (n, 1), (1, n)):
+            return scale.reshape(n, 1).contiguous()
+    elif weight.ndim == 3:
+        e, n, _ = weight.shape
+        if scale.numel() == 1:
+            return scale.reshape(1, 1).expand(e, n).contiguous()
+        if tuple(scale.shape) in ((e, n), (e, n, 1)):
+            return scale.reshape(e, n).contiguous()
+        if tuple(scale.shape) in ((e,), (e, 1), (e, 1, 1)):
+            return scale.reshape(e, 1).expand(e, n).contiguous()
+        if key.endswith(".gate_up_proj") and n % 2 == 0 and tuple(scale.shape) == (e, 2):
+            return scale.repeat_interleave(n // 2, dim=1).contiguous()
+    raise FP8CheckpointError(
+        f"{key}: unsupported FP8 scale shape {tuple(scale.shape)} for weight {tuple(weight.shape)}; "
+        "only scalar, per-expert, or per-output-row scales are supported (not block scales)")
+
+
+def _read_fp8(f, key, src, paths, device, current_keys):
+    from safetensors import safe_open
+
+    scale_key = key + "_scale"
+    if scale_key not in paths:
+        raise FP8CheckpointError(f"{key}: missing {scale_key}; block/inverse-scale formats are not supported")
+    if scale_key in current_keys:
+        scale = f.get_tensor(scale_key)
+    else:
+        with safe_open(str(paths[scale_key]), framework="pt", device=str(device)) as other:
+            scale = other.get_tensor(scale_key)
+    return src, _row_scales(src, scale, key)
+
+
+def _quantize_weight(src):
+    if src.ndim == 3:
+        from ..kernels.moe import quantize_experts
+
+        return quantize_experts(src)
+    from ..kernels.fp8 import quantize_rows
+
+    return quantize_rows(src)
+
+
+def _load_expert_fp8(f, key, name, part, rows, target, shape, store, paths, device, current_keys):
+    from ..kernels.fp8 import FP8
+
+    src = f.get_tensor(key)
+    _check_fp8_dtype(src, key)
+    if tuple(src.shape) != tuple(target.shape):
+        raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(target.shape)}")
+    if src.dtype == FP8:
+        q, scale = _read_fp8(f, key, src, paths, device, current_keys)
+    else:
+        q, scale = _quantize_weight(src.to(target.dtype))
+    if name not in store:
+        store[name] = (torch.empty(shape, device=src.device, dtype=FP8),
+                       torch.empty(shape[:2], device=src.device, dtype=torch.float32))
+    weights, scales = store[name]
+    weights[part[0], rows].copy_(q)
+    scales[part[0], rows].copy_(scale[:, 0])
+    return src.numel() * src.element_size()
+
+
 def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter) -> dict:
     from safetensors import safe_open
 
     t0 = time.perf_counter()
     if lean is not None:
-        from ..kernels.fp8 import FP8, quantize_rows
+        from ..kernels.fp8 import FP8
     targets = model.state_dict(keep_vars=True)
     rules = [(re.compile(a), b) for a, b in (key_map or [])]
     filled, unused, nbytes = set(), [], 0
-    for path in checkpoint_files(model_dir):
+    expert_parts = {}
+    files = checkpoint_files(model_dir)
+    paths = {}
+    for path in files:
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            for key in f.keys():
+                if key in paths:
+                    raise ValueError(f"duplicate checkpoint tensor: {key}")
+                paths[key] = path
+    for path in files:
         with safe_open(str(path), framework="pt", device=str(device)) as f:
+            current_keys = set(f.keys())
             for key in f.keys():
                 name = key
                 for rx, rep in rules:
                     name = rx.sub(rep, name)
-                if name.startswith(skip) or key.endswith(".weight_scale"):
+                if name.startswith(skip) or (name not in targets and key.endswith("_scale") and key[:-6] in paths):
                     continue
                 t = targets.get(name)
+                expert = _expert_slice(name, targets) if t is None else None
+                if expert is not None:
+                    name, part, rows, t = expert
+                    parts = expert_parts.setdefault(name, set())
+                    if part in parts:
+                        raise ValueError(f"duplicate expert projection: {key}")
+                    parts.add(part)
                 if t is None:
                     unused.append(key)
                     continue
+                if expert is not None and lean is not None and lean(name):
+                    if adapter is not None:
+                        raise ValueError("split FP8 experts with LoRA are not supported")
+                    nbytes += _load_expert_fp8(f, key, name, part, rows, t, targets[name].shape, fp8,
+                                              paths, device, current_keys)
+                    continue
                 if lean is not None and lean(name):
                     src = f.get_tensor(key)
+                    _check_fp8_dtype(src, key)
                     if tuple(src.shape) != tuple(t.shape):
                         raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(t.shape)}")
                     if adapter is not None and src.dtype != FP8:
                         src = adapter.apply(key, src)
                     if src.dtype == FP8:
-                        fp8[name] = (src, f.get_tensor(key + "_scale").float().reshape(-1, 1))
+                        fp8[name] = _read_fp8(f, key, src, paths, device, current_keys)
                     else:
-                        fp8[name] = quantize_rows(src.to(t.dtype))
+                        fp8[name] = _quantize_weight(src.to(t.dtype))
                     nbytes += src.numel() * src.element_size()
                     filled.add(name)
                     continue
                 src = f.get_tensor(key)
+                _check_fp8_dtype(src, key)
                 if src.dtype == torch.float8_e4m3fn:
                     if lean is None:
                         raise ValueError(f"{key} is stored in float8; load this checkpoint with FP8 (--quantize fp8)")
-                    src = (src.float() * f.get_tensor(key + "_scale").float().reshape(-1, 1)).to(t.dtype)
+                    _, scale = _read_fp8(f, key, src, paths, device, current_keys)
+                    src = (src.float() * (scale.unsqueeze(-1) if src.ndim == 3 else scale)).to(t.dtype)
                 if adapter is not None:
                     src = adapter.apply(key, src)
                 if tuple(src.shape) != tuple(t.shape):
                     raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(t.shape)}")
                 t.data.copy_(src)
                 nbytes += src.numel() * src.element_size()
-                filled.add(name)
+                if expert is None:
+                    filled.add(name)
+    for name, parts in expert_parts.items():
+        projections = ("down_proj",) if name.endswith(".down_proj") else ("gate_proj", "up_proj")
+        expected = {(i, p) for i in range(targets[name].shape[0]) for p in projections}
+        if parts != expected:
+            raise ValueError(f"{name}: missing expert projections {sorted(expected - parts)[:5]}")
+        filled.add(name)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
     head = model.get_output_embeddings() if adapter is not None and adapter.embedding is not None else None
