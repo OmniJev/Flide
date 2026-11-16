@@ -401,6 +401,30 @@ def warm_blocks(eng) -> None:
         eng.forward([p], mode="alone")
 
 
+def warm_requests(eng) -> None:
+    """A few requests through the checkpoint's own family (its plans: forks, whole blocks, sets), whole and in rounds on
+    every path a served round takes, at token counts of both parities, so a family's own attention layouts and the
+    lengths its plans reach go into the bundle as well as the engine's causal warm-up. Requests the family turns down
+    are skipped."""
+    from ..api.schema import SystemOneRequest
+
+    choice = {"type": "choice", "instructions": "Pick one.", "criteria": {"a": "first", "b": "second", "c": "third"}}
+    asks = [{"q": choice}, {"q": choice, "n": {"type": "noul", "instructions": "Is it so?"},
+                            "s": {"type": "score", "instructions": "How much?", "criteria": ["none", "some", "much"]}}]
+    plans = []
+    for words in (61, 250, 1200):
+        for questions in asks:
+            try:
+                req = SystemOneRequest.model_validate({"state": "word " * words, "questions": questions})
+                eng.decide(req)
+                plans.append(eng.format.plan(req))
+            except ValueError:
+                continue
+    if plans:
+        for mode in ("batch", "graphs", "packed"):
+            eng.forward(plans, mode=mode)
+
+
 def export(args) -> None:
     """Warm each model in a fresh cache directory and pack every kernel that ran."""
     tmp = tempfile.mkdtemp(prefix="flide-kernels-")
@@ -427,6 +451,7 @@ def export(args) -> None:
         eng = Engine(model, format=args.format, device=args.device, dtype=args.dtype, capture=True,
                      session_cache_gb=1.0 if args.sessions else 0.0, backbone_options=opts)
         warm_blocks(eng)
+        warm_requests(eng)
         log.info("%s warm in %.1fs, %d kernels so far", model, time.perf_counter() - t0, len(rec.seen))
         del eng
         gc.collect()
