@@ -116,8 +116,20 @@ class SessionCache:
         return m if start < m < n_prefix else None
 
     def marks(self, n_prefix: int, start: int = 0) -> tuple[int, ...]:
+        """The last stride mark and the one before it. The last is where a request that only extends this prefix
+        resumes from; the earlier one is what a request that shares the prefix but diverges before the last mark
+        still matches -- a shared preamble with a different tail, which otherwise hits nothing and recomputes the
+        whole trunk. Both are stride multiples, so the graph path's ladder could carry them too."""
+        if n_prefix < self.min_tokens:
+            return ()
         m = self.mark(n_prefix, start)
-        return () if m is None else (m,)
+        if m is None:
+            return ()
+        out = [m]
+        previous = m - self.stride
+        if previous > start:
+            out.insert(0, previous)
+        return tuple(out)
 
     def match(self, tokens) -> tuple[Entry | None, int]:
         """The entry and position to resume `tokens` (a prefix) from: the furthest saved position, at most one
