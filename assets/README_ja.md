@@ -29,12 +29,13 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
 - 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
 - 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。
-- 🔥 **2026-11-11** Flide 0.1.13 で [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3)、[JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) に対応し、RTX 40 シリーズ向けのコンパイル済みカーネルを同梱しました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-11** Flide 0.1.13 で [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3)、[JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) に対応し、RTX 40 シリーズ向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.12 で [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max)、[clef-flash](https://huggingface.co/Cloudflare/clef-flash) に対応し、RTX 50 シリーズと RTX PRO 6000 向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.11 で[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)を追加しました。H200 1 枚で 1 万通のメールそれぞれの 8 つの質問に 28 秒で答えます。
 - 🔥 **2026-11-09** Flide 0.1.10 で [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision)、[KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) に対応し、KnowLine ファミリーが画像を読めるようになりました。
@@ -106,7 +107,8 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | テキスト | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | 1.7× | 1.4× | 1.1× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | ~1.7× | ~1.3× | ~1.1× |
+| [d3](https://huggingface.co/vllm-sr/d3-turbo) | テキスト、画像 | ~5.1× | ~1.6× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト、画像 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | テキスト | 1.1× | 2.0× | 2.8× |
@@ -118,6 +120,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | テキスト | 3.1× | 2.6× | 1.9× |
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | テキスト、画像 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | ~1.9× | ~5.9× | 1.8× |
+| [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | テキスト | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト、画像 | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
@@ -134,6 +137,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | テキスト | 3.3× | 11.9× | 3.0× |
+| [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | テキスト | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.4× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | テキスト | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | テキスト、画像、動画 | 2.5× | 6.2× | 2.8× |

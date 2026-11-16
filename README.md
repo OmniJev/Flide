@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
 - 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
 - 🔥 **2026-11-12** We added [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) and [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) in Flide 0.1.14, and GLiDE-27B also reads images.
-- 🔥 **2026-11-11** We added [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) and [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) in Flide 0.1.13, and precompiled kernels for RTX 40 series GPUs.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-11** We added [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) and [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) in Flide 0.1.13, and precompiled kernels for RTX 40 series GPUs.
 - 🔥 **2026-11-10** We added [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) and [clef-flash](https://huggingface.co/Cloudflare/clef-flash) in Flide 0.1.12, and precompiled kernels for RTX 50 series and RTX PRO 6000 GPUs.
 - 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
 - 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
@@ -106,7 +107,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | text | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | 1.7× | 1.4× | 1.1× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | ~1.7× | ~1.3× | ~1.1× |
+| [d3](https://huggingface.co/vllm-sr/d3-turbo) | text, images | ~5.1× | ~1.6× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | text | 1.1× | 2.0× | 2.8× |
@@ -118,6 +120,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | text | 3.1× | 2.6× | 1.9× |
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | text, images | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | text | ~1.9× | ~5.9× | 1.8× |
+| [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | text | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
@@ -134,6 +137,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | text | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | text | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | text | 3.3× | 11.9× | 3.0× |
+| [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | text | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | text, images | 1.6× | 8.4× | 1.4× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |

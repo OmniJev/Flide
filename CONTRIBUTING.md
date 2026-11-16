@@ -7,8 +7,7 @@ Thank you for helping. Please read this page before you open a pull request.
 Accepted pull requests are merged by the maintainers and shipped in the next release. Maintainers review pull requests
 in batches before each release, so a reply can take a few days.
 
-Our review time is limited, so to keep the code quality high, please keep one pull request open at a time.
-Maintainers may close those that do not fit our plans.
+Maintainers may close pull requests that do not fit our plans.
 
 ## Open an issue first
 

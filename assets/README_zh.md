@@ -29,12 +29,13 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
 - 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
 - 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。
-- 🔥 **2026-11-11** Flide 0.1.13 新增 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) 和 [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)，并为 RTX 40 系显卡提供预编译内核。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-11** Flide 0.1.13 新增 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) 和 [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)，并为 RTX 40 系显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.12 新增 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) 和 [clef-flash](https://huggingface.co/Cloudflare/clef-flash)，并为 RTX 50 系和 RTX PRO 6000 显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.11 新增[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)，在一张 H200 上 28 秒给 1 万封邮件各回答 8 个问题。
 - 🔥 **2026-11-09** Flide 0.1.10 支持 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) 和 [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)，KnowLine 系列也能读图片了。
@@ -106,7 +107,8 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 文本 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | 1.7× | 1.4× | 1.1× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | ~1.7× | ~1.3× | ~1.1× |
+| [d3](https://huggingface.co/vllm-sr/d3-turbo) | 文本、图片 | ~5.1× | ~1.6× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 文本 | 1.1× | 2.0× | 2.8× |
@@ -118,6 +120,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Jeffan](https://huggingface.co/collections/tattrongvu/decision-model-6ad5c85a79bd246cc1c18c4a) | 文本 | 3.1× | 2.6× | 1.9× |
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 文本、图片 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | ~1.9× | ~5.9× | 1.8× |
+| [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | 文本 | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
@@ -134,6 +137,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 文本 | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 文本 | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | 文本 | 3.3× | 11.9× | 3.0× |
+| [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | 文本 | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.4× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | 文本 | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | 文本、图片、视频 | 2.5× | 6.2× | 2.8× |
