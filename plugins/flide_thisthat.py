@@ -27,7 +27,7 @@ from flide.formats.next_token import TokenRows
 LETTERS = "ABCDEFGHIJ"          # options past these need the two-letter labels
 MAX_OPTIONS = 255
 DEFAULT_MAX_STATE_TOKENS = 1536
-DEFAULT_TEMPERATURE = 1.99241824
+DEFAULT_TEMPERATURE = 1.0
 READ_HEAD = "slots"
 
 
@@ -105,7 +105,7 @@ def typed(name: str, q) -> tuple[str, list[str], list[str], str]:
         return text, ["no", "yes"], ["no", "yes"], "noul"
     if q.type == "choice":
         labels = [str(k) for k in criteria]
-        text = _legend([(str(k), str(v)) for k, v in criteria.items()], instructions + "\n\nOptions:")
+        text = _legend([(str(k), v) for k, v in criteria.items()], instructions + "\n\nOptions:")
         return text, labels, list(labels), "choice"
     if q.type == "score":
         labels = [str(i) for i in range(len(criteria))]
