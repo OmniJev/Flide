@@ -51,7 +51,8 @@ from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
 from ..base import capture_progress
-from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import (add_rms, ffn, final_norm, gated_rms, gated_rms_segments,
+                  last_qkv, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
 log = logging.getLogger("flide.graphs")
@@ -586,8 +587,8 @@ class RequestGraphs:
         self.S[i].copy_(S)
         for c, t in zip(self.conv[i], conv):
             c.copy_(t)
-        o = outs[0] if len(outs) == 1 else torch.cat(outs, 1)
-        y = gated_rms(o.reshape(T, nv, m.head_v_dim), z, m.norm.weight, m.norm.variance_epsilon)
+        y = gated_rms_segments([o.reshape(-1, nv, m.head_v_dim) for o in outs], z,
+                               m.norm.weight, m.norm.variance_epsilon)
         return mm(y, w["out"])
 
     def _mlp(self, i, layer, w, h, d, step=None):

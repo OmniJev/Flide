@@ -76,6 +76,10 @@ def gated_rms(o, z, w, eps: float):
     return pw.gated_rms(o, z, w, eps)
 
 
+def gated_rms_segments(parts, z, w, eps: float):
+    return pw.gated_rms_segments(parts, z, w, eps)
+
+
 def qk_norm_rope(q, k, cos, sin, wq, wk, eps: float):
     return pw.qk_norm_rope(q, k, cos, sin, wq, wk, eps)
 

@@ -32,7 +32,8 @@ from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm, mm_into
-from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import (add_rms, ffn, final_norm, gated_rms, gated_rms_segments,
+                  last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
 
@@ -658,7 +659,6 @@ class Qwen35(Backbone):
                 rec["S"][i] = S[j].clone()
                 rec["conv"][i] = [c[j].clone() for c in conv]
             outs.append(o)
-        op = torch.cat(outs, 1) if len(outs) > 1 else outs[0]
         bj = b.branch_job
         ys = []
         for part, (plo, phi, heads, dim) in enumerate(spec):
@@ -671,7 +671,8 @@ class Qwen35(Backbone):
                                         initial_state=S.index_select(0, bj), output_final_state=False,
                                         cu_seqlens=b.cu_suffix, cu_seqlens_cpu=b.cu_suffix_cpu, **gate)
         out = torch.empty(T, w["out"].shape[0], device=x.device, dtype=x.dtype)
-        mm_into(gated_rms(op[0], z[:Tp], m.norm.weight, m.norm.variance_epsilon), w["out"], out[:Tp])
+        mm_into(gated_rms_segments([o[0] for o in outs], z[:Tp], m.norm.weight, m.norm.variance_epsilon),
+                w["out"], out[:Tp])
         mm_into(gated_rms(os_[0], z[Tp:], m.norm.weight, m.norm.variance_epsilon), w["out"], out[Tp:])
         return out
 

@@ -70,9 +70,7 @@ def swiglu(gu, n: int):
 
 
 @triton.jit
-def _gated_rms_kernel(O, Z, W, OUT, T, DV, so_t, so_h, sz_t, sout_t, eps, BT: tl.constexpr, BLOCK: tl.constexpr):
-    t = tl.program_id(0) * BT + tl.arange(0, BT)
-    h = tl.program_id(1)
+def _gated_rms_rows(O, Z, W, OUT, t, h, T, DV, so_t, so_h, sz_t, sout_t, eps, BLOCK: tl.constexpr):
     cols = tl.arange(0, BLOCK)
     mc = cols < DV
     m = (t < T)[:, None] & mc[None, :]
@@ -85,15 +83,76 @@ def _gated_rms_kernel(O, Z, W, OUT, T, DV, so_t, so_h, sz_t, sout_t, eps, BT: tl
     tl.store(OUT + t[:, None] * sout_t + h * DV + cols[None, :], out.to(OUT.dtype.element_ty), mask=m)
 
 
-def gated_rms(o, z, w, eps: float):
+@triton.jit
+def _gated_rms_kernel(O, Z, W, OUT, T, DV, so_t, so_h, sz_t, sout_t, eps, BT: tl.constexpr, BLOCK: tl.constexpr):
+    t = tl.program_id(0) * BT + tl.arange(0, BT)
+    _gated_rms_rows(O, Z, W, OUT, t, tl.program_id(1), T, DV, so_t, so_h, sz_t, sout_t, eps, BLOCK)
+
+
+@triton.jit
+def _gated_rms_segments_kernel(PARTS, LENGTHS, STRIDE_T, STRIDE_H, Z, W, OUT, DV, sz_t, sout_t, eps,
+                               BT: tl.constexpr, BLOCK: tl.constexpr):
+    # Each block belongs to one segment; partial blocks never cross a segment boundary.
+    # Select only pointers/metadata here, then share the ordinary norm arithmetic below.
+    pid = tl.program_id(0)
+    p, nt, st, sh = PARTS[0], LENGTHS[0], STRIDE_T[0], STRIDE_H[0]
+    block_start, row_start, selected_block, selected_row = 0, 0, 0, 0
+    for i in tl.static_range(len(PARTS)):
+        count = tl.cdiv(LENGTHS[i], BT)
+        take = (pid >= block_start) & (pid < block_start + count)
+        p = tl.where(take, PARTS[i], p)
+        nt = tl.where(take, LENGTHS[i], nt)
+        st = tl.where(take, STRIDE_T[i], st)
+        sh = tl.where(take, STRIDE_H[i], sh)
+        selected_block = tl.where(take, block_start, selected_block)
+        selected_row = tl.where(take, row_start, selected_row)
+        block_start += count
+        row_start += LENGTHS[i]
+    t = (pid - selected_block) * BT + tl.arange(0, BT)
+    _gated_rms_rows(p, Z + selected_row * sz_t, W, OUT + selected_row * sout_t, t, tl.program_id(1),
+                    nt, DV, st, sh, sz_t, sout_t, eps, BLOCK)
+
+
+def gated_rms(o, z, w, eps: float, out=None):
     """fla output o [t, heads, dv] and the gate z [t, heads * dv] (row-strided) -> [t, heads * dv]:
     RMSNorm over dv with weight w, times silu(z)."""
     T, H, DV = o.shape
-    out = torch.empty(T, H * DV, device=o.device, dtype=o.dtype)
+    if out is None:
+        out = torch.empty(T, H * DV, device=o.device, dtype=o.dtype)
     if T:
         BT = max(1, 2048 // _p2(DV))
         _gated_rms_kernel[(triton.cdiv(T, BT), H)](o, z, w, out, T, DV, o.stride(0), o.stride(1), z.stride(0),
                                                    out.stride(0), eps, BT=BT, BLOCK=_p2(DV), num_warps=4)
+    return out
+
+
+def gated_rms_segments(parts, z, w, eps: float):
+    """Normalize consecutive [t, heads, dv] segments in one launch, without concatenation.
+
+    Segment pointers, lengths and strides are kernel arguments: no metadata tensor or
+    device-to-host readback is needed. The output remains contiguous for the downstream
+    GEMM, and the kernel shares the ordinary gated RMSNorm reduction and rounding.
+    """
+    parts = tuple(parts)
+    if not parts:
+        raise ValueError("gated_rms_segments requires at least one segment")
+    H, DV = parts[0].shape[1:]
+    T = sum(p.shape[0] for p in parts)
+    if z.shape != (T, H * DV) or any(
+        p.ndim != 3 or p.shape[1:] != (H, DV) or p.dtype != parts[0].dtype
+        or p.device != parts[0].device for p in parts
+    ):
+        raise ValueError("gated_rms_segments requires matching heads, dimensions, dtype and device")
+    if len(parts) == 1:
+        return gated_rms(parts[0], z, w, eps)
+    out = torch.empty(T, H * DV, device=parts[0].device, dtype=parts[0].dtype)
+    if T:
+        BT = max(1, 2048 // _p2(DV))
+        lengths = tuple(p.shape[0] for p in parts)
+        blocks = sum(triton.cdiv(n, BT) for n in lengths)
+        _gated_rms_segments_kernel[(blocks, H)](
+            parts, lengths, tuple(p.stride(0) for p in parts), tuple(p.stride(1) for p in parts),
+            z, w, out, DV, z.stride(0), out.stride(0), eps, BT=BT, BLOCK=_p2(DV), num_warps=4)
     return out
 
 
