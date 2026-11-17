@@ -94,3 +94,39 @@ strided dual-source KV, empty visibility, CUDA Graph replay and pure causal inpu
 Small inputs are also checked against an independent dense float64 reference.
 New head dimensions have kernel-level qualification; full-model qualification
 must still be performed for the intended model.
+
+## Optional SwiGLU FP8 fusion
+
+CuTe fusion of expert SwiGLU and dynamic per-token FP8 quantization is selected
+automatically when supported. No environment variable is required.
+`FLIDE_FP8_FUSION=auto|off|swiglu` optionally overrides this behavior: `auto` is
+the default, `off` disables fusion, and `swiglu` explicitly requires its optional
+dependencies for compatible inputs. Set overrides before model loading and graph
+capture. RMSNorm is unchanged.
+
+The FP8 expert down projection consumes the produced FP8 data and row scales
+directly, skipping its own quantization. BF16 intermediate rounding is retained
+inside the fused kernel. Shared experts retain their original implementation.
+Current supported dispatch is SM120 with BF16 gate/up input and intermediate
+width N from 32 through 32768, in multiples of 32. Each width is compiled and
+cached separately; token row counts can vary. Rows use 32 threads for N <= 512,
+128 for N <= 4096, 256 for N <= 16384, and 512 above that. Wider rows share their
+maximum across warps; masked tail elements do not contribute to the output.
+Other hardware, widths, layouts, non-FP8 experts and batch-invariant mode use the
+original path; non-SwiGLU expert activations do not opt in.
+
+Kernel regression tests cover 18 representative widths, including thread-layout
+boundaries, masked tails, padded row strides, numerical boundaries and graph
+replay with changed inputs. Newly supported widths have kernel-level validation;
+this does not replace full-model qualification on a different model.
+
+In automatic mode, missing/incompatible optional dependency imports retain the
+original activation and quantization path. Other unsupported inputs also retain
+that path, without importing CuTe. Compilation/CUDA execution errors propagate;
+a failed launch is not silently retried. Equality on standalone samples does not imply
+full-model equality; model output qualification is required before deployment.
+
+```bash
+flide serve --model /path/to/model --quantize fp8
+python tests/test_fp8_fusion.py
+```

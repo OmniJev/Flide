@@ -299,14 +299,17 @@ def grouped(a: torch.Tensor, w: torch.Tensor, out: torch.Tensor, rows, blocks, u
     return out
 
 
-def grouped_fp8(a: torch.Tensor, w: torch.Tensor, w_scale: torch.Tensor, out: torch.Tensor, rows, blocks, used,
+def grouped_fp8(a: torch.Tensor | None, w: torch.Tensor, w_scale: torch.Tensor, out: torch.Tensor, rows, blocks, used,
                 topk: int, by_token: bool, weights: torch.Tensor | None = None,
-                tile: tuple | None = None) -> torch.Tensor:
-    """`grouped` with float8 experts w [E, N, K] (scales [E, N]) and the rows going in scaled to float8 per row."""
+                tile: tuple | None = None, quantized=None) -> torch.Tensor:
+    """FP8 grouped product; optional `(FP8 rows, FP32 row scales)` skips input quantization.
+    With prequantized input, `a` may be None. The output dtype remains caller-controlled.
+    """
     from .fp8 import quantize_tokens
 
     bm, bn, warps, stages, gm = _tile(tile)
-    aq, sa = quantize_tokens(a if a.stride(-1) == 1 else a.contiguous())
+    aq, sa = (quantize_tokens(a if a.stride(-1) == 1 else a.contiguous())
+              if quantized is None else quantized)
     n_pairs = out.shape[0]
     N, KD = w.shape[1], w.shape[2]
     nbm = blocks.shape[0]
@@ -333,7 +336,8 @@ def quantize_experts(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return q, s
 
 
-def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act) -> torch.Tensor:
+def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act,
+            fuse_swiglu: bool = False) -> torch.Tensor:
     """The routed experts' rows for x [T, hidden] on the routing (top, ids) [T, k]: [T * k, hidden], each the expert's
     output times its weight, in float32 for 16-bit experts and in the activation dtype for float8 ones (kernels/fp8.py
     rounds far more). `act(gu, inter)` is the activation of the gate and up halves."""
@@ -345,8 +349,11 @@ def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act)
     if fp8:   # float8 experts
         gu = grouped_fp8(x, w["experts"], w["experts_scale"], x.new_empty(T * K, 2 * I), rows, blocks, used, K, True,
                          tile=t)
-        return grouped_fp8(act(gu, I), w["experts_down"], w["experts_down_scale"], x.new_empty(T * K, H), rows, blocks,
-                           used, K, False, top.reshape(-1), tile=t)
+        from .fp8_fusion import swiglu_quant
+        activated = swiglu_quant(gu, I) if fuse_swiglu else None
+        return grouped_fp8(act(gu, I) if activated is None else None,
+                           w["experts_down"], w["experts_down_scale"], x.new_empty(T * K, H),
+                           rows, blocks, used, K, False, top.reshape(-1), tile=t, quantized=activated)
     gu = grouped(x, w["experts"], x.new_empty(T * K, 2 * I), rows, blocks, used, K, True, tile=t)
     # each expert row kept in float32 to the sum: one rounding for the layer, as float32 has it
     return grouped(act(gu, I), w["experts_down"], x.new_empty(T * K, H, dtype=torch.float32), rows, blocks, used, K,
@@ -364,7 +371,7 @@ def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
     else:   # an adapter on the router or the gate: their own products
         logits, gate = mm(x, wr), mm(x, wg)
     top, ids = route(logits, K)
-    y = experts(x, w, top, ids, swiglu)
+    y = experts(x, w, top, ids, swiglu, fuse_swiglu=True)
     shared = mm(swiglu(mm(x, w["shared_gate_up"]), w["shared_inter"]), w["shared_down"])
     return combine(y, shared, gate, K)
 
