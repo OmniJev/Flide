@@ -184,8 +184,12 @@ class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
                  budget: int | None = None, backbone_options: dict | None = None, capture: bool | int = 4096,
                  session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
+                 attention_backend: str | None = None,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
+        from ..kernels.attention_backends import configure
+
+        configure(attention_backend)
         refuse_invariant_quantized(batch_invariant, backbone_options)
         if batch_invariant:
             settings.batch_invariant = True

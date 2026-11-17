@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Local profiling reports and logs
+/profiles/

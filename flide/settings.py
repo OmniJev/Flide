@@ -10,3 +10,6 @@ import os
 
 batch_invariant = False
 max_media_bytes = int(float(os.environ.get("FLIDE_MAX_MEDIA_MB", "64")) * 2 ** 20)
+
+# Optional backend; unsupported inputs always keep the generic Triton implementation.
+attention_backend = os.environ.get("FLIDE_ATTENTION_BACKEND", "triton")

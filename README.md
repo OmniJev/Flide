@@ -144,7 +144,7 @@ The last three columns say how much faster Flide answers one request than the en
 
 ## Options
 
-Optional CuTe kernel dependencies are available with `pip install '.[cute]'`; see [installation and dependency verification](docs/cute-installation.md). Installing them does not change the inference backend.
+Install the experimental SM120 CuTe attention backend with `pip install '.[cute]'` and select it with `--attention-backend cute`; see [installation, coverage and fallback behavior](docs/attention-backends.md).
 
 | Option | What it does |
 |---|---|

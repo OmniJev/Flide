@@ -189,6 +189,7 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
+                    attention_backend=args.attention_backend,
                     **format_args)
     t_load = time.perf_counter() - t0
     # the kernels of the packed path, and the autotuner picks the kernel bundle holds, before the blocks are timed:
@@ -303,7 +304,8 @@ def run(args) -> None:
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
-                    backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant, **format_args)
+                    backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant,
+                    attention_backend=args.attention_backend, **format_args)
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
     outputs, stats = engine.run_plans(plans, log_fn=log, warmup=args.warmup)
@@ -379,6 +381,8 @@ def add_parser(sub) -> None:
                    help="processes that render and tokenize (default: usable CPUs less two, within free memory)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--attention-backend", choices=["auto", "triton", "cute"], default=None,
+                   help="attention backend (default: FLIDE_ATTENTION_BACKEND or triton; unsupported inputs use Triton)")
     p.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits whatever it is batched with")
     p.add_argument("--quantize", default=None, choices=["fp8"],

@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ... import lora
+from ... import lora, settings
 from ...formats.base import FINAL
 from ...kernels.fla import pin_fla_size_buckets
 from ...runtime.pack import PackedBatch
@@ -686,7 +686,11 @@ class Qwen35(Backbone):
             R = attn_kernel.block_ranges(r[:, 0], r[:, 1], r[:, 2], r[:, 3], cfg["BLOCK_M"], cfg["BLOCK_N"],
                                          exact=True, groups=b.attn_runs)
             k1 = b.ctx["meta"] if b.ctx is not None else tok
-            meta = b.cache["attn"] = ("triton", tok, R, cfg, k1, r.T)
+            from ...kernels.attention_backends import prepare_attention
+            attention_metadata = prepare_attention(
+                r.T, R, dtype=self.dtype, head_dim=hd,
+                kv_capacity=b.ctx["len"] if b.ctx is not None else None)
+            meta = b.cache["attn"] = (attention_metadata, tok, R, cfg, k1, r.T)
         return meta
 
     def _attention_fused(self, m, w, x, cos, sin, mask, b: PackedBatch | None = None, i: int = -1, rows=None):
@@ -710,7 +714,8 @@ class Qwen35(Backbone):
             q, k = qk_norm_rope(q, k, cos, sin, m.q_norm.weight, m.k_norm.weight, m.q_norm.eps)
             tq = tok
         if b is None or b.ctx is None:
-            o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, R, m.scaling, 0, cfg, qranges=qr)
+            o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, R, m.scaling, 0, cfg, qranges=qr,
+                                      backend_metadata=mask[0] if rows is None else None)
             return mm(gate_out(o, gate), w["o"])
         # prefix keys and values from the context buffer: saved ones for resumed jobs, the stream's for the rest
         C, Tp = b.ctx, b.n_prefix_tokens
@@ -723,7 +728,8 @@ class Qwen35(Backbone):
             K0, V0 = entry.kv[i]
             Kc[c0: c0 + start].copy_(K0[:start])
             Vc[c0: c0 + start].copy_(V0[:start])
-        o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr)
+        o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr,
+                                  backend_metadata=mask[0] if rows is None else None)
         for j in b.marks:
             c0, P = C["start"][j], C["P"][j]
             b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"][i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())

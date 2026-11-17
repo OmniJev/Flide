@@ -392,6 +392,10 @@ class RequestGraphs:
         R = None if whole else attn_kernel.block_ranges(r[0], r[1], r[2], r[3], self.attn_cfg["BLOCK_M"],
                                                         self.attn_cfg["BLOCK_N"], exact=True,
                                                         groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
+        from ...kernels.attention_backends import prepare_attention
+        attention_metadata = (prepare_attention(
+            r, R, dtype=self.dtype, head_dim=bb.config.head_dim,
+            kv_capacity=SESSION_CTX if sess else None) if not whole else None)
         src = f["src"].view(3, T)
         slots = (f["cu"], f["chunks"].view(C, 2), (P // 2, P // 2) if sess else (P,), f["h0"])
         if sess:
@@ -431,11 +435,12 @@ class RequestGraphs:
                     Kc.index_copy_(0, ctx_idx, k)
                     Vc.index_copy_(0, ctx_idx, v)
                     o = attn_kernel.attention(q, Kc, Vc, k, v, tq, ctx_meta, tok, Rq, m.scaling, 0, self.attn_cfg,
-                                              qranges=rq)
+                                              qranges=rq, backend_metadata=attention_metadata if i != top else None)
                 elif whole:
                     o = _causal(q, k, v, m.scaling)
                 else:
-                    o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, Rq, m.scaling, 0, self.attn_cfg, qranges=rq)
+                    o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, Rq, m.scaling, 0, self.attn_cfg, qranges=rq,
+                                              backend_metadata=attention_metadata if i != top else None)
                 d = mm(gate_out(o, gate), w["o"])
                 if i == top:
                     h = h.index_select(0, reads)

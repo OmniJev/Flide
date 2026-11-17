@@ -77,7 +77,8 @@ def run(args) -> None:
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
-                    batch_invariant=args.batch_invariant, **_family_options(family, options))
+                    batch_invariant=args.batch_invariant, attention_backend=args.attention_backend,
+                    **_family_options(family, options))
     from ..runtime.online import Batcher
 
     batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms)
@@ -104,6 +105,8 @@ def add_parser(sub) -> None:
     s.add_argument("--max-media-mb", type=float, default=None,
                    help="largest image or video a request may carry, in MiB once decoded (default 64)")
     s.add_argument("--no-cuda-graphs", action="store_true", help="run every request eagerly")
+    s.add_argument("--attention-backend", choices=["auto", "triton", "cute"], default=None,
+                   help="attention backend (default: FLIDE_ATTENTION_BACKEND or triton; unsupported inputs use Triton)")
     s.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits at any load (slower)")
     s.add_argument("--quantize", default=None, choices=["fp8"],
