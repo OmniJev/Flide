@@ -51,7 +51,7 @@ from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
 from ..base import capture_progress
-from .ops import (add_rms, ffn, final_norm, gated_rms, gated_rms_segments,
+from .ops import (add_rms, final_norm, gated_rms, gated_rms_segments,
                   last_qkv, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
@@ -597,13 +597,9 @@ class RequestGraphs:
         bb = self.bb
         n2 = layer.post_attention_layernorm
         h, x = add_rms(h, d, n2.weight, n2.eps)
-        d = ffn(w, x)
         if step is not None:
-            return bb.next_input(h, d, *step)
-        if i + 1 < len(bb.layers):
-            n1 = bb.layers[i + 1].input_layernorm
-            return add_rms(h, d, n1.weight, n1.eps)
-        return h + d, None
+            return bb.ffn_next(w, x, h, *step)
+        return bb.ffn_next(w, x, h, i + 1 if i + 1 < len(bb.layers) else None)
 
     def _gdn(self, m, w, x, i, B, keep):
         """Gated DeltaNet over one sequence (B None: from zero state, final state kept when `keep`) or over

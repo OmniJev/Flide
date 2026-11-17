@@ -72,6 +72,16 @@ def ffn(w: dict, x):
     return mm(swiglu(mm(x, w["gate_up"]), w["inter"]), w["down"])
 
 
+def ffn_add_rms(w: dict, x, h, norm_weight, eps: float):
+    """Feed-forward with the next input norm; dense MLPs retain their ordinary path."""
+    if "experts" in w:
+        from ...kernels.fp8 import mm
+        from ...kernels.moe import moe_add_rms
+
+        return moe_add_rms(x, w, mm, swiglu, h, norm_weight, eps)
+    return add_rms(h, ffn(w, x), norm_weight, eps)
+
+
 def gated_rms(o, z, w, eps: float):
     return pw.gated_rms(o, z, w, eps)
 

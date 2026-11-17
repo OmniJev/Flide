@@ -32,7 +32,7 @@ from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm, mm_into
-from .ops import (add_rms, ffn, final_norm, gated_rms, gated_rms_segments,
+from .ops import (add_rms, ffn, ffn_add_rms, final_norm, gated_rms, gated_rms_segments,
                   last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
@@ -118,6 +118,13 @@ class Qwen35(Backbone):
             return h, None
         n1 = self.layers[nxt].input_layernorm
         return h, rms(h, n1.weight, n1.eps)
+
+    def ffn_next(self, w, x, h, nxt: int | None, start=None):
+        """Fuse a plain MoE-to-next-layer transition; keep midloop and final handling."""
+        if start is not None or nxt is None:
+            return self.next_input(h, ffn(w, x), nxt, start)
+        norm = self.layers[nxt].input_layernorm
+        return ffn_add_rms(w, x, h, norm.weight, norm.eps)
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -559,8 +566,8 @@ class Qwen35(Backbone):
                 d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i)
             n2 = layer.post_attention_layernorm
             h, x = add_rms(h, d, n2.weight, n2.eps)
-            d = ffn(w, x)
-            h, x = self.next_input(h, d, order[p + 1][0] if p + 1 < len(order) else None, start if end else None)
+            h, x = self.ffn_next(w, x, h, order[p + 1][0] if p + 1 < len(order) else None,
+                                 start if end else None)
             if i + 1 in b.reads:
                 out[i + 1] = h[b.reads[i + 1]]
         if FINAL in b.reads:

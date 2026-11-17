@@ -277,6 +277,61 @@ def combine(y: torch.Tensor, shared: torch.Tensor, gate: torch.Tensor, k: int) -
     return out
 
 
+@triton.jit
+def _combine_add_rms_kernel(Y, S, G, R, W, HOUT, OUT, N, sy, ss, sg, sr, sh, so, eps,
+                            K: tl.constexpr, OFFSET: tl.constexpr, BLOCK: tl.constexpr):
+    t = tl.program_id(0).to(tl.int64)
+    c = tl.arange(0, BLOCK)
+    m = c < N
+    acc = tl.zeros([BLOCK], tl.float32)
+    for j in tl.static_range(K):
+        acc += tl.load(Y + (t * K + j) * sy + c, m, other=0.0).to(tl.float32)
+    gate = tl.load(G + t * sg).to(tl.float32)
+    shared = tl.load(S + t * ss + c, m, other=0.0).to(tl.float32)
+    # Make the combine output's rounding explicit before the residual addition.
+    # Scalar conversions retain this boundary and avoid the initial packed lowering,
+    # which changed upstream FMA contraction at BF16 halfway cases on SM120.
+    value = acc + shared / (1.0 + tl.exp(-gate))
+    if S.dtype.element_ty == tl.bfloat16:
+        combined = tl.inline_asm_elementwise(
+            "{ .reg .b16 r; cvt.rn.bf16.f32 r, $1; cvt.f32.bf16 $0, r; }",
+            constraints="=f,f", args=[value], dtype=tl.float32, is_pure=True, pack=1)
+    elif S.dtype.element_ty == tl.float16:
+        combined = tl.inline_asm_elementwise(
+            "{ .reg .b16 r; cvt.rn.f16.f32 r, $1; cvt.f32.f16 $0, r; }",
+            constraints="=f,f", args=[value], dtype=tl.float32, is_pure=True, pack=1)
+    else:
+        combined = value
+    residual = tl.load(R + t * sr + c, m, other=0.0).to(tl.float32)
+    h = (residual + combined).to(R.dtype.element_ty)
+    tl.store(HOUT + t * sh + c, h, m)
+    x = h.to(tl.float32)
+    inv = tl.math.rsqrt(tl.sum(x * x, 0) / N + eps)
+    w = tl.load(W + c, m, other=0.0).to(tl.float32)
+    if OFFSET:
+        w = 1.0 + w
+    tl.store(OUT + t * so + c, (x * inv * w).to(OUT.dtype.element_ty), m)
+
+
+def combine_add_rms(y: torch.Tensor, shared: torch.Tensor, gate: torch.Tensor, k: int,
+                    residual: torch.Tensor, weight: torch.Tensor, eps: float,
+                    offset: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
+    """Combine experts, round to shared.dtype, then residual-add and RMSNorm.
+
+    Preserve both the combine and residual rounding boundaries while avoiding the
+    combined output tensor. Return the updated residual and normalized next input.
+    """
+    T, N = residual.shape
+    h, out = torch.empty_like(residual), torch.empty_like(residual)
+    if T:
+        gate = gate.reshape(T)
+        _combine_add_rms_kernel[(T,)](
+            y, shared, gate, residual, weight, h, out, N, y.stride(0), shared.stride(0), gate.stride(0),
+            residual.stride(0), h.stride(0), out.stride(0), eps, K=k, OFFSET=offset,
+            BLOCK=triton.next_power_of_2(N), num_warps=8 if N > 2048 else 4)
+    return h, out
+
+
 def _tile(t: tuple | None) -> tuple[int, int, int, int, int]:
     """(block rows, block columns, warps, stages, row blocks per group), the group 0 when a tile names none."""
     t = tuple(t or (BM, BN, 4, 3))
@@ -360,10 +415,8 @@ def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act,
                    False, top.reshape(-1), tile=t)
 
 
-def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
-    """The feed-forward of a Qwen3.5 MoE layer for rows x [T, hidden]: the routed experts' weighted sum (the top k of
-    the router's softmax, renormalized) plus the shared expert scaled by its sigmoid gate. `mm` and `swiglu` are the
-    backbone's own products and activation."""
+def _moe_parts(x: torch.Tensor, w: dict, mm, swiglu):
+    """Routed rows, shared output and gate, before their final combination."""
     K = w["topk"]
     wr, wg = w["router"], w["shared_gate"]
     if isinstance(wr, torch.Tensor) and isinstance(wg, torch.Tensor):
@@ -373,7 +426,19 @@ def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
     top, ids = route(logits, K)
     y = experts(x, w, top, ids, swiglu, fuse_swiglu=True)
     shared = mm(swiglu(mm(x, w["shared_gate_up"]), w["shared_inter"]), w["shared_down"])
-    return combine(y, shared, gate, K)
+    return y, shared, gate, K
+
+
+def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
+    """Routed experts plus the sigmoid-gated shared expert."""
+    return combine(*_moe_parts(x, w, mm, swiglu))
+
+
+def moe_add_rms(x: torch.Tensor, w: dict, mm, swiglu, residual: torch.Tensor,
+                norm_weight: torch.Tensor, eps: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """MoE feed-forward followed by the next layer's residual and RMSNorm."""
+    y, shared, gate, k = _moe_parts(x, w, mm, swiglu)
+    return combine_add_rms(y, shared, gate, k, residual, norm_weight, eps)
 
 
 @triton.jit
