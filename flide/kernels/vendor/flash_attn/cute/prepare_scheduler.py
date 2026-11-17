@@ -1,0 +1,431 @@
+# A reimplementation of https://github.com/Dao-AILab/flash-attention/blob/main/hopper/flash_prepare_scheduler.cu
+# from CUTLASS C++ to Cute-DSL.
+
+from typing import Tuple, Optional, NamedTuple
+import operator
+import torch
+import cuda.bindings.driver as cuda
+import cutlass
+import cutlass.cute as cute
+from cutlass import Int32, const_expr, Float32
+from cutlass.cute import FastDivmodDivisorV2
+from cutlass.cutlass_dsl import Arch, BaseDSL
+import flide.kernels.vendor.flash_attn.cute.utils as utils
+
+
+class SchedulerMetadataTensorsTorch(NamedTuple):
+    """Class to store scheduler metadata for varlen.
+
+    Every field is optional. ``SchedulerMetadataTensorsTorch(tile_count_semaphore=sem)`` with a
+    zeroed int32[1] selects DynamicPersistentVarlenScheduler on SM100; the kernel resets ``sem`` at
+    exit, so a caller can keep one per stream and reuse it for launches ordered on that stream.
+    """
+
+    # tensors of shape (batch)
+    num_m_blocks_ptr: Optional[torch.Tensor] = None
+    num_splits_dynamic_ptr: Optional[torch.Tensor] = None
+    virtual_batch_idx_ptr: Optional[torch.Tensor] = None
+    num_nheads_in_l2_ptr: Optional[torch.Tensor] = None
+    # tensor of shape (1)
+    tile_count_semaphore: Optional[torch.Tensor] = None
+    # tensors of shape (batch + 1)
+    # cu_total_m_blocks[b+1] = sum_{i<=b} num_m_blocks[i]
+    # cu_total_splits_m_blocks[b+1] = sum_{i<=b} num_m_blocks[i] * num_splits_dynamic[i]
+    cu_total_m_blocks: Optional[torch.Tensor] = None
+    cu_total_splits_m_blocks: Optional[torch.Tensor] = None
+    blocks_to_batch_idx: Optional[torch.Tensor] = None
+
+
+@cute.jit
+def num_splits_for_sequence(
+    num_n_blocks: Int32,
+    total_blocks: Int32,
+    num_sm: Int32 | int,
+    nheads_computed: int | Int32,
+    num_splits_static: Int32,
+    zfill_padded_output: cutlass.Constexpr[bool] = False,
+    ctas_per_sm: cutlass.Constexpr[int] = 1,
+    min_blocks_floor: cutlass.Constexpr = None,
+) -> Int32:
+    """Split count of one sequence with num_n_blocks KV blocks, at most num_splits_static.
+
+    total_blocks sums num_m_blocks * num_n_blocks over the batch; each of its nheads_computed
+    heads is a tile. The one-wave rule gives each split blocks_per_sm blocks, so the batch fills
+    about ctas_per_sm * num_sm / sm_margin CTAs. min_blocks_floor = (low_ctas, min_blocks) raises
+    blocks_per_sm to min(ceil(tiles / low_ctas), min_blocks): small batches then aim at low_ctas
+    CTAs, and splits keep at least min_blocks blocks until the batch fills the one-wave target.
+    """
+    sm_margin = max(Float32(num_sm) / 128 + 0.001, 1.1)  # e.g. 148/128 = 1.15625
+    target_ctas = Float32(num_sm) * ctas_per_sm
+    blocks_per_sm = cutlass.max(
+        Int32((Float32(total_blocks) * sm_margin * Float32(nheads_computed) / target_ctas)),
+        Int32(1),
+    )
+    # blocks_per_sm = cute.ceil_div(total_blocks * nheads_computed, num_sm)
+    if const_expr(min_blocks_floor is not None):
+        low_ctas, min_blocks = min_blocks_floor
+        floor = cute.ceil_div(total_blocks * nheads_computed, low_ctas)
+        blocks_per_sm = cutlass.max(blocks_per_sm, cutlass.min(floor, Int32(min_blocks)))
+    num_splits_dynamic = cutlass.min(cute.ceil_div(num_n_blocks, blocks_per_sm), num_splits_static)
+    if const_expr(zfill_padded_output):
+        num_splits_dynamic = cutlass.max(num_splits_dynamic, Int32(1))
+    return num_splits_dynamic
+
+
+class FlashPrepareScheduler:
+    def __init__(
+        self,
+        num_warps: int,
+        tile_m: int,
+        tile_n: int,
+        nheads: int,
+        nheads_kv: int,
+        headdim: int,
+        headdim_v: Optional[int] = None,
+        is_causal: bool = False,
+        packgqa: bool = False,
+        sort: bool = False,
+        zfill_padded_output: bool = False,
+        ctas_per_sm: int = 1,
+        min_blocks_floor: Optional[Tuple[int, int]] = None,
+    ):
+        self.num_warps = num_warps
+        self.is_causal = is_causal
+        self.packgqa = packgqa
+        assert not sort, "LPT batch sort not yet implemented"
+        self.sort = sort
+        self.num_threads_per_warp = 32
+        self.tile_m = tile_m
+        self.tile_n = tile_n
+        self.d = headdim
+        self.dv = headdim_v if headdim_v is not None else headdim
+        self.k_num_batch_per_warp = 31
+        self.k_smem_size = 1
+        self.zfill_padded_output = zfill_padded_output
+        # Split-rule options of num_splits_for_sequence; the defaults are the one-wave rule.
+        self.ctas_per_sm = ctas_per_sm
+        self.min_blocks_floor = min_blocks_floor
+        self.use_pdl = BaseDSL._get_dsl().get_arch_enum() >= Arch.sm_90a
+
+        # for pack gqa, query heads per kv head is combined with seqlen_q
+        self.nheads_computed = nheads if not self.packgqa else nheads_kv
+
+        # L2 cache calculations
+        self.qhead_per_khead = nheads // nheads_kv
+        self.size_l2_divisor = (
+            1
+            if self.qhead_per_khead == 1
+            else (
+                2
+                if self.qhead_per_khead <= 2
+                else (4 if self.qhead_per_khead <= 4 else (8 if self.qhead_per_khead <= 8 else 16))
+            )
+        )
+        self.size_l2 = (32 * 1024 * 1024) // self.size_l2_divisor
+        element_size = 2
+        self.size_one_kvblock = self.tile_n * (self.d + self.dv) * element_size
+        self.max_kvblocks_in_l2 = (
+            self.size_l2 + self.size_one_kvblock - 1
+        ) // self.size_one_kvblock
+
+    @staticmethod
+    def get_grid_shape(num_batch: int) -> Tuple[int, int, int]:
+        num_ctas = (num_batch + (31 * 32 - 1)) // (31 * 32)
+        return (num_ctas, 1, 1)
+
+    @cute.jit
+    def __call__(
+        self,
+        seqlen_q_static: int,
+        seqlen_k_static: int,
+        seqlen_k_new_static: int,
+        mCuSeqlensQ: Optional[cute.Tensor],
+        mCuSeqlensK: Optional[cute.Tensor],
+        mCuSeqlensKNew: Optional[cute.Tensor],
+        mSeqUsedQ: Optional[cute.Tensor],
+        mSeqUsedK: Optional[cute.Tensor],
+        mLeftPadK: Optional[cute.Tensor],
+        num_batch: int,
+        num_splits_static: int,
+        tile_count_semaphore: Optional[cute.Tensor],
+        num_m_blocks_ptr: Optional[cute.Tensor],
+        num_splits_dynamic_ptr: Optional[cute.Tensor],
+        virtual_batch_idx_ptr: Optional[cute.Tensor],
+        num_nheads_in_l2_ptr: Optional[cute.Tensor],
+        n_blocks_per_split: Optional[int],  # overrides heuristic
+        stream: cuda.CUstream,
+    ):
+        tile_m_divmod = FastDivmodDivisorV2(self.tile_m)
+        tile_n_divmod = FastDivmodDivisorV2(self.tile_n)
+
+        @cute.struct
+        class SharedStorage:
+            total_blocks_smem: cute.struct.MemRange[Int32, self.k_smem_size]
+
+        self.shared_storage = SharedStorage
+
+        block = (32 * self.num_warps, 1, 1)
+        grid = self.get_grid_shape(num_batch)
+
+        hardware_info = cutlass.utils.HardwareInfo()
+        num_sm = hardware_info.get_device_multiprocessor_count()
+
+        self.kernel(
+            seqlen_q_static,
+            seqlen_k_static,
+            seqlen_k_new_static,
+            mCuSeqlensQ,
+            mCuSeqlensK,
+            mCuSeqlensKNew,
+            mSeqUsedQ,
+            mSeqUsedK,
+            mLeftPadK,
+            num_batch,
+            num_sm,
+            num_splits_static,
+            tile_m_divmod,
+            tile_n_divmod,
+            tile_count_semaphore,
+            num_m_blocks_ptr,
+            num_splits_dynamic_ptr,
+            virtual_batch_idx_ptr,
+            num_nheads_in_l2_ptr,
+            n_blocks_per_split,
+        ).launch(
+            grid=grid,
+            block=block,
+            stream=stream,
+            smem=self.shared_storage.size_in_bytes(),
+        )
+
+    @cute.kernel
+    def kernel(
+        self,
+        seqlen_q_static: Int32,
+        seqlen_k_static: Int32,
+        seqlen_k_new_static: Int32,
+        mCuSeqlensQ: Optional[cute.Tensor],
+        mCuSeqlensK: Optional[cute.Tensor],
+        mCuSeqlensKNew: Optional[cute.Tensor],
+        mSeqUsedQ: Optional[cute.Tensor],
+        mSeqUsedK: Optional[cute.Tensor],
+        mLeftPadK: Optional[cute.Tensor],
+        num_batch: Int32,
+        num_sm: Int32,
+        num_splits_static: Int32,
+        tile_m_divmod: FastDivmodDivisorV2,
+        tile_n_divmod: FastDivmodDivisorV2,
+        tile_count_semaphore: Optional[cute.Tensor],
+        num_m_blocks_ptr: Optional[cute.Tensor],
+        num_splits_dynamic_ptr: Optional[cute.Tensor],
+        virtual_batch_idx_ptr: Optional[cute.Tensor],
+        num_nheads_in_l2_ptr: Optional[cute.Tensor],
+        n_blocks_per_split: Optional[Int32],
+    ):
+        bidx, _, _ = cute.arch.block_idx()
+        # Let a PDL-launched consumer (SwapAB) start while this kernel runs; it waits for the
+        # results. A no-op when the next grid is not PDL-launched.
+        if const_expr(self.use_pdl):
+            cute.arch.griddepcontrol_launch_dependents()
+        tidx, _, _ = cute.arch.thread_idx()
+        grid_dimx, _, _ = cute.arch.grid_dim()
+        warp_idx = cute.arch.warp_idx()
+        lane_idx = cute.arch.lane_idx()
+
+        smem = cutlass.utils.SmemAllocator()
+        storage = smem.allocate(self.shared_storage)
+        total_blocks_smem = storage.total_blocks_smem.get_tensor((1,))
+
+        if tidx == 0:
+            total_blocks_smem[0] = Int32(0)
+        cute.arch.sync_threads()
+
+        if const_expr(tile_count_semaphore is not None):
+            if tidx == 0:
+                tile_count_semaphore[0] = Int32(0)
+
+        batch_cta_idx_offset = bidx * self.k_num_batch_per_warp * self.num_warps
+        bidb_start = batch_cta_idx_offset + self.k_num_batch_per_warp * warp_idx
+        batch_idx = lane_idx + bidb_start
+
+        num_m_blocks, _ = self.get_num_m_blocks_and_seqlen(
+            lane_idx,
+            batch_idx,
+            mSeqUsedQ,
+            mCuSeqlensQ,
+            seqlen_q_static,
+            tile_m_divmod,
+            num_batch,
+        )
+
+        num_n_blocks = self.get_num_n_blocks(
+            lane_idx,
+            batch_idx,
+            mSeqUsedK,
+            mCuSeqlensK,
+            mCuSeqlensKNew,
+            seqlen_k_static,
+            seqlen_k_new_static,
+            mLeftPadK,
+            tile_n_divmod,
+            num_batch,
+        )
+
+        num_splits_dynamic = Int32(1)
+        if const_expr(n_blocks_per_split is not None):
+            num_splits_dynamic = cutlass.min(
+                cute.ceil_div(num_n_blocks, n_blocks_per_split), num_splits_static
+            )
+            if const_expr(self.zfill_padded_output):
+                num_splits_dynamic = cutlass.max(num_splits_dynamic, Int32(1))
+            if num_splits_dynamic > 0:
+                num_n_blocks = cute.ceil_div(num_n_blocks, num_splits_dynamic)
+        else:
+            if grid_dimx > 1 or num_splits_static == 1:
+                num_splits_dynamic = Int32(1)
+            else:
+                total_blocks = num_m_blocks * num_n_blocks
+                total_blocks = utils.warp_reduce(total_blocks, operator.add)
+                if lane_idx == 0:
+                    utils.atomic_add_i32(total_blocks, total_blocks_smem.iterator)
+
+                cute.arch.sync_threads()
+
+                total_blocks = total_blocks_smem[0]
+
+                num_splits_dynamic = num_splits_for_sequence(
+                    num_n_blocks,
+                    total_blocks,
+                    num_sm,
+                    self.nheads_computed,
+                    num_splits_static,
+                    zfill_padded_output=self.zfill_padded_output,
+                    ctas_per_sm=self.ctas_per_sm,
+                    min_blocks_floor=self.min_blocks_floor,
+                )
+                if num_splits_dynamic > 0:
+                    num_n_blocks = cute.ceil_div(num_n_blocks, num_splits_dynamic)
+
+        if const_expr(self.sort):
+            # TODO: Implement sort logic
+            pass
+
+        if batch_idx < num_batch and lane_idx < self.k_num_batch_per_warp:
+            if const_expr(num_m_blocks_ptr is not None):
+                num_m_blocks_ptr[batch_idx] = num_m_blocks
+            if const_expr(num_splits_dynamic_ptr is not None):
+                num_splits_dynamic_ptr[batch_idx] = num_splits_dynamic
+            if const_expr(num_nheads_in_l2_ptr is not None):
+                nheads_in_l2 = self.get_num_nheads_in_l2(num_n_blocks)
+                num_nheads_in_l2_ptr[batch_idx] = nheads_in_l2
+
+    @cute.jit
+    def get_num_m_blocks_and_seqlen(
+        self,
+        lane_idx: Int32,
+        batch_idx: Int32,
+        mSeqUsedQ: Optional[cute.Tensor],
+        mCuSeqlensQ: Optional[cute.Tensor],
+        seqlen_q_static: Int32,
+        tile_m_divmod: FastDivmodDivisorV2,
+        num_batch: Int32,
+    ):
+        seqlen = Int32(0)
+        if const_expr(mSeqUsedQ is not None):
+            seqlen = mSeqUsedQ[batch_idx] if batch_idx < num_batch else Int32(0)
+        elif const_expr(mCuSeqlensQ is not None):
+            # Since k_num_batch_per_warp = 31, lane 31 never processes batches
+            # So shuffle_down is safe: lane 30 gets lane 31's value (which is 0)
+            # Only access cu_seqlens if batch_idx is valid (0 to num_batch inclusive)
+            cur_cu_seqlen = Int32(0)
+            if batch_idx <= num_batch:
+                cur_cu_seqlen = mCuSeqlensQ[batch_idx]
+            next_cu_seqlen = cute.arch.shuffle_sync_down(cur_cu_seqlen, offset=1)
+            seqlen = next_cu_seqlen - cur_cu_seqlen
+        else:
+            seqlen = seqlen_q_static
+
+        seqlen_for_blocks = seqlen
+        if const_expr(self.packgqa):
+            seqlen_for_blocks = seqlen * self.qhead_per_khead
+        num_m_blocks = (
+            (seqlen_for_blocks + self.tile_m - 1) // tile_m_divmod
+            if batch_idx < num_batch and lane_idx < self.k_num_batch_per_warp
+            else Int32(0)
+        )
+        return (num_m_blocks, seqlen)
+
+    @cute.jit
+    def get_num_n_blocks(
+        self,
+        lane_idx: Int32,
+        batch_idx: Int32,
+        mSeqUsedK: Optional[cute.Tensor],
+        mCuSeqlensK: Optional[cute.Tensor],
+        mCuSeqlensKNew: Optional[cute.Tensor],
+        seqlen_k_static: Int32,
+        seqlen_k_new_static: Int32,
+        mLeftPadK: Optional[cute.Tensor],
+        tile_n_divmod: FastDivmodDivisorV2,
+        num_batch: Int32,
+    ):
+        leftpad_k = (
+            mLeftPadK[batch_idx]
+            if const_expr(mLeftPadK is not None) and batch_idx < num_batch
+            else Int32(0)
+        )
+        seqlen = Int32(0)
+        if const_expr(mSeqUsedK is not None):
+            seqlen = mSeqUsedK[batch_idx] if batch_idx < num_batch else Int32(0)
+        elif const_expr(mCuSeqlensK is not None):
+            # Since k_num_batch_per_warp = 31, lane 31 never processes batches
+            # So shuffle_down is safe: lane 30 gets lane 31's value (which is 0)
+            # Only access cu_seqlens if batch_idx is valid (0 to num_batch inclusive)
+            cur_cu_seqlen = Int32(0)
+            if batch_idx <= num_batch:
+                cur_cu_seqlen = mCuSeqlensK[batch_idx]
+            next_cu_seqlen = cute.arch.shuffle_sync_down(cur_cu_seqlen, offset=1)
+            seqlen = next_cu_seqlen - cur_cu_seqlen
+        else:
+            seqlen = seqlen_k_static
+
+        seqlen_new = Int32(0)
+        if const_expr(mCuSeqlensKNew is not None):
+            # Since k_num_batch_per_warp = 31, lane 31 never processes batches
+            # So shuffle_down is safe: lane 30 gets lane 31's value (which is 0)
+            # Only access cu_seqlens if batch_idx is valid (0 to num_batch inclusive)
+            cur_cu_seqlen_new = Int32(0)
+            if batch_idx <= num_batch:
+                cur_cu_seqlen_new = mCuSeqlensKNew[batch_idx]
+            next_cu_seqlen_new = cute.arch.shuffle_sync_down(cur_cu_seqlen_new, offset=1)
+            seqlen_new = next_cu_seqlen_new - cur_cu_seqlen_new
+        else:
+            seqlen_new = seqlen_k_new_static
+        seqlen = seqlen - leftpad_k + seqlen_new
+        return (
+            (seqlen + self.tile_n - 1) // tile_n_divmod
+            if batch_idx < num_batch and lane_idx < self.k_num_batch_per_warp
+            else Int32(0)
+        )
+
+    @cute.jit
+    def get_num_nheads_in_l2(
+        self,
+        num_n_blocks: Int32,
+    ):
+        max_kvblocks_in_l2 = self.max_kvblocks_in_l2
+        qhead_per_khead = self.qhead_per_khead
+        nheads_in_l2 = Int32(16)
+        if num_n_blocks * Int32(16) <= max_kvblocks_in_l2:
+            nheads_in_l2 = Int32(16)
+        elif num_n_blocks * Int32(8) <= max_kvblocks_in_l2:
+            nheads_in_l2 = Int32(8)
+        elif num_n_blocks * Int32(4) <= max_kvblocks_in_l2:
+            nheads_in_l2 = Int32(4)
+        elif num_n_blocks * Int32(2) <= max_kvblocks_in_l2:
+            nheads_in_l2 = Int32(2)
+        else:
+            nheads_in_l2 = Int32(1)
+        if const_expr(not self.packgqa):
+            nheads_in_l2 *= qhead_per_khead
+        return cutlass.min(nheads_in_l2, self.nheads_computed)

@@ -144,6 +144,8 @@ The last three columns say how much faster Flide answers one request than the en
 
 ## Options
 
+Optional CuTe kernel dependencies are available with `pip install '.[cute]'`; see [installation and dependency verification](docs/cute-installation.md). Installing them does not change the inference backend.
+
 | Option | What it does |
 |---|---|
 | `--session-cache-gb 40` | keeps the states of earlier requests, so an agent's next step reads only what is new |
