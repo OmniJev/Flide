@@ -5,6 +5,7 @@ command line serves every family.
 """
 from __future__ import annotations
 
+import argparse
 import inspect
 import logging
 import os
@@ -53,8 +54,16 @@ def run(args) -> None:
     from .. import formats, settings
     from ..runtime.engine import Engine, model_config, resolve_model
     from ..runtime.offline import parse_kv
+    from .admission import Admission
     from .server import create_app
 
+    api_key = args.api_key if args.api_key is not None else os.environ.get("FLIDE_API_KEY")
+    if api_key is not None and (not api_key or any(not "!" <= char <= "~" for char in api_key)):
+        raise SystemExit("API key must be nonempty and contain only visible ASCII characters")
+    if args.max_queued_requests is not None and args.max_running_requests is None:
+        raise SystemExit("--max-queued-requests requires --max-running-requests")
+    admission = (Admission(args.max_running_requests, args.max_queued_requests)
+                 if args.max_running_requests is not None else None)
     if args.max_media_mb is not None:   # in the environment too, for the planning processes of --frontends
         if not args.max_media_mb > 0:
             raise SystemExit("--max-media-mb is a positive number")
@@ -73,7 +82,8 @@ def run(args) -> None:
         from . import frontend
 
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,
-                                args.host, args.port, args.planners, args.access_log)
+                                args.host, args.port, args.planners, args.access_log, admission=admission is not None,
+                                api_key=api_key)
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
@@ -81,12 +91,27 @@ def run(args) -> None:
                     **_family_options(family, options))
     from ..runtime.online import Batcher
 
-    batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms)
+    batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms,
+                      max_round_tokens=args.max_batch_tokens)
     freeze_heap()
     if fronts is not None:
-        return frontend.serve(batcher, fronts)
-    app = create_app(engine, model_name=name, batcher=batcher)
+        return frontend.serve(batcher, fronts, admission)
+    app = create_app(engine, model_name=name, batcher=batcher, admission=admission, api_key=api_key)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=args.access_log)
+
+
+def _nonnegative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return number
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
 
 
 def add_parser(sub) -> None:
@@ -121,10 +146,19 @@ def add_parser(sub) -> None:
     s.add_argument("--frontends", type=int, default=0,
                    help="HTTP front-end processes (each plans and finishes requests with its own planners); 0 serves "
                         "from the GPU process itself")
+    s.add_argument("--max-running-requests", type=_positive_int,
+                   help="maximum admitted states from planning through finishing, shared by all HTTP front ends")
+    s.add_argument("--max-queued-requests", type=_nonnegative_int,
+                   help="maximum states waiting for a running slot; return HTTP 429 when full; requires "
+                        "--max-running-requests (zero disables waiting)")
+    s.add_argument("--max-batch-tokens", type=_positive_int,
+                   help="token budget for combining plans in one online GPU round; an oversized plan runs alone")
     s.add_argument("--batch-window-ms", type=float, default=0.0,
                    help="wait this long after the first waiting request for more to join its GPU round")
     s.add_argument("--gather-ms", type=float, default=None,
                    help="wait up to this long for requests still being planned to join a round (default 2)")
+    s.add_argument("--api-key", default=None,
+                   help="require Authorization: Bearer KEY on HTTP requests (also settable via FLIDE_API_KEY)")
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--access-log", action="store_true",

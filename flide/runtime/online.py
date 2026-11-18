@@ -18,19 +18,62 @@ import logging
 import queue
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 log = logging.getLogger("flide.online")
 
 
-def start_planners(pool: cf.ThreadPoolExecutor, n: int) -> None:
-    """Start all n threads of a planner pool now. Each copies the family (its tokenizer) when it starts, a few hundred
-    milliseconds that would otherwise stall the requests that first need it once load grows."""
-    barrier = threading.Barrier(n + 1)
-    for _ in range(n):
-        pool.submit(barrier.wait)
-    barrier.wait()
+class PlannerPool:
+    """CPU work that can be removed from the waiting queue as soon as its future is cancelled."""
+
+    def __init__(self, workers: int, initializer: Callable):
+        self._workers = workers
+        self._draining = 0
+        self._lock = threading.Lock()
+        self._pending: OrderedDict[cf.Future, Callable] = OrderedDict()
+        self._pool = cf.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="flide-plan", initializer=initializer)
+        barrier = threading.Barrier(workers + 1)
+        for _ in range(workers):
+            self._pool.submit(barrier.wait)
+        barrier.wait()
+
+    def submit(self, work: Callable) -> cf.Future:
+        future: cf.Future = cf.Future()
+        future.add_done_callback(self._discard)
+        with self._lock:
+            self._pending[future] = work
+            if self._draining < self._workers:
+                try:
+                    self._pool.submit(self._drain)
+                except RuntimeError:
+                    del self._pending[future]
+                    raise
+                self._draining += 1
+        return future
+
+    def _discard(self, future: cf.Future) -> None:
+        if future.cancelled():
+            with self._lock:
+                self._pending.pop(future, None)
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._draining -= 1
+                    return
+                future, work = self._pending.popitem(last=False)
+            if future.set_running_or_notify_cancel():
+                try:
+                    result = work()
+                except BaseException as exc:
+                    future.set_exception(exc)
+                else:
+                    future.set_result(result)
+                    del result
+            del future, work
 
 
 @dataclass
@@ -38,6 +81,27 @@ class _Item:
     plan: Any
     future: cf.Future
     t_in: float = field(default_factory=time.perf_counter)
+
+
+class _Pending:
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._items: OrderedDict[cf.Future, _Item] = OrderedDict()
+
+    def put(self, item: _Item) -> None:
+        with self._condition:
+            self._items[item.future] = item
+            self._condition.notify()
+
+    def discard(self, future: cf.Future) -> None:
+        with self._condition:
+            self._items.pop(future, None)
+
+    def get(self, timeout: float | None = None) -> _Item:
+        with self._condition:
+            if not self._condition.wait_for(lambda: self._items, timeout):
+                raise queue.Empty
+            return self._items.popitem(last=False)[1]
 
 
 class Batcher:
@@ -60,11 +124,9 @@ class Batcher:
             if max_round_tokens is None:
                 self.max_round_tokens = graphs.flat_max
         self._carry: _Item | None = None   # the request that did not fit the last round: first in the next
-        self.q: queue.Queue[_Item] = queue.Queue()
+        self.q = _Pending()
         self._local = threading.local()
-        self._planners = cf.ThreadPoolExecutor(max_workers=planners, thread_name_prefix="flide-plan",
-                                               initializer=self._init_planner)
-        start_planners(self._planners, planners)
+        self._planners = PlannerPool(planners, self._init_planner)
         self.rounds = 0
         self.requests = 0
         self.queue_s = 0.0
@@ -90,7 +152,7 @@ class Batcher:
         """Plan a request; the caller passes the plan to `forward` (a plan that fails is no longer counted)."""
         self._planned(1)
         fut = self._planners.submit(lambda: self._format().plan(request, **options))
-        fut.add_done_callback(lambda f: f.exception() is not None and self._planned(-1))
+        fut.add_done_callback(lambda f: (f.cancelled() or f.exception() is not None) and self._planned(-1))
         return fut
 
     def follow_up(self, request, plan, branches, **options) -> cf.Future:
@@ -106,12 +168,19 @@ class Batcher:
     def finish(self, request, plan, branches, **options) -> cf.Future:
         return self._planners.submit(lambda: self._format().finish(request, plan, branches, **options))
 
+    def discard_plan(self, plan) -> None:
+        self._planned(-1)
+
     def forward(self, plan) -> cf.Future:
         """Head outputs of one plan, as `Format.finish` takes them."""
         item = _Item(plan, cf.Future())
+        item.future.add_done_callback(lambda f: f.cancelled() and self.q.discard(f))
         self.q.put(item)
         self._planned(-1)
         return item.future
+
+    def cancel_forward(self, future: cf.Future) -> None:
+        future.cancel()
 
     def stats(self) -> dict:
         """What this batcher has served since start, and where the GPU thread's time went."""
@@ -121,16 +190,19 @@ class Batcher:
 
     # ---- GPU thread ------------------------------------------------------------------------------
 
-    def _take(self) -> list[_Item]:
+    def _take(self, wait: bool) -> list[_Item]:
         if self._carry is not None:
             items, self._carry = [self._carry], None
         else:
-            items = [self.q.get()]
+            try:
+                items = [self.q.get(timeout=None if wait else 0)]
+            except queue.Empty:
+                return []
         tokens = items[0].plan.tokens
         start = time.perf_counter()
         while tokens < self.max_round_tokens:
             try:
-                item = self.q.get_nowait()
+                item = self.q.get(timeout=0)
             except queue.Empty:
                 waited = time.perf_counter() - start
                 limit = max(self.window, self.gather if self._planning > 0 else 0.0)
@@ -153,11 +225,13 @@ class Batcher:
         torch.cuda.set_device(self.engine.backbone.device)
         inflight = None   # (items, launched round, start): queued on the GPU, outputs not yet collected
         while True:
-            if inflight is not None and self._carry is None and self.q.empty():
-                self._deliver(*inflight)
-                inflight = None
+            items = self._take(wait=inflight is None)
+            items = [item for item in items if item.future.set_running_or_notify_cancel()]
+            if not items:
+                if inflight is not None:
+                    self._deliver(*inflight)
+                    inflight = None
                 continue
-            items = self._take()
             t0 = time.perf_counter()
             try:
                 launched = self.engine.forward_launch([it.plan for it in items], mode="batch")
