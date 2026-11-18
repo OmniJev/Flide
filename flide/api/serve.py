@@ -83,7 +83,7 @@ def run(args) -> None:
 
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,
                                 args.host, args.port, args.planners, args.access_log, admission=admission is not None,
-                                api_key=api_key)
+                                api_key=api_key, include_meta=not args.no_meta)
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
@@ -96,7 +96,8 @@ def run(args) -> None:
     freeze_heap()
     if fronts is not None:
         return frontend.serve(batcher, fronts, admission)
-    app = create_app(engine, model_name=name, batcher=batcher, admission=admission, api_key=api_key)
+    app = create_app(engine, model_name=name, batcher=batcher, admission=admission, api_key=api_key,
+                     include_meta=not args.no_meta)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=args.access_log)
 
 
@@ -159,6 +160,8 @@ def add_parser(sub) -> None:
                    help="wait up to this long for requests still being planned to join a round (default 2)")
     s.add_argument("--api-key", default=None,
                    help="require Authorization: Bearer KEY on HTTP requests (also settable via FLIDE_API_KEY)")
+    s.add_argument("--no-meta", action="store_true",
+                   help="omit format metadata and timings from single and batch decision responses")
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--access-log", action="store_true",

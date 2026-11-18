@@ -100,6 +100,9 @@ Pass `--api-key` to `flide serve` or set the `FLIDE_API_KEY` environment variabl
 including `/health` and `/stats`. Clients send `Authorization: Bearer <key>`. Missing or invalid credentials
 return HTTP 401. Prefer the environment variable for deployment so the key stays out of the command line.
 
+Pass `--no-meta` to `flide serve` to omit format metadata and timings from decision responses, including each
+item in a batch response. Single responses contain `model`, `answers`, and `usage`.
+
 ## Example
 
 Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) has the code to run it yourself.

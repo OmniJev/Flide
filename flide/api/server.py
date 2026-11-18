@@ -150,7 +150,7 @@ def _query_options(params, debias: int) -> dict:
 
 
 def create_app(engine, model_name: str, description: str = "", release_date: str = "", batcher=None,
-               ready=None, admission=None, api_key: str | None = None) -> FastAPI:
+               ready=None, admission=None, api_key: str | None = None, include_meta: bool = True) -> FastAPI:
     """`ready`, when given, is asked by /health (503 "loading" until it says yes): front ends start before the model
     has loaded."""
     family = engine.format
@@ -220,7 +220,8 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
     def payload_of(response, meta) -> dict:
         response.model = model_name
         payload = response.model_dump()
-        payload[family.meta_key] = meta
+        if include_meta:
+            payload[family.meta_key] = meta
         return payload
 
     async def batch(request: Request, body: dict) -> JSONResponse:
@@ -333,10 +334,7 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
                                 content={"detail": [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]})
         except ImportError as exc:   # a package the request needs and the server lacks (torchvision for images)
             return JSONResponse(status_code=500, content={"detail": str(exc)})
-        response.model = model_name
-        payload = response.model_dump()
-        payload[family.meta_key] = meta
-        return JSONResponse(content=payload)
+        return JSONResponse(content=payload_of(response, meta))
 
     @app.api_route("/flush_cache", methods=["GET", "POST"])
     async def flush_cache():

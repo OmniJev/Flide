@@ -275,7 +275,7 @@ class RemoteBatcher:
 
 def run_frontend(fid: int, model_dir: str, family_name: str, family_options: dict, model_name: str, requests, replies,
                  host: str, port: int, planners: int, access_log: bool, ready=(), route=None, admission=False,
-                 api_key: str | None = None) -> None:
+                 api_key: str | None = None, include_meta: bool = True) -> None:
     import uvicorn
 
     from .. import formats
@@ -294,7 +294,7 @@ def run_frontend(fid: int, model_dir: str, family_name: str, family_options: dic
                            router, on_disconnect=stop_accepting)
     app = create_app(types.SimpleNamespace(format=family), model_name=model_name, batcher=bridge,
                      ready=lambda: bridge.connected() and all(e.is_set() for e in ready), admission=bridge if admission else None,
-                     api_key=api_key)
+                     api_key=api_key, include_meta=include_meta)
     config = uvicorn.Config(app, log_level="warning", access_log=access_log, backlog=2048)
     server = uvicorn.Server(config)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -429,7 +429,7 @@ def _dispatch_channels(batcher, channels, admission=None) -> None:
 
 def start(n: int, model_dir: str, family_name: str, family_options: dict, model_name: str, host: str, port: int,
           planners: int, access_log: bool, replicas: int = 1, slack: int = 8, admission: bool = False,
-          api_key: str | None = None):
+          api_key: str | None = None, include_meta: bool = True):
     """Start n front ends for `replicas` GPU processes (they serve /health as "loading" until every replica is up);
     returns what `serve` or `serve_replicas` needs."""
     import multiprocessing as mp
@@ -451,7 +451,7 @@ def start(n: int, model_dir: str, family_name: str, family_options: dict, model_
             replica_channels.append((request_reader, reply_writer))
         proc = ctx.Process(target=run_frontend, name=f"flide-front-{fid}", daemon=True,
                            args=(fid, model_dir, family_name, family_options, model_name, requests, replies, host, port,
-                                 planners, access_log, ready, route, admission, api_key))
+                                 planners, access_log, ready, route, admission, api_key, include_meta))
         proc.start()
         procs.append(proc)
         for connection in requests + replies:
