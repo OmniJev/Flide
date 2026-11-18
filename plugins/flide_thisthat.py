@@ -58,20 +58,48 @@ def _options_ids(tok, options: Sequence[str], label_ids: Sequence[int]) -> list[
     return out
 
 
-def build(tok, state: str, questions: Sequence[tuple[str, Sequence[str]]], *,
+def _question_block(tok, k: int, text: str, options: Sequence[str], multi: bool, lead: str,
+                    label_ids: Sequence[int]) -> list[int]:
+    head = f"{lead}Question{' ' + str(k + 1) if multi else ''}: {text}\nOptions:"
+    return tok.encode(head, add_special_tokens=False) + _options_ids(tok, options, label_ids)
+
+
+def build(tok, state: str, questions: Sequence[tuple[str, Sequence[str]]], *, layout: str = "state_first",
           max_state_tokens: int = DEFAULT_MAX_STATE_TOKENS) -> dict:
-    """The release's state-first layout: (ids, slot index per question, option count per question)."""
+    """The release's layout: (ids, slot index per question, option count per question, state-free prefix length).
+
+    `state_first` interleaves each question with its answer slot after the state; `schema_first` puts the
+    questions first, so their tokens are a prefix no state depends on -- the release's argument for reusing
+    that prefix across a stream of states.
+    """
+    if layout not in ("state_first", "schema_first"):
+        raise ValueError(f"layout must be 'state_first' or 'schema_first', got {layout!r}")
+    questions = list(questions)
+    if not questions:
+        raise ValueError("no questions")
     multi = len(questions) > 1
     labels, label_ids = label_table(tok)
-    lead = "\n\n"
+    if layout == "schema_first":
+        ids: list[int] = []
+        for k, (text, options) in enumerate(questions):
+            ids += _question_block(tok, k, text, options, multi, "\n\n" if k else "", label_ids)
+        prefix_len = len(ids)
+        ids += tok.encode("\n\nContext:\n", add_special_tokens=False)
+        ids += tok.encode(state, add_special_tokens=False)[:max_state_tokens]
+        slots: list[int] = []
+        for k in range(len(questions)):
+            lead = "\n\n" if k == 0 else "\n"
+            ids += tok.encode(f"{lead}Answer{' ' + str(k + 1) if multi else ''}: (", add_special_tokens=False)
+            slots.append(len(ids) - 1)
+        return {"ids": ids, "slots": slots, "n_options": [len(o) for _, o in questions],
+                "prefix_len": prefix_len}
     ids = tok.encode("Context:\n" + state, add_special_tokens=False)[: max_state_tokens + 3]
-    slots: list[int] = []
+    slots = []
     for k, (text, options) in enumerate(questions):
-        head = f"{lead}Question{' ' + str(k + 1) if multi else ''}: {text}\nOptions:"
-        ids += tok.encode(head, add_special_tokens=False) + _options_ids(tok, options, label_ids)
+        ids += _question_block(tok, k, text, options, multi, "\n\n", label_ids)
         ids += tok.encode(f"\nAnswer{' ' + str(k + 1) if multi else ''}: (", add_special_tokens=False)
         slots.append(len(ids) - 1)
-    return {"ids": ids, "slots": slots, "n_options": [len(o) for _, o in questions]}
+    return {"ids": ids, "slots": slots, "n_options": [len(o) for _, o in questions], "prefix_len": 0}
 
 
 def _legend(lines: Sequence[tuple[str, str | None]], heading: str) -> str:
@@ -114,6 +142,15 @@ def typed(name: str, q) -> tuple[str, list[str], list[str], str]:
     raise ValueError(f"question {name!r} has type {q.type!r}; this model answers noul, choice and score")
 
 
+def _slot_rows(outputs) -> list:
+    """The rows of the one read under schema_first, through whatever single-branch wrapper the engine hands."""
+    value = outputs[0]
+    while (isinstance(value, list) and len(value) == 1 and isinstance(value[0], list)
+           and value[0] and isinstance(value[0][0], list)):
+        value = value[0]
+    return value
+
+
 @register("thisthat")
 class ThisThat(Format):
     """flock-io/this-that-model: one state, N questions, N read positions, one pass."""
@@ -122,7 +159,7 @@ class ThisThat(Format):
     backbones = ("qwen3_5", "qwen3_5_text")
 
     def __init__(self, model_dir: str, tokenizer=None, temperature: float | None = None,
-                 max_state_tokens: int = DEFAULT_MAX_STATE_TOKENS, **_):
+                 max_state_tokens: int = DEFAULT_MAX_STATE_TOKENS, layout: str = "state_first", **_):
         import transformers
 
         self.model_dir = model_dir
@@ -130,6 +167,9 @@ class ThisThat(Format):
         self.labels, self.label_ids = label_table(self.tokenizer)
         self.temperature = DEFAULT_TEMPERATURE if temperature is None else float(temperature)
         self.max_state_tokens = int(max_state_tokens)
+        if layout not in ("state_first", "schema_first"):
+            raise ValueError(f"layout must be 'state_first' or 'schema_first', got {layout!r}")
+        self.layout = layout
         self.max_choice_options = len(self.label_ids)
 
     @classmethod
@@ -157,13 +197,18 @@ class ThisThat(Format):
                 raise ValueError(f"question {name!r}: labels must be distinct")
             questions.append((text, options))
             data.append((name, kind, tuple(labels), tuple(options)))
-        built = build(self.tokenizer, state, questions, max_state_tokens=self.max_state_tokens)
+        built = build(self.tokenizer, state, questions, layout=self.layout,
+                      max_state_tokens=self.max_state_tokens)
         ids = built["ids"]
         offsets = tuple(slot - len(ids) for slot in built["slots"])
+        if self.layout == "schema_first":
+            cut = built["prefix_len"]
+            return Plan(ids[:cut], [ids[cut:]], (Read(READ_HEAD, positions=offsets),), data)
         return Plan([], [ids], (Read(READ_HEAD, positions=offsets),), data)
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
-        rows = outputs[0][0]                 # the one read's rows: one per answer slot, in question order
+        rows = _slot_rows(outputs) if self.layout == "schema_first" \
+            else [out[0][0] for out in outputs]   # one row per answer slot, in question order
         answers = {}
         for (name, kind, labels, options), logits in zip(plan.data, rows):
             z = [logits[i] / self.temperature for i in range(len(labels))]
