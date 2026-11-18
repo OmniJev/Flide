@@ -7,3 +7,5 @@ dist/
 
 # Local profiling reports and logs
 /profiles/
+/log/
+/logs/
