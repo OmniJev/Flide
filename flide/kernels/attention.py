@@ -104,7 +104,7 @@ def _attention_fwd(Q, K1, V1, K2, V2, O, QJ, QB, QP, QX, K1J, K1B, K1P, K1X, K2J
                    scale_log2, Tq, window,
                    sq_t, sq_h, sk1_t, sk1_h, sv1_t, sv1_h, sk2_t, sk2_h, sv2_t, sv2_h, so_t, so_h,
                    G: tl.constexpr, D: tl.constexpr, DP: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                   WINDOW: tl.constexpr, BLOCKS: tl.constexpr, EXACT: tl.constexpr, SPLIT: tl.constexpr):
+                   COVERED, HAS_COVERAGE: tl.constexpr, WINDOW: tl.constexpr, BLOCKS: tl.constexpr, EXACT: tl.constexpr, SPLIT: tl.constexpr):
     # the grid runs every head of the last query block first: under a causal mask later blocks see more keys, and the
     # longest blocks going first leave no long block running alone at the end
     # SPLIT > 1: each program writes 1 / SPLIT of the value dims (scores over the whole head, once per part)
@@ -120,6 +120,10 @@ def _attention_fwd(Q, K1, V1, K2, V2, O, QJ, QB, QP, QX, K1J, K1B, K1P, K1X, K2J
     offs_d = tl.arange(0, DP)   # head dims not a power of two are padded with zeros
     offs_v = part * (DP // SPLIT) + tl.arange(0, DP // SPLIT)
     mq = offs_m < row_hi
+    if HAS_COVERAGE:
+        mq = mq & (tl.load(COVERED + offs_m, mask=mq, other=0) == 0)
+        if tl.sum(mq.to(tl.int32), 0) == 0:
+            return
     if DP != D:
         mqd = mq[:, None] & (offs_d[None, :] < D)
     else:
@@ -408,12 +412,21 @@ def runs(ranges, by_row: bool = False) -> int:
 
 
 def attention(q, k1, v1, k2, v2, q_meta, k1_meta, k2_meta, ranges, scale: float, window: int = 0,
-              cfg: dict | None = None, out=None, qranges=None):
+              cfg: dict | None = None, out=None, qranges=None, backend_metadata=None):
     """q [Tq, H, D]; k*, v* [T*, Hkv, D] (last dim contiguous); *_meta = (job, branch, position[, block]) int32 [T*]
     (blocks on all three or none); ranges from `block_ranges` with cfg["BLOCK_M"] (one program per tile and head).
     `qranges`: the per-query ranges `ranges` came from with exact=True, int32 [4, Tq] (rows lo1, hi1, lo2, hi2, any
     strides); they then mask the partly seen key blocks, and the key metadata is not read.
     Returns [Tq, H, D] in q's dtype."""
+    from .attention_backends import optimized_attention
+
+    optimized = optimized_attention(q, k1, v1, k2, v2, scale, window, backend_metadata)
+    if optimized is not None:
+        if out is not None:
+            out.copy_(optimized)
+        else:
+            out = optimized
+    covered = backend_metadata.covered if optimized is not None else None
     Tq, H, D = q.shape
     G = H // k2.shape[1]
     cfg = cfg or config(q.device, q.dtype, D)
@@ -438,5 +451,6 @@ def attention(q, k1, v1, k2, v2, q_meta, k1_meta, k2_meta, ranges, scale: float,
         k2.stride(0), k2.stride(1), v2.stride(0), v2.stride(1), out.stride(0), out.stride(1),
         G=G, D=D, DP=triton.next_power_of_2(D), BLOCK_M=cfg["BLOCK_M"], BLOCK_N=cfg["BLOCK_N"], WINDOW=window > 0,
         BLOCKS=blocks, EXACT=qranges is not None, SPLIT=split,
+        COVERED=covered, HAS_COVERAGE=covered is not None,
         num_warps=cfg["num_warps"], num_stages=cfg["num_stages"])
     return out

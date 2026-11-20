@@ -25,14 +25,15 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ... import lora
+from ... import lora, settings
 from ...formats.base import FINAL
 from ...kernels.fla import pin_fla_size_buckets
 from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
 from ...kernels.fp8 import mm, mm_into
-from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import (add_rms, ffn, ffn_add_rms, final_norm, gated_rms, gated_rms_segments,
+                  last_qkv, lerp, merge, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
 
@@ -118,6 +119,13 @@ class Qwen35(Backbone):
         n1 = self.layers[nxt].input_layernorm
         return h, rms(h, n1.weight, n1.eps)
 
+    def ffn_next(self, w, x, h, nxt: int | None, start=None):
+        """Fuse a plain MoE-to-next-layer transition; keep midloop and final handling."""
+        if start is not None or nxt is None:
+            return self.next_input(h, ffn(w, x), nxt, start)
+        norm = self.layers[nxt].input_layernorm
+        return ffn_add_rms(w, x, h, norm.weight, norm.eps)
+
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
              loader: str = "direct", quantize: str | None = None, tp: tuple[int, int] | None = None,
@@ -149,9 +157,17 @@ class Qwen35(Backbone):
             arch, cfg = getattr(transformers, f"{pre}ForCausalLM"), config.get_text_config()
             key_map, skip = [(r"^model\.language_model\.", "model.")], ("model.visual.", "mtp.")
         model = None
-        lean_fp8 = quantize == "fp8" and tp is None and not moe   # experts are read in 16 bits, then quantized
+        quant_config = getattr(config, "quantization_config", None) or {}
+        checkpoint_fp8 = quant_config.get("quant_method") == "fp8"
+        native_moe_fp8 = moe and checkpoint_fp8 and quantize == "fp8" and tp is None
+        if native_moe_fp8 and quant_config.get("weight_block_size"):
+            raise NotImplementedError("Qwen3.5 MoE: prequantized block FP8 is not supported; use tensor/row scales")
+        lean_fp8 = quantize == "fp8" and tp is None and (not moe or native_moe_fp8)
         store = {} if lean_fp8 else None
-        lean = _fp8_target if lean_fp8 else None
+        if lean_fp8 and moe:
+            lean = lambda name: name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
+        else:
+            lean = _fp8_target if lean_fp8 else None
         if loader == "none":
             from ..load import blank, build
 
@@ -164,6 +180,8 @@ class Qwen35(Backbone):
                 model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
                 load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store, merge=merge_lora)
             except (ValueError, FileNotFoundError) as exc:
+                if native_moe_fp8:
+                    raise RuntimeError(f"FP8 MoE direct load failed: {exc}") from exc
                 import logging
 
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
@@ -442,6 +460,11 @@ class Qwen35(Backbone):
 
         for i, layer in enumerate(self.layers):
             w, mlp = self._w[i], layer.mlp
+            if "experts" in w:
+                prefix = names[id(mlp.experts)]
+                for key, parameter in (("experts", "gate_up_proj"), ("experts_down", "down_proj")):
+                    w[key], w[key + "_scale"] = store.pop(prefix + "." + parameter)
+                continue
             w["gate_up"] = joined([mlp.gate_proj, mlp.up_proj])
             w["down"] = joined([mlp.down_proj])
             if self.layer_types[i] == "linear_attention":
@@ -543,8 +566,8 @@ class Qwen35(Backbone):
                 d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i)
             n2 = layer.post_attention_layernorm
             h, x = add_rms(h, d, n2.weight, n2.eps)
-            d = ffn(w, x)
-            h, x = self.next_input(h, d, order[p + 1][0] if p + 1 < len(order) else None, start if end else None)
+            h, x = self.ffn_next(w, x, h, order[p + 1][0] if p + 1 < len(order) else None,
+                                 start if end else None)
             if i + 1 in b.reads:
                 out[i + 1] = h[b.reads[i + 1]]
         if FINAL in b.reads:
@@ -643,7 +666,6 @@ class Qwen35(Backbone):
                 rec["S"][i] = S[j].clone()
                 rec["conv"][i] = [c[j].clone() for c in conv]
             outs.append(o)
-        op = torch.cat(outs, 1) if len(outs) > 1 else outs[0]
         bj = b.branch_job
         ys = []
         for part, (plo, phi, heads, dim) in enumerate(spec):
@@ -656,7 +678,8 @@ class Qwen35(Backbone):
                                         initial_state=S.index_select(0, bj), output_final_state=False,
                                         cu_seqlens=b.cu_suffix, cu_seqlens_cpu=b.cu_suffix_cpu, **gate)
         out = torch.empty(T, w["out"].shape[0], device=x.device, dtype=x.dtype)
-        mm_into(gated_rms(op[0], z[:Tp], m.norm.weight, m.norm.variance_epsilon), w["out"], out[:Tp])
+        mm_into(gated_rms_segments([o[0] for o in outs], z[:Tp], m.norm.weight, m.norm.variance_epsilon),
+                w["out"], out[:Tp])
         mm_into(gated_rms(os_[0], z[Tp:], m.norm.weight, m.norm.variance_epsilon), w["out"], out[Tp:])
         return out
 
@@ -671,7 +694,11 @@ class Qwen35(Backbone):
             R = attn_kernel.block_ranges(r[:, 0], r[:, 1], r[:, 2], r[:, 3], cfg["BLOCK_M"], cfg["BLOCK_N"],
                                          exact=True, groups=b.attn_runs)
             k1 = b.ctx["meta"] if b.ctx is not None else tok
-            meta = b.cache["attn"] = ("triton", tok, R, cfg, k1, r.T)
+            from ...kernels.attention_backends import prepare_attention
+            attention_metadata = prepare_attention(
+                r.T, R, dtype=self.dtype, head_dim=hd,
+                kv_capacity=b.ctx["len"] if b.ctx is not None else None)
+            meta = b.cache["attn"] = (attention_metadata, tok, R, cfg, k1, r.T)
         return meta
 
     def _attention_fused(self, m, w, x, cos, sin, mask, b: PackedBatch | None = None, i: int = -1, rows=None):
@@ -695,7 +722,8 @@ class Qwen35(Backbone):
             q, k = qk_norm_rope(q, k, cos, sin, m.q_norm.weight, m.k_norm.weight, m.q_norm.eps)
             tq = tok
         if b is None or b.ctx is None:
-            o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, R, m.scaling, 0, cfg, qranges=qr)
+            o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, R, m.scaling, 0, cfg, qranges=qr,
+                                      backend_metadata=mask[0] if rows is None else None)
             return mm(gate_out(o, gate), w["o"])
         # prefix keys and values from the context buffer: saved ones for resumed jobs, the stream's for the rest
         C, Tp = b.ctx, b.n_prefix_tokens
@@ -708,7 +736,8 @@ class Qwen35(Backbone):
             K0, V0 = entry.kv[i]
             Kc[c0: c0 + start].copy_(K0[:start])
             Vc[c0: c0 + start].copy_(V0[:start])
-        o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr)
+        o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr,
+                                  backend_metadata=mask[0] if rows is None else None)
         for j in b.marks:
             c0, P = C["start"][j], C["P"][j]
             b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"][i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())

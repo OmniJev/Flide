@@ -81,6 +81,28 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
+For an online service, pass `--max-running-requests 8 --max-queued-requests 16 --max-batch-tokens 16384`
+to `flide serve`. The first limit counts states from CPU planning through answer completion. The second
+counts states waiting for a slot (use `0` to reject immediately when all slots are in use). All HTTP front
+ends of the server share these limits. A batch body reserves space for all of its states at once. The server
+returns HTTP 429 if there is insufficient space. `/stats` reports `running_requests` and `queued_requests`
+when these limits are enabled.
+
+The token budget controls how many plans share an online GPU round. A larger individual plan is still
+allowed and runs in its own round. On HTTP disconnect, pending work is cancelled. GPU work already submitted
+is collected before its slot is released, so other requests in the same round can finish.
+When an HTTP front-end process exits, the GPU process cancels its pending tasks. Only slots needed for
+already submitted GPU work are held until completion. Other front ends continue serving requests.
+If the last front end exits, the serving process exits with an error so its supervisor can restart it.
+If a front end loses its GPU process, it fails outstanding GPU requests and shuts down its HTTP listener.
+
+Pass `--api-key` to `flide serve` or set the `FLIDE_API_KEY` environment variable to protect all HTTP routes,
+including `/health` and `/stats`. Clients send `Authorization: Bearer <key>`. Missing or invalid credentials
+return HTTP 401. Prefer the environment variable for deployment so the key stays out of the command line.
+
+Pass `--no-meta` to `flide serve` to omit format metadata and timings from decision responses, including each
+item in a batch response. Single responses contain `model`, `answers`, and `usage`.
+
 ## Example
 
 Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) has the code to run it yourself.
@@ -143,6 +165,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
 
 ## Options
+
+Install the experimental SM120 CuTe attention backend with `pip install '.[cute]'` and select it with `--attention-backend cute`; see [installation, coverage and fallback behavior](docs/attention-backends.md).
 
 | Option | What it does |
 |---|---|

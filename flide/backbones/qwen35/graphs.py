@@ -51,7 +51,8 @@ from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
 from ..base import capture_progress
-from .ops import add_rms, ffn, final_norm, gated_rms, last_qkv, qk_norm_rope, rms, rows_ranges, swiglu
+from .ops import (add_rms, final_norm, gated_rms, gated_rms_segments,
+                  last_qkv, qk_norm_rope, rms, rows_ranges, swiglu)
 from .ops import gate as gate_out
 
 log = logging.getLogger("flide.graphs")
@@ -392,6 +393,10 @@ class RequestGraphs:
         R = None if whole else attn_kernel.block_ranges(r[0], r[1], r[2], r[3], self.attn_cfg["BLOCK_M"],
                                                         self.attn_cfg["BLOCK_N"], exact=True,
                                                         groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
+        from ...kernels.attention_backends import prepare_attention
+        attention_metadata = (prepare_attention(
+            r, R, dtype=self.dtype, head_dim=bb.config.head_dim,
+            kv_capacity=SESSION_CTX if sess else None) if not whole else None)
         src = f["src"].view(3, T)
         slots = (f["cu"], f["chunks"].view(C, 2), (P // 2, P // 2) if sess else (P,), f["h0"])
         if sess:
@@ -431,11 +436,12 @@ class RequestGraphs:
                     Kc.index_copy_(0, ctx_idx, k)
                     Vc.index_copy_(0, ctx_idx, v)
                     o = attn_kernel.attention(q, Kc, Vc, k, v, tq, ctx_meta, tok, Rq, m.scaling, 0, self.attn_cfg,
-                                              qranges=rq)
+                                              qranges=rq, backend_metadata=attention_metadata if i != top else None)
                 elif whole:
                     o = _causal(q, k, v, m.scaling)
                 else:
-                    o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, Rq, m.scaling, 0, self.attn_cfg, qranges=rq)
+                    o = attn_kernel.attention(q, k, v, k, v, tq, tok, tok, Rq, m.scaling, 0, self.attn_cfg, qranges=rq,
+                                              backend_metadata=attention_metadata if i != top else None)
                 d = mm(gate_out(o, gate), w["o"])
                 if i == top:
                     h = h.index_select(0, reads)
@@ -581,8 +587,8 @@ class RequestGraphs:
         self.S[i].copy_(S)
         for c, t in zip(self.conv[i], conv):
             c.copy_(t)
-        o = outs[0] if len(outs) == 1 else torch.cat(outs, 1)
-        y = gated_rms(o.reshape(T, nv, m.head_v_dim), z, m.norm.weight, m.norm.variance_epsilon)
+        y = gated_rms_segments([o.reshape(-1, nv, m.head_v_dim) for o in outs], z,
+                               m.norm.weight, m.norm.variance_epsilon)
         return mm(y, w["out"])
 
     def _mlp(self, i, layer, w, h, d, step=None):
@@ -591,13 +597,9 @@ class RequestGraphs:
         bb = self.bb
         n2 = layer.post_attention_layernorm
         h, x = add_rms(h, d, n2.weight, n2.eps)
-        d = ffn(w, x)
         if step is not None:
-            return bb.next_input(h, d, *step)
-        if i + 1 < len(bb.layers):
-            n1 = bb.layers[i + 1].input_layernorm
-            return add_rms(h, d, n1.weight, n1.eps)
-        return h + d, None
+            return bb.ffn_next(w, x, h, *step)
+        return bb.ffn_next(w, x, h, i + 1 if i + 1 < len(bb.layers) else None)
 
     def _gdn(self, m, w, x, i, B, keep):
         """Gated DeltaNet over one sequence (B None: from zero state, final state kept when `keep`) or over

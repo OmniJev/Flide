@@ -8,7 +8,7 @@ version = "0.1.16"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES", "flide/kernels/vendor/flash_attn/cute/LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.12,<2.15",
@@ -20,6 +20,16 @@ dependencies = [
     "pillow",
     "fastapi",
     "uvicorn",
+]
+
+[project.optional-dependencies]
+cute = [
+    "nvidia-cutlass-dsl[cu13]==4.8.1",
+    "apache-tvm-ffi==0.1.16",
+    "torch-c-dlpack-ext==0.1.5",
+    "quack-kernels==0.6.5",
+    "einops",
+    "typing_extensions>=4.13",
 ]
 
 [project.scripts]
@@ -59,7 +69,7 @@ package-dir = {"" = "plugins", "flide" = "flide"}
 py-modules = ["flide_autotrust", "flide_clef", "flide_d1", "flide_d3", "flide_flexdm", "flide_glide", "flide_intern_decision", "flide_jdi", "flide_jeffan", "flide_karpo", "flide_kev", "flide_knowline", "flide_pplx", "flide_sieve", "flide_searchjev", "flide_thisthat", "flide_torchcast", "flide_wald", "flide_xor"]
 
 [tool.setuptools.package-data]
-flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tar.xz", "formats/known/*.json"]
+flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tar.xz", "formats/known/*.json", "kernels/vendor/flash_attn/cute/LICENSE", "kernels/vendor/flash_attn/cute/AUTHORS", "kernels/vendor/flash_attn/cute/UPSTREAM.json"]
 
 [tool.setuptools.packages.find]
 where = [".", "plugins"]
