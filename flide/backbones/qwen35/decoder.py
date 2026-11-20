@@ -51,6 +51,96 @@ def _fp8_target(name: str) -> bool:
     return "visual" not in name and _FP8_RE.search(name) is not None
 
 
+_TP_RE = None
+
+
+def _tp_target(name: str) -> bool:
+    """Decoder tensors that tensor parallelism cuts (`_tp_cuts`): the MLP and attention projections, and Gated
+    DeltaNet's projections, convolution and per-head decay."""
+    global _TP_RE
+    if _TP_RE is None:
+        import re
+
+        _TP_RE = re.compile(r"(^|\.)layers\.\d+\.(mlp\.(gate_proj|up_proj|down_proj)\.weight|linear_attn\.(in_proj_qkv|"
+                            r"in_proj_z|in_proj_b|in_proj_a|out_proj|conv1d)\.weight|linear_attn\.(A_log|dt_bias)|"
+                            r"self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight)$")
+    return "visual" not in name and _TP_RE.search(name) is not None
+
+
+def _tp_cuts(layers, layer_types, rank: int, size: int) -> list[dict]:
+    """Per decoder layer, {tensor path in the layer: (dimension, the part this rank keeps)} for tensor parallelism
+    (runtime/tp.py): its heads of the attention and Gated DeltaNet layers and its columns of the MLP in the products
+    that read the layer input, the matching input columns of the products that write the residual stream. Attention
+    heads and their key and value heads split evenly; Gated DeltaNet keeps whole groups (a key head with its value
+    heads)."""
+    from ...runtime.tp import split
+
+    out = []
+    for i, layer in enumerate(layers):
+        mlp = layer.mlp
+        part = split(mlp.gate_proj.weight.shape[0], rank, size)
+        cuts = {"mlp.gate_proj.weight": (0, part), "mlp.up_proj.weight": (0, part), "mlp.down_proj.weight": (1, part)}
+        if layer_types[i] == "linear_attention":
+            m = layer.linear_attn
+            kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads
+            split(m.num_k_heads, rank, size)
+            ks, vs, hs = split(kd, rank, size), split(vd, rank, size), split(nv, rank, size)
+            qkv = (ks, slice(kd + ks.start, kd + ks.stop), slice(2 * kd + vs.start, 2 * kd + vs.stop))   # q, k, v rows
+            cuts.update({"linear_attn.in_proj_qkv.weight": (0, qkv), "linear_attn.conv1d.weight": (0, qkv),
+                         "linear_attn.in_proj_z.weight": (0, vs), "linear_attn.in_proj_b.weight": (0, hs),
+                         "linear_attn.in_proj_a.weight": (0, hs), "linear_attn.A_log": (0, hs),
+                         "linear_attn.dt_bias": (0, hs), "linear_attn.out_proj.weight": (1, vs)})
+        else:
+            m = layer.self_attn
+            hd = m.head_dim
+            nh, nkv = m.q_proj.weight.shape[0] // (2 * hd), m.k_proj.weight.shape[0] // hd
+            hq, hk = split(nh, rank, size), split(nkv, rank, size)
+            kv = slice(hk.start * hd, hk.stop * hd)
+            cuts.update({"self_attn.q_proj.weight": (0, slice(hq.start * 2 * hd, hq.stop * 2 * hd)),
+                         "self_attn.k_proj.weight": (0, kv), "self_attn.v_proj.weight": (0, kv),
+                         "self_attn.o_proj.weight": (1, slice(hq.start * hd, hq.stop * hd))})
+        out.append(cuts)
+    return out
+
+
+def _read_tp(arch, cfg, model_dir: str, device: str, dtype: str, tp: tuple[int, int], to_fp8: bool, key_map, skip,
+             merge: bool):
+    """(model, float8 store, the parts): the model holding only this rank's part of the tensors `_tp_cuts` cuts, each
+    cut as it is read (load.py), so a rank never holds the whole model; with `to_fp8` the projections FP8 takes go into
+    the store as the lean FP8 load puts them, the rest stay in 16 bits."""
+    import re
+
+    from ..load import build, load_into
+
+    dev = torch.device(device)
+    model = build(arch, cfg, dev, getattr(torch, dtype), lean=_tp_target)
+    text = cfg.get_text_config() if hasattr(cfg, "get_text_config") else cfg
+    layers = next(m for n, m in model.named_modules() if (n == "layers" or n.endswith(".layers"))
+                  and "visual" not in n and "mtp" not in n and isinstance(m, torch.nn.ModuleList))
+    cuts = _tp_cuts(list(layers)[: text.num_hidden_layers], list(text.layer_types), *tp)
+    where = re.compile(r"(?:^|\.)layers\.(\d+)\.(.+)$")
+
+    def cut(name):
+        m = where.search(name)
+        i, path = int(m.group(1)), m.group(2)
+        if i >= len(cuts) or path not in cuts[i]:
+            raise ValueError(f"tensor parallel: no part for {name}")
+        return (*cuts[i][path], to_fp8 and _fp8_target(name))
+
+    store, held = {}, {}
+    load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=_tp_target, fp8=store, merge=merge, cut=cut,
+              held=held)
+    for name, t in held.items():
+        mod_name, pn = name.rsplit(".", 1)
+        setattr(model.get_submodule(mod_name), pn, torch.nn.Parameter(t, requires_grad=False))
+    for name, (q, _) in store.items():   # a float8 part's 16-bit weight stays on the meta device, at the part's shape
+        mod_name, pn = name.rsplit(".", 1)
+        mod = model.get_submodule(mod_name)
+        meta = torch.empty(q.shape, dtype=getattr(mod, pn).dtype, device="meta")
+        setattr(mod, pn, torch.nn.Parameter(meta, requires_grad=False))
+    return model.eval(), store, cuts
+
+
 class _Headless(torch.nn.Module):
     """A Qwen3_5Model or Qwen3_5TextModel where the backbone expects a model with an output head; it has none."""
 
@@ -111,12 +201,12 @@ class Qwen35(Backbone):
             if nxt is None:
                 return h + d, None
             n1 = self.layers[nxt].input_layernorm
-            return add_rms(h, d, n1.weight, n1.eps)
+            return add_rms(h, d, n1.weight, n1.eps, self.xdtype)
         h = lerp(start, h + d, 1.0 / self.midloop[0])
         if nxt is None:
             return h, None
         n1 = self.layers[nxt].input_layernorm
-        return h, rms(h, n1.weight, n1.eps)
+        return h, rms(h, n1.weight, n1.eps, self.xdtype)
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -127,7 +217,8 @@ class Qwen35(Backbone):
         "none" reads no weights (zeros).
         `quantize` "fp8": the decoder's projections are read as float8 (quantized while read, or as an FP8 checkpoint
         stores them), never held in 16 bits. `tp` (rank, size): this rank's shard of a tensor parallel model
-        (runtime/tp.py; read in 16 bits, cut, then quantized). `merge_lora`: a LoRA adapter merged into the weights as
+        (runtime/tp.py; with the "direct" loader each tensor is cut to this rank's part as it is read, then quantized,
+        so a rank never holds the whole model; otherwise read in 16 bits, cut, then quantized). `merge_lora`: a LoRA adapter merged into the weights as
         they are read (flide/lora.py)."""
         import transformers
 
@@ -148,7 +239,7 @@ class Qwen35(Backbone):
         else:
             arch, cfg = getattr(transformers, f"{pre}ForCausalLM"), config.get_text_config()
             key_map, skip = [(r"^model\.language_model\.", "model.")], ("model.visual.", "mtp.")
-        model = None
+        model, cut = None, None
         lean_fp8 = quantize == "fp8" and tp is None and not moe   # experts are read in 16 bits, then quantized
         store = {} if lean_fp8 else None
         lean = _fp8_target if lean_fp8 else None
@@ -161,13 +252,18 @@ class Qwen35(Backbone):
             from ..load import build, load_into
 
             try:
-                model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
-                load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store, merge=merge_lora)
+                if tp is not None and tp[1] > 1:   # each rank reads its part only
+                    model, store, cut = _read_tp(arch, cfg, model_dir, device, dtype, tp, quantize == "fp8", key_map,
+                                                 skip, merge_lora)
+                else:
+                    model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
+                    load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store,
+                              merge=merge_lora)
             except (ValueError, FileNotFoundError) as exc:
                 import logging
 
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
-                model, store = None, ({} if lean_fp8 else None)
+                model, store, cut = None, ({} if lean_fp8 else None), None
                 torch.cuda.empty_cache()
         if model is None:
             store = None   # transformers loads 16 bits; the forward quantizes them after
@@ -177,10 +273,13 @@ class Qwen35(Backbone):
         names = {id(m): n for n, m in model.named_modules()}
         if headless:
             model = _Headless(model)
-        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, **options)
+        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut, **options)
 
     def __init__(self, causal_lm, cuda_graphs: bool = False, quantize: str | None = None, fp8_store=None,
-                 tp: tuple[int, int] | None = None):
+                 tp: tuple[int, int] | None = None, float32_residual: bool = False, tp_cut: list | None = None):
+        """`float32_residual`: the residual stream stays in float32 between the layers; each norm rounds the input of
+        the products that read it once, and the final norm's output stays in float32 (off by default). `tp_cut`: the
+        parts the loader already cut the weights to (`_read_tp`)."""
         self.causal_lm = causal_lm
         inner = causal_lm.model
         self.vlm = inner if hasattr(inner, "visual") else None   # Qwen3_5Model: vision tower and M-RoPE indexing
@@ -191,12 +290,14 @@ class Qwen35(Backbone):
         self.layer_types = list(self.config.layer_types)
         p0 = next(causal_lm.parameters())
         self.device, self.dtype = p0.device, p0.dtype
+        self.float32_residual = bool(float32_residual)
+        self.xdtype = self.dtype if self.float32_residual else None   # the norms' output type (None: the stream's)
         self.cuda_graphs = cuda_graphs
         pin_fla_size_buckets()
         self.fp8 = False
         self.tp = tp if tp is not None and tp[1] > 1 else None
         if self.tp is not None:
-            self.shard(*self.tp)
+            self.shard(*self.tp, cuts=tp_cut)
         self._prepare_fused()
         if fp8_store is not None:
             self._fp8_from_store(*fp8_store)
@@ -212,67 +313,35 @@ class Qwen35(Backbone):
                     if key in w:
                         w[key] = RowParallel(w[key])
 
-    def shard(self, rank: int, size: int) -> None:
-        """Keep this rank's part of every decoder projection (tensor parallelism, runtime/tp.py): its heads of the
-        attention and Gated DeltaNet layers and its columns of the MLP in the products that read the layer input,
-        the matching input columns of the products that write the residual stream. Attention heads and their key
-        and value heads split evenly; Gated DeltaNet keeps whole groups (a key head with its value heads)."""
-        from ...runtime.tp import split
+    def shard(self, rank: int, size: int, cuts: list | None = None) -> None:
+        """Keep this rank's part of every decoder projection (tensor parallelism, runtime/tp.py; the parts are
+        `_tp_cuts`). A LoRA keeps the same rows of its B where its weight keeps rows, and the same columns of its A
+        where it keeps columns (the ranks' partial sums add up). `cuts`: the parts the loader cut the weights to already
+        (`_read_tp`), so only the LoRA parts and the layer sizes change here."""
+        from ..load import part
 
-        def take(t, idx, dim=0):
-            return (t.index_select(dim, idx) if isinstance(idx, torch.Tensor)
-                    else t.narrow(dim, idx.start, idx.stop - idx.start)).contiguous()
-
-        def keep(param, idx, dim=0):
-            return torch.nn.Parameter(take(param.data, idx, dim), requires_grad=False)
-
-        def rows(lin, idx):   # a LoRA keeps its A and the same rows of its B
-            if lin.bias is not None:
-                raise ValueError("tensor parallel: projections with a bias")
-            lin.weight = keep(lin.weight, idx)
-            if getattr(lin, "lora", None) is not None:
-                lin.lora = (lin.lora[0], take(lin.lora[1], idx))
-
-        def cols(lin, idx):   # a LoRA keeps the same columns of its A and its B (the ranks' partial sums add up)
-            lin.weight = keep(lin.weight, idx, 1)
-            if getattr(lin, "lora", None) is not None:
-                lin.lora = (take(lin.lora[0], idx, 1), lin.lora[1])
-
+        weights = cuts is None
+        if weights:
+            cuts = _tp_cuts(self.layers, self.layer_types, rank, size)
         for i, layer in enumerate(self.layers):
-            mlp = layer.mlp
-            part = split(mlp.gate_proj.weight.shape[0], rank, size)
-            rows(mlp.gate_proj, part)
-            rows(mlp.up_proj, part)
-            cols(mlp.down_proj, part)
+            for path, (dim, idx) in cuts[i].items():
+                mod_path, pn = path.rsplit(".", 1)
+                mod = layer.get_submodule(mod_path)
+                if isinstance(mod, torch.nn.Linear):
+                    if dim == 0 and mod.bias is not None:
+                        raise ValueError("tensor parallel: projections with a bias")
+                    lo = getattr(mod, "lora", None)
+                    if lo is not None:
+                        mod.lora = (lo[0], part(lo[1], idx)) if dim == 0 else (part(lo[0], idx, 1), lo[1])
+                if weights:
+                    setattr(mod, pn, torch.nn.Parameter(part(getattr(mod, pn).data, idx, dim), requires_grad=False))
             if self.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
-                kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads
-                split(m.num_k_heads, rank, size)
-                ks, vs, hs = split(kd, rank, size), split(vd, rank, size), split(nv, rank, size)
-                ar = lambda sl, base=0: torch.arange(sl.start, sl.stop, device=self.device) + base
-                qkv = torch.cat([ar(ks), ar(ks, kd), ar(vs, 2 * kd)])
-                rows(m.in_proj_qkv, qkv)
-                m.conv1d.weight = keep(m.conv1d.weight, qkv)
-                rows(m.in_proj_z, vs)
-                rows(m.in_proj_b, hs)
-                rows(m.in_proj_a, hs)
-                m.A_log = keep(m.A_log, hs)
-                m.dt_bias = keep(m.dt_bias, hs)
-                cols(m.out_proj, vs)
                 m.num_k_heads //= size
                 m.num_v_heads //= size
                 m.key_dim //= size
                 m.value_dim //= size
                 m.conv_dim = 2 * m.key_dim + m.value_dim
-            else:
-                m = layer.self_attn
-                hd = m.head_dim
-                nh, nkv = m.q_proj.weight.shape[0] // (2 * hd), m.k_proj.weight.shape[0] // hd
-                hq, hk = split(nh, rank, size), split(nkv, rank, size)
-                rows(m.q_proj, slice(hq.start * 2 * hd, hq.stop * 2 * hd))
-                rows(m.k_proj, slice(hk.start * hd, hk.stop * hd))
-                rows(m.v_proj, slice(hk.start * hd, hk.stop * hd))
-                cols(m.o_proj, slice(hq.start * hd, hq.stop * hd))
         torch.cuda.empty_cache()
 
     def request_graphs(self):
@@ -385,6 +454,10 @@ class Qwen35(Backbone):
         from .vision import pixels
 
         return pixels(v, pix, self.device)
+
+    def stream(self, h):
+        """The residual stream as the layers carry it (after the rotary tables are made from the embeddings)."""
+        return h.float() if self.float32_residual else h
 
     def _inputs(self, b: PackedBatch):
         T = b.n_tokens
@@ -516,8 +589,9 @@ class Qwen35(Backbone):
         # the last layer only at the final reads, when nothing else reads after it
         last = (top - 1 if top == self.num_layers and set(b.reads) <= {FINAL, 0}
                 and self.layer_types[top - 1] != "linear_attention" and not order[-1][2] else -1)
+        h = self.stream(h)
         n0 = self.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, self.xdtype)
         start = None
         for p, (i, first, end) in enumerate(order):
             layer = self.layers[i]
@@ -536,13 +610,13 @@ class Qwen35(Backbone):
                     rows = b.reads[FINAL]
                     d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i, rows=rows)
                     n2 = layer.post_attention_layernorm
-                    h, x = add_rms(h.index_select(0, rows), d, n2.weight, n2.eps)
+                    h, x = add_rms(h.index_select(0, rows), d, n2.weight, n2.eps, self.xdtype)
                     h = h + ffn(w, x)
                     out[FINAL] = final_norm(self.lm.norm, h)
                     return out
                 d = self._attention_fused(layer.self_attn, w, x, cos, sin, mask, b, i)
             n2 = layer.post_attention_layernorm
-            h, x = add_rms(h, d, n2.weight, n2.eps)
+            h, x = add_rms(h, d, n2.weight, n2.eps, self.xdtype)
             d = ffn(w, x)
             h, x = self.next_input(h, d, order[p + 1][0] if p + 1 < len(order) else None, start if end else None)
             if i + 1 in b.reads:
