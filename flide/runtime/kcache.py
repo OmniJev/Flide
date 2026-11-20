@@ -119,6 +119,30 @@ def _autotuner(obj):
     return obj
 
 
+LAUNCH = ("num_warps", "num_stages", "num_ctas", "maxnreg")   # the launch options an autotuner config may set
+
+
+def _kernel_config(jit, constants: dict, options: dict) -> dict:
+    """The constexpr values and launch options a kernel was compiled with, in an autotuner config's terms."""
+    out = {k: options[k] for k in LAUNCH if k in options}
+    names = getattr(jit, "arg_names", None) or []
+    for key, value in constants.items():
+        if isinstance(key, tuple) and len(key) == 1 and key[0] < len(names):
+            v = getattr(value, "value", value)
+            if v is None or isinstance(v, (bool, int, float, str)):
+                out[names[key[0]]] = v
+    return out
+
+
+def _picked(entry: dict, tuning: dict) -> bool:
+    """False for an autotuner's losing candidate: a kernel of a tuned function whose config no pick names (the
+    export compiled it only to time it). Kernels without a recorded config are kept."""
+    picks, cfg = tuning.get(entry["fn"]), entry.get("config")
+    if not picks or cfg is None:
+        return True
+    return any(all(cfg.get(k) == v for k, v in kw.items()) for _, kw in picks)
+
+
 def _config(cfg) -> dict | None:
     kw = {k: v for k, v in cfg.all_kwargs().items() if k != "pre_hook"}
     try:
@@ -316,6 +340,7 @@ class _Recorder:
 
     def __init__(self):
         self.seen = {}
+        self.configs = {}
 
     def __call__(self, *, key, repr, fn, compile, is_manual_warmup, already_compiled):
         from triton.compiler.compiler import ASTSource
@@ -323,7 +348,9 @@ class _Recorder:
         jit = fn.jit_function
         spec = json.loads(compile["specialization_data"])
         src = ASTSource(jit, compile["signature"], compile["constants"], compile["configs"][0])
-        self.seen[(src.hash(), json.dumps(_portable(spec["options"]), sort_keys=True))] = (_name(jit), src.name)
+        k = (src.hash(), json.dumps(_portable(spec["options"]), sort_keys=True))
+        self.seen[k] = (_name(jit), src.name)
+        self.configs[k] = _kernel_config(jit, compile["constants"], spec["options"])
         return None
 
 
@@ -334,9 +361,25 @@ def _pack(rec: _Recorder, out: Path) -> tuple[int, int]:
 
     target = _target()
     backend, env_vars = _backend(target), _env_vars()
-    kernels, missing = [], 0
+    tuning: dict[str, list] = {}
+    for a in gc.get_objects():
+        if isinstance(a, Autotuner) and a.cache:
+            jit = _jit(a)
+            for key, cfg in a.cache.items():
+                kw = _config(cfg)
+                try:
+                    json.dumps(list(key))
+                except TypeError:
+                    continue
+                if kw is not None:
+                    tuning.setdefault(_name(jit), []).append([list(key), kw])
+    kernels, missing, dropped = [], 0, 0
     buf = {}
     for i, ((src, opts), (fn, name)) in enumerate(sorted(rec.seen.items())):
+        cfg = rec.configs.get((src, opts))
+        if not _picked({"fn": fn, "config": cfg}, tuning):
+            dropped += 1
+            continue
         options = json.loads(opts)
         group = get_cache_manager(_hash(src, options, backend, env_vars)).get_group(f"{name[:150]}.json")
         if group is None:   # the portable recipe does not give back the key this kernel was filed under
@@ -352,19 +395,10 @@ def _pack(rec: _Recorder, out: Path) -> tuple[int, int]:
                 m.pop("extern_libs", None)
                 data = json.dumps(m).encode()
             buf[f"{d}/{f}"] = data
-        kernels.append({"fn": fn, "src": src, "options": options, "meta": meta, "dir": d, "files": files})
-    tuning: dict[str, list] = {}
-    for a in gc.get_objects():
-        if isinstance(a, Autotuner) and a.cache:
-            jit = _jit(a)
-            for key, cfg in a.cache.items():
-                kw = _config(cfg)
-                try:
-                    json.dumps(list(key))
-                except TypeError:
-                    continue
-                if kw is not None:
-                    tuning.setdefault(_name(jit), []).append([list(key), kw])
+        kernels.append({"fn": fn, "src": src, "options": options, "meta": meta, "dir": d, "files": files,
+                        **({"config": cfg} if cfg is not None else {})})
+    if dropped:
+        log.info("left out %d autotuner candidates that no pick names", dropped)
     man = {"format": FORMAT, "triton": triton.__version__, "target": target, "kernels": kernels, "tuning": tuning}
     _write(out, man, buf)
     return len(kernels), missing
@@ -468,8 +502,9 @@ def export(args) -> None:
 
 
 def merge(args) -> None:
-    """One bundle from several made with the same Triton on the same GPU target (kernels and picks united)."""
-    man, buf, seen = None, {}, set()
+    """One bundle from several made with the same Triton on the same GPU target (kernels and picks united), without
+    the autotuner candidates that none of the united picks names."""
+    man, entries, seen = None, [], set()
     for path in args.bundles:
         with tarfile.open(path, "r:*") as tar:
             m = json.load(tar.extractfile(MANIFEST))
@@ -482,15 +517,21 @@ def merge(args) -> None:
                 if k in seen:
                     continue
                 seen.add(k)
-                d = f"k{len(man['kernels']):05d}"
-                for f in e["files"]:
-                    buf[f"{d}/{f}"] = tar.extractfile(f"{e['dir']}/{f}").read()
-                man["kernels"].append({**e, "dir": d})
+                entries.append((e, {f: tar.extractfile(f"{e['dir']}/{f}").read() for f in e["files"]}))
             for fn, picks in m["tuning"].items():
                 have = man["tuning"].setdefault(fn, [])
                 have += [p for p in picks if p not in have]
+    buf, dropped = {}, 0
+    for e, files in entries:
+        if not _picked(e, man["tuning"]):
+            dropped += 1
+            continue
+        d = f"k{len(man['kernels']):05d}"
+        for f, data in files.items():
+            buf[f"{d}/{f}"] = data
+        man["kernels"].append({**e, "dir": d})
     _write(Path(args.out), man, buf)
-    print(f"{args.out}: {len(man['kernels'])} kernels")
+    print(f"{args.out}: {len(man['kernels'])} kernels" + (f", {dropped} autotuner candidates left out" if dropped else ""))
 
 
 def info(args) -> None:
