@@ -113,7 +113,12 @@ class SessionCache:
         self.evictions = self.replaced = 0
         self.probation: set[int] = set()   # entries no request has hit yet
         self.pbytes = 0                    # bytes the probation entries hold
-        self.hbudget = int(budget_bytes * PROTECTED) if budget_bytes else 0
+
+    @property
+    def hbudget(self) -> int:
+        """Bytes the protected entries may hold, read from the budget when used: an engine with an automatic size
+        sets the budget after it builds the cache."""
+        return int(self.budget * PROTECTED)
 
     def mark(self, n_prefix: int, start: int = 0) -> int | None:
         """Where to save the state of a prefix of n tokens that starts computing at `start`: the last stride multiple

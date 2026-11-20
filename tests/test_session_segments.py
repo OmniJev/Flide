@@ -53,6 +53,14 @@ def main():
           cache.used - cache.pbytes <= cache.hbudget, (cache.used, cache.pbytes, cache.hbudget))
     check("what is over the share falls back to probation", cache.stats()["probation"] >= 1, cache.stats())
 
+    # a budget set after the cache is built, as the engine sizes it with --session-cache-gb auto
+    late = SessionCache(0, min_tokens=1, stride=8)
+    late.budget = 4000
+    for i in range(3):
+        late.insert(entry([700 + i] * 20))
+        late.match([700 + i] * 21)
+    check("a budget set later gives protected its share", late.stats()["protected"] == 3, late.stats())
+
     # accounting
     check("probation bytes plus the rest are the cache's bytes", cache.pbytes + (cache.used - cache.pbytes) == cache.used)
     cache.clear()
