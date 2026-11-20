@@ -196,7 +196,8 @@ class RequestGraphs:
         # the last copy that reads them has finished.
         self.staged = torch.cuda.Event()
         self.staged.record()
-        self.out = torch.zeros(self.bmax, cfg.hidden_size, device=dev, dtype=dt)
+        odt = torch.float32 if bb.float32_residual else dt   # the final norm's output: float32 with a float32 stream
+        self.out = torch.zeros(self.bmax, cfg.hidden_size, device=dev, dtype=odt)
         self.k1_branch = torch.full((kmax,), -1, dtype=torch.int32, device=dev)
         hd = cfg.head_dim
         self.attn_cfg = attn_kernel.config(dev, dt, hd)
@@ -220,7 +221,7 @@ class RequestGraphs:
         self.flat_in = torch.zeros(nflat, dtype=torch.int32, device=dev)
         self.host_flat = torch.zeros(nflat, dtype=torch.int32, pin_memory=True)
         P, B, _ = flat_dims(FLAT_LADDER[-1])
-        self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=dt)
+        self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=odt)
         self.flat_max = FLAT_LADDER[-1]
         self.out_whole = None   # final-norm hidden states of the whole stream, for rounds read at every position
         # token embeddings of the round (vision features in place for requests with media), filled before each replay
@@ -282,8 +283,9 @@ class RequestGraphs:
         keep = L <= self.kmax
         self._valid = valid
         last = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -322,8 +324,9 @@ class RequestGraphs:
                                      self.attn_cfg["BLOCK_N"], exact=True)
         last = self.ar[:B] * Wd + self.lens[:B] - 1
         top = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -403,8 +406,9 @@ class RequestGraphs:
                     sb["convT"][i][:, :, 1:].flip(2).transpose(1, 2))
         reads = f["reads"]
         top = -1 if whole else self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         order, start = bb.layer_order(len(bb.layers)), None
         for p, (i, first, end) in enumerate(order):
             layer = bb.layers[i]
@@ -504,8 +508,9 @@ class RequestGraphs:
                                      self.attn_cfg["BLOCK_M"], self.attn_cfg["BLOCK_N"], exact=not Wb)
         dst = torch.where(real, pos, self.kmax)
         top = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -590,13 +595,13 @@ class RequestGraphs:
         backbone's layer_order (flat graphs); without it, layer i + 1 follows."""
         bb = self.bb
         n2 = layer.post_attention_layernorm
-        h, x = add_rms(h, d, n2.weight, n2.eps)
+        h, x = add_rms(h, d, n2.weight, n2.eps, bb.xdtype)
         d = ffn(w, x)
         if step is not None:
             return bb.next_input(h, d, *step)
         if i + 1 < len(bb.layers):
             n1 = bb.layers[i + 1].input_layernorm
-            return add_rms(h, d, n1.weight, n1.eps)
+            return add_rms(h, d, n1.weight, n1.eps, bb.xdtype)
         return h + d, None
 
     def _gdn(self, m, w, x, i, B, keep):
@@ -691,7 +696,7 @@ class RequestGraphs:
         if shape[0] == "flatw":
             if self.out_whole is None:
                 self.out_whole = torch.zeros(FLAT_LADDER[-1], self.out_flat.shape[1], device=self.device,
-                                             dtype=self.dtype)
+                                             dtype=self.out_flat.dtype)
             return lambda: self._flat(shape[1], whole=True)
         if shape[0] == "sflat":
             return lambda: self._flat(shape[1], sess=True)

@@ -131,6 +131,9 @@ class _Hidden:
 class D3(Format):
     backbones = ("qwen3_5", "qwen3_5_text")
     max_choice_options = MAX_OPTIONS
+    # the residual stream in float32: nearer a float32 reference than the release on d3-ultra, where the 16-bit stream
+    # was not
+    backbone_options = {"float32_residual": True}
 
     def __init__(self, model_dir: str, tokenizer=None, max_request_tokens: int = 262144):
         import transformers
