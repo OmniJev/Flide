@@ -2,8 +2,9 @@
 
     python tests/test_torchcast_attention.py
 
-The release reads decision_config.json's attention_mode; this family read the Plan default "causal" whatever the
-checkpoint declared, so every full-attention layer saw the prompt one way. This pins the mapping and the override.
+The release reads decision_config.json's attention_mode; a checkpoint that declares "noncausal_full_attention" reads
+every prompt whole both ways in the full-attention layers, so each question is a sequence of its own under attention
+"blocks". This pins the mapping and refuses a mode the family does not read.
 """
 import sys
 from pathlib import Path
@@ -38,14 +39,10 @@ def main():
           family.attention_of({"attention_mode": "noncausal_full_attention"}), "blocks")
     # a checkpoint that declares nothing, or declares causal, stays causal
     check("no attention_mode stays causal", family.attention_of({}), "causal")
+    check("attention_mode null stays causal", family.attention_of({"attention_mode": None}), "causal")
     check("attention_mode causal stays causal", family.attention_of({"attention_mode": "causal"}), "causal")
-    # the override wins over the checkpoint, so the two can be measured against each other
-    check("override beats the checkpoint",
-          family.attention_of({"attention_mode": "noncausal_full_attention"}, "causal"), "causal")
-    check("override prefix on a silent checkpoint", family.attention_of({}, "prefix"), "prefix")
     # a mode nobody implements is refused, not silently read one way
     refuses("unknown attention_mode", lambda: family.attention_of({"attention_mode": "full"}))
-    refuses("unknown override", lambda: family.attention_of({}, "bidir"))
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)
