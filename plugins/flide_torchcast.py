@@ -9,6 +9,10 @@ first, so the questions fork from it. A choice with one option is answered witho
 final round (grouped again when they are still more than 26); options left out keep `residual` of the mass, shared in
 proportion to their first-round probabilities.
 
+The yes/no floor (decision_config.json's noul_floor) applies as the release's model.py `_answer` does:
+a probability whose max(p, 1 - p) is under the floor moves onto the floor of its own side; the answer
+never changes.
+
 Images (data URLs or base64), as the release takes them: in a string state "<image>" marks where each goes, else they
 come first ("Image k: " before each when there are several); the image processor works at most 1M pixels and at least
 65,536 per image, and each image token stands for its merged patches.
@@ -41,6 +45,23 @@ READ = Read("letters")
 IMAGE = "<image>"
 SLOT = "\x00IMAGE\x00"
 MAX_PIXELS, MIN_PIXELS = 1 << 20, 65536
+
+
+def noul_floor_of(config: dict) -> float:
+    """The checkpoint's yes/no commit floor (0 = off), as the release's model.py reads it."""
+    floor = float(config.get("noul_floor", 0.0) or 0.0)
+    if floor and not 0.5 < floor < 1.0:
+        raise ValueError(f"noul_floor {floor}: must be in (0.5, 1), or 0 to turn it off")
+    return floor
+
+
+def noul_with_floor(p_yes: float, floor: float) -> float:
+    """`p_yes` under the release's floor (model.py `_answer`): a yes/no probability whose max(p, 1 - p) is under the
+    floor moves onto the floor of its own side (a tie goes to yes). The answer never changes."""
+    p = float(p_yes)
+    if floor and max(p, 1.0 - p) < floor:
+        return floor if p >= 0.5 else 1.0 - floor
+    return p
 
 
 def annotate(x):
@@ -135,6 +156,7 @@ class Torchcast(Format):
 
         self.model_dir = model_dir
         self.config = json.loads((Path(model_dir) / "decision_config.json").read_text())
+        self.noul_floor = noul_floor_of(self.config)
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
         self.letter_ids = self._letters()
         if self.letter_ids != self.config["letter_token_ids"]:
@@ -292,6 +314,10 @@ class Torchcast(Format):
                   "mm_token_type_ids": (torch.tensor(prefix) == self.image_token).long()[None]}
         return Plan(prefix, [r[m:] for r in rows], (READ,), data, vision=vision)
 
+    def _noul(self, p_yes: float):
+        """The yes/no answer of `p_yes`, under the checkpoint's floor like the release."""
+        return make_noul(noul_with_floor(p_yes, self.noul_floor))
+
     def _probs(self, out, kind: str, n: int) -> list[float]:
         t = self.temperature.get(kind, 1.0)
         z = [x / t for x in out[0][0][:n]]
@@ -398,7 +424,7 @@ class Torchcast(Format):
                 p = d["wide"][qid]["final"]
                 answers[qid] = make_choice(list(p), list(p.values()))
             elif q.type == "noul":
-                answers[qid] = make_noul(d["plain"][qid][0])
+                answers[qid] = self._noul(d["plain"][qid][0])
             elif q.type == "choice":
                 answers[qid] = make_choice([str(k) for k in q.criteria], d["plain"][qid])
             else:
@@ -532,7 +558,7 @@ class StartLux(Torchcast):
                 p = d["wide"][qid]["final"]
                 answers[qid] = make_choice(list(p), list(p.values()))
             elif q.type == "noul":
-                answers[qid] = make_noul(d["plain"][qid][0])
+                answers[qid] = self._noul(d["plain"][qid][0])
             elif q.type == "choice":
                 answers[qid] = make_choice([str(k) for k in q.criteria], d["plain"][qid])
             else:
