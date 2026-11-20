@@ -328,11 +328,13 @@ class SearchJev(Format):
     # ---------------------------------------------------------------- plan
     def plan(self, request: SystemOneRequest, **_) -> Plan:
         state = render_state(request.state)
+        if not state:
+            raise ValueError("empty state")
         rows, data = [], []
         for name, q in request.questions.items():
             kind = q.type
             options = build_options(kind, q.criteria)
-            instructions = q.instructions if isinstance(q.instructions, str) else ""
+            instructions = "" if q.instructions is None else str(q.instructions).strip()
             if not 2 <= len(options) <= len(self.labels):
                 raise ValueError(f"question {name!r} needs 2 to {len(self.labels)} options, got {len(options)}")
             rows.append(self._compose(state, kind, instructions or "", options))
