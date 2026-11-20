@@ -13,6 +13,10 @@ the checkpoint already holds it in float8 with a `weight_scale` (compressed-tens
 then holds the float8 copy only. A float8 tensor of such a checkpoint that FP8 keeps in 16 bits (Gated DeltaNet's gate
 projections) is read back to 16 bits through its scale.
 
+Tensor parallel: with `cut`, the tensors `lean` picks are cut to this rank's part as they are read (`cut(name)` gives
+the dimension and the part), then quantized into `fp8` (when `cut` says so) or kept in 16 bits in `held`, so a rank
+never holds the whole model.
+
 A LoRA adapter under lora/ of the directory (flide/lora.py) is read with the checkpoint (modules saved whole and
 an embedding's LoRA go into the tensors as they are read) and its projections' LoRA attached to the modules after it,
 unmerged, or with `merge` merged into their weights as they are read; with one, a failed read raises instead of
@@ -125,16 +129,32 @@ def blank(model, device=None, lean=None, fp8: dict | None = None) -> None:
     _init_buffers(model)
 
 
+def part(t, idx, dim: int = 0):
+    """The part `idx` (a slice, or a tuple of slices joined in order) of `t` along `dim`, in memory of its own (a view
+    would keep the whole of `t` alive)."""
+    if isinstance(idx, tuple):
+        return torch.cat([t.narrow(dim, s.start, s.stop - s.start) for s in idx], dim)
+    return t.narrow(dim, idx.start, idx.stop - idx.start).clone(memory_format=torch.contiguous_format)
+
+
+def _read_part(f, key: str, idx, dim: int):
+    """The part `idx` of checkpoint tensor `key`, read from the file alone (the rest never reaches the device)."""
+    sl = f.get_slice(key)
+    pieces = [sl[s.start: s.stop] if dim == 0 else sl[:, s.start: s.stop] for s in (idx if isinstance(idx, tuple) else (idx,))]
+    return pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim)
+
+
 @torch.inference_mode()
 def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | None = None,
-              skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None, merge: bool = False) -> dict:
+              skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None, merge: bool = False,
+              cut=None, held: dict | None = None) -> dict:
     from .. import lora
 
     adapter = lora.load(model_dir, device, merge)
     if adapter is None:
-        return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None)
+        return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None, cut, held)
     try:
-        out = _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter)
+        out = _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut, held)
         adapter.attach(model)
         adapter.check()
     except (ValueError, FileNotFoundError) as exc:
@@ -143,7 +163,7 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
     return out
 
 
-def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter) -> dict:
+def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=None, held=None) -> dict:
     from safetensors import safe_open
 
     t0 = time.perf_counter()
@@ -164,10 +184,43 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter) -> d
                 if t is None:
                     unused.append(key)
                     continue
+                if cut is not None and lean(name) and adapter is None and "F8" not in f.get_slice(key).get_dtype():
+                    # tensor parallel: this rank's part read alone, then float8 or 16 bits
+                    shape = tuple(f.get_slice(key).get_shape())
+                    if shape != tuple(t.shape):
+                        raise ValueError(f"{key}: checkpoint shape {shape}, model {tuple(t.shape)}")
+                    dim, idx, to_fp8 = cut(name)
+                    p = _read_part(f, key, idx, dim).to(device=device, dtype=t.dtype)
+                    if to_fp8:
+                        fp8[name] = quantize_rows(p)
+                    else:
+                        held[name] = p
+                    nbytes += p.numel() * p.element_size()
+                    filled.add(name)
+                    continue
                 if lean is not None and lean(name):
                     src = f.get_tensor(key)
                     if tuple(src.shape) != tuple(t.shape):
                         raise ValueError(f"{key}: checkpoint shape {tuple(src.shape)}, model {tuple(t.shape)}")
+                    if cut is not None:   # tensor parallel with a float8 checkpoint or a LoRA: read whole, then cut
+                        dim, idx, to_fp8 = cut(name)
+                        if src.dtype == FP8:
+                            scale = f.get_tensor(key + "_scale").float().reshape(-1, 1)
+                            if to_fp8:
+                                fp8[name] = (part(src, idx, dim), part(scale, idx) if dim == 0 else scale)
+                            else:
+                                held[name] = part((src.float() * scale).to(t.dtype), idx, dim)
+                        else:
+                            if adapter is not None:
+                                src = adapter.apply(key, src)
+                            p = part(src.to(t.dtype), idx, dim)
+                            if to_fp8:
+                                fp8[name] = quantize_rows(p)
+                            else:
+                                held[name] = p
+                        nbytes += src.numel() * src.element_size()
+                        filled.add(name)
+                        continue
                     if adapter is not None and src.dtype != FP8:
                         src = adapter.apply(key, src)
                     if src.dtype == FP8:
