@@ -50,6 +50,16 @@ def checkpoint_files(model_dir: str) -> list[Path]:
     return found
 
 
+def tensor_files(model_dir: str) -> dict[str, Path]:
+    """The shard of each tensor the checkpoint's index lists (empty without an index): a float8 weight's scale may sit
+    in another shard than the weight."""
+    d = Path(model_dir)
+    index = d / "model.safetensors.index.json"
+    if not index.is_file():
+        return {}
+    return {k: d / f for k, f in json.loads(index.read_text())["weight_map"].items()}
+
+
 def _set_dtype(config, dtype) -> None:
     """transformers builds sub-models from their own config's dtype; make every level say the run dtype."""
     seen = set()
@@ -172,8 +182,19 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
     targets = model.state_dict(keep_vars=True)
     rules = [(re.compile(a), b) for a, b in (key_map or [])]
     filled, unused, nbytes = set(), [], 0
+    where = tensor_files(model_dir)
     for path in checkpoint_files(model_dir):
         with safe_open(str(path), framework="pt", device=str(device)) as f:
+            here = set(f.keys())
+
+            def scale_of(key):
+                """A float8 weight's scale, from this shard or the one the index names."""
+                k = key + "_scale"
+                if k in here or k not in where:
+                    return f.get_tensor(k)
+                with safe_open(str(where[k]), framework="pt", device=str(device)) as g:
+                    return g.get_tensor(k)
+
             for key in f.keys():
                 name = key
                 for rx, rep in rules:
@@ -205,7 +226,7 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
                     if cut is not None:   # tensor parallel with a float8 checkpoint or a LoRA: read whole, then cut
                         dim, idx, to_fp8 = cut(name)
                         if src.dtype == FP8:
-                            scale = f.get_tensor(key + "_scale").float().reshape(-1, 1)
+                            scale = scale_of(key).float().reshape(-1, 1)
                             if to_fp8:
                                 fp8[name] = (part(src, idx, dim), part(scale, idx) if dim == 0 else scale)
                             else:
@@ -224,7 +245,7 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
                     if adapter is not None and src.dtype != FP8:
                         src = adapter.apply(key, src)
                     if src.dtype == FP8:
-                        fp8[name] = (src, f.get_tensor(key + "_scale").float().reshape(-1, 1))
+                        fp8[name] = (src, scale_of(key).float().reshape(-1, 1))
                     else:
                         fp8[name] = quantize_rows(src.to(t.dtype))
                     nbytes += src.numel() * src.element_size()
@@ -234,7 +255,7 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
                 if src.dtype == torch.float8_e4m3fn:
                     if lean is None:
                         raise ValueError(f"{key} is stored in float8; load this checkpoint with FP8 (--quantize fp8)")
-                    src = (src.float() * f.get_tensor(key + "_scale").float().reshape(-1, 1)).to(t.dtype)
+                    src = (src.float() * scale_of(key).float().reshape(-1, 1)).to(t.dtype)
                 if adapter is not None:
                     src = adapter.apply(key, src)
                 if tuple(src.shape) != tuple(t.shape):
