@@ -84,7 +84,7 @@ def run(args) -> None:
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,
                                 args.host, args.port, args.planners, args.access_log, admission=admission is not None,
                                 api_key=api_key, include_meta=not args.no_meta)
-    engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
+    engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype, budget=args.max_batch_tokens,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize, "tp": args.tp},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     batch_invariant=args.batch_invariant, attention_backend=args.attention_backend,
@@ -154,8 +154,9 @@ def add_parser(sub) -> None:
     s.add_argument("--max-queued-requests", type=_nonnegative_int,
                    help="maximum states waiting for a running slot; return HTTP 429 when full; requires "
                         "--max-running-requests (zero disables waiting)")
-    s.add_argument("--max-batch-tokens", type=_positive_int,
-                   help="token budget for combining plans in one online GPU round; an oversized plan runs alone")
+    s.add_argument("--max-batch-tokens", type=_positive_int, default=65536,
+                   help="token budget for online GPU rounds and engine micro-batches (default 65536); "
+                        "an oversized plan runs alone")
     s.add_argument("--batch-window-ms", type=float, default=0.0,
                    help="wait this long after the first waiting request for more to join its GPU round")
     s.add_argument("--gather-ms", type=float, default=None,
