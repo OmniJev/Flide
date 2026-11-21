@@ -18,4 +18,3 @@
 
 - [ ] One change in this pull request
 - [ ] The tests that cover the change pass on the GPU named above
-- [ ] No changes to README, docs or benchmark numbers

@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and with the session cache on, requests that share a start compute it once.
 - 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now reads only each GPU's part of the weights, so [mammoth-1](https://huggingface.co/baselabs/mammoth-1) in FP8 loads with 17 GB on each of two GPUs instead of 56.
 - 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
-- 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
 - 🔥 **2026-11-12** We added [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) and [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) in Flide 0.1.14, and GLiDE-27B also reads images.
 - 🔥 **2026-11-11** We added [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) and [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) in Flide 0.1.13, and precompiled kernels for RTX 40 series GPUs.
 - 🔥 **2026-11-10** We added [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) and [clef-flash](https://huggingface.co/Cloudflare/clef-flash) in Flide 0.1.12, and precompiled kernels for RTX 50 series and RTX PRO 6000 GPUs.

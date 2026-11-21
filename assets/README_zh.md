@@ -29,12 +29,14 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，开着 session cache 时，开头相同的请求只算一次开头。
+- 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行现在每张卡只读自己那一份权重，FP8 的 [mammoth-1](https://huggingface.co/baselabs/mammoth-1) 在两张卡上每张只占 17 GB，原来是 56 GB。
 - 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
-- 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
-- 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
+- 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。
 - 🔥 **2026-11-11** Flide 0.1.13 新增 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) 和 [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)，并为 RTX 40 系显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.12 新增 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) 和 [clef-flash](https://huggingface.co/Cloudflare/clef-flash)，并为 RTX 50 系和 RTX PRO 6000 显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.11 新增[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)，在一张 H200 上 28 秒给 1 万封邮件各回答 8 个问题。

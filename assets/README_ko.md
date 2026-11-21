@@ -29,12 +29,14 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-21** Flide 0.1.18에 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2), [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)를 추가하고, session cache를 켜면 앞부분이 같은 요청들은 그 앞부분을 한 번만 계산합니다.
+- 🔥 **2026-11-20** Flide 0.1.17에 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)를 추가하고, 텐서 병렬에서 각 GPU가 자기 몫의 가중치만 읽게 되어 FP8 [mammoth-1](https://huggingface.co/baselabs/mammoth-1)이 GPU 두 장에서 각각 56 GB 대신 17 GB로 로드됩니다.
 - 🔥 **2026-11-13** Flide 0.1.16에 [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039), [this-that](https://huggingface.co/flock-io/this-that-model-1.0)를 포함한 세 의사결정 모델 계열과, LiquidAI의 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)를 추가했습니다.
-- 🔥 **2026-11-12** Flide 0.1.15에 LiquidAI의 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)를 추가하고, Gemma 4도 `--quantize fp8`로 FP8로 실행되어 Gemma 4 12B가 24 GB 카드 한 장에 들어갑니다.
-- 🔥 **2026-11-12** Flide 0.1.14에 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B), [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)를 추가하고, GLiDE-27B는 이미지도 읽습니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-12** Flide 0.1.15에 LiquidAI의 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)를 추가하고, Gemma 4도 `--quantize fp8`로 FP8로 실행되어 Gemma 4 12B가 24 GB 카드 한 장에 들어갑니다.
+- 🔥 **2026-11-12** Flide 0.1.14에 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B), [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)를 추가하고, GLiDE-27B는 이미지도 읽습니다.
 - 🔥 **2026-11-11** Flide 0.1.13에 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3), [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)를 추가하고, RTX 40 시리즈 GPU용 사전 컴파일 커널을 넣었습니다.
 - 🔥 **2026-11-10** Flide 0.1.12에 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max), [clef-flash](https://huggingface.co/Cloudflare/clef-flash)를 추가하고, RTX 50 시리즈와 RTX PRO 6000 GPU용 사전 컴파일 커널을 넣었습니다.
 - 🔥 **2026-11-10** Flide 0.1.11에 [이메일 분류 데모](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)를 추가했습니다. H200 한 장으로 이메일 10,000통에 각각 8개의 질문을 28초 만에 답합니다.
