@@ -27,7 +27,6 @@ import torch
 
 from ... import lora
 from ...formats.base import FINAL
-from ...kernels.fla import pin_fla_size_buckets
 from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ...kernels import attention as attn_kernel
@@ -276,10 +275,13 @@ class Qwen35(Backbone):
         return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut, **options)
 
     def __init__(self, causal_lm, cuda_graphs: bool = False, quantize: str | None = None, fp8_store=None,
-                 tp: tuple[int, int] | None = None, float32_residual: bool = False, tp_cut: list | None = None):
+                 tp: tuple[int, int] | None = None, float32_residual: bool = False, tp_cut: list | None = None,
+                 float32_vision: bool = False):
         """`float32_residual`: the residual stream stays in float32 between the layers; each norm rounds the input of
         the products that read it once, and the final norm's output stays in float32 (off by default). `tp_cut`: the
-        parts the loader already cut the weights to (`_read_tp`)."""
+        parts the loader already cut the weights to (`_read_tp`). `float32_vision`: the vision tower in float32, its
+        products on TF32 tensor cores in the vision graphs, its features rounded once as they enter the decoder (off by
+        default)."""
         self.causal_lm = causal_lm
         inner = causal_lm.model
         self.vlm = inner if hasattr(inner, "visual") else None   # Qwen3_5Model: vision tower and M-RoPE indexing
@@ -290,10 +292,12 @@ class Qwen35(Backbone):
         self.layer_types = list(self.config.layer_types)
         p0 = next(causal_lm.parameters())
         self.device, self.dtype = p0.device, p0.dtype
+        self.float32_vision = bool(float32_vision) and self.vlm is not None
+        if self.float32_vision:
+            self.vlm.visual.float()
         self.float32_residual = bool(float32_residual)
         self.xdtype = self.dtype if self.float32_residual else None   # the norms' output type (None: the stream's)
         self.cuda_graphs = cuda_graphs
-        pin_fla_size_buckets()
         self.fp8 = False
         self.tp = tp if tp is not None and tp[1] > 1 else None
         if self.tp is not None:
@@ -402,6 +406,10 @@ class Qwen35(Backbone):
         return (("pixel_values", "image_grid_thw", cfg.image_token_id),
                 ("pixel_values_videos", "video_grid_thw", cfg.video_token_id))
 
+    def vision_token_ids(self) -> set[int]:
+        """The placeholder ids the vision features replace."""
+        return {token for _, _, token in self._vision_kinds()}
+
     @staticmethod
     def _carries(v: dict, pix: str) -> bool:
         return (v.get(pix) is not None or v.get(pix + "_u8") is not None
@@ -414,7 +422,7 @@ class Qwen35(Backbone):
         if getattr(self, "_vision_graphs", None) is None:
             from .vision import VisionGraphs
 
-            self._vision_graphs = VisionGraphs(self.vlm)
+            self._vision_graphs = VisionGraphs(self.vlm, tf32=self.float32_vision)
         return self._vision_graphs
 
     @torch.inference_mode()
@@ -626,8 +634,8 @@ class Qwen35(Backbone):
         return out
 
     def _gated_delta_fused(self, m, w, x, b: PackedBatch):
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T, Tp = x.shape[0], b.n_prefix_tokens
         kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads
@@ -664,8 +672,8 @@ class Qwen35(Backbone):
         """Gated DeltaNet when prefixes resume from saved states or are cut at marks: one call per prefix level,
         each starting from the conv window and recurrent state (float32) the level before left, then the suffixes.
         States at the marks are saved into `b.saved`."""
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T, Tp, J = x.shape[0], b.n_prefix_tokens, b.n_jobs
         kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads

@@ -37,10 +37,11 @@ def _ln_kernel(X, D, W, B, H_OUT, Y, N, sx, sd, sh, sy, eps, ADD: tl.constexpr, 
     tl.store(Y + row * sy + cols, y.to(Y.dtype.element_ty), mask=m)
 
 
-def layer_norm(x, w, b, eps: float, residual=None):
-    """LayerNorm(x [+ residual]) with weight and bias. With a residual, returns (x + residual, normalized)."""
+def layer_norm(x, w, b, eps: float, residual=None, out_dtype=None):
+    """LayerNorm(x [+ residual]) with weight and bias. With a residual, returns (x + residual, normalized). `out_dtype`:
+    the normalized output's (x's by default), for a float32 stream whose products read 16 bits."""
     T, N = x.shape
-    y = torch.empty_like(x)
+    y = torch.empty(x.shape, dtype=out_dtype or x.dtype, device=x.device)
     h = torch.empty_like(x) if residual is not None else x
     if T:
         d = residual if residual is not None else x

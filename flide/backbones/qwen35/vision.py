@@ -117,7 +117,12 @@ def _segment_attention(q, k, v, segs, scale: float) -> torch.Tensor:
 
 
 class VisionGraphs:
-    def __init__(self, vlm, max_graphs: int = 8):
+    def __init__(self, vlm, max_graphs: int = 8, residual32: bool = False, tf32: bool = False):
+        """`residual32`: the residual stream in float32 between the blocks, each norm's output rounded once for the
+        16-bit products that read it (the merger's norm too). `tf32`: a float32 tower's products on TF32 tensor cores
+        (captured so; the rest of the process keeps its own setting)."""
+        self.residual32 = residual32
+        self.tf32 = tf32
         self.visual = vlm.visual
         self.config = self.visual.config
         self.max_graphs = max_graphs
@@ -162,8 +167,12 @@ class VisionGraphs:
         n = pixels.shape[0]
         x = F.linear(pixels.reshape(n, -1).to(pe.weight.dtype), pe.weight.reshape(pe.weight.shape[0], -1), pe.bias)
         blocks = v.blocks
+        dt = x.dtype
+        od = dt if self.residual32 else None   # the norms' output: the products' 16 bits under a float32 stream
+        if self.residual32:
+            x = x.float()
         h, x = vk.layer_norm(x, blocks[0].norm1.weight, blocks[0].norm1.bias, blocks[0].norm1.eps,
-                             residual=pos.to(x.dtype))
+                             residual=pos.to(x.dtype), out_dtype=od)
         for bi, blk in enumerate(blocks):
             a = blk.attn
             qkv = F.linear(x, a.qkv.weight, a.qkv.bias).view(n, 3, a.num_heads, -1)
@@ -173,7 +182,7 @@ class VisionGraphs:
             else:
                 o = _segment_attention(q, k, qkv[:, 2], segs, a.scaling)
             d = F.linear(o.view(n, -1), a.proj.weight, a.proj.bias)
-            h, x = vk.layer_norm(h, blk.norm2.weight, blk.norm2.bias, blk.norm2.eps, residual=d)
+            h, x = vk.layer_norm(h, blk.norm2.weight, blk.norm2.bias, blk.norm2.eps, residual=d, out_dtype=od)
             mlp = blk.mlp
             # cuBLAS's bias-and-GELU epilogue approximates tanh too coarsely here (float32 features 4x further from a
             # float64 truth than transformers'), so the GELU stays a kernel of its own
@@ -181,10 +190,15 @@ class VisionGraphs:
             d = F.linear(y, mlp.linear_fc2.weight, mlp.linear_fc2.bias)
             if bi + 1 < len(blocks):
                 nxt = blocks[bi + 1].norm1
-                h, x = vk.layer_norm(h, nxt.weight, nxt.bias, nxt.eps, residual=d)
+                h, x = vk.layer_norm(h, nxt.weight, nxt.bias, nxt.eps, residual=d, out_dtype=od)
             else:
                 h = h + d
-        return v.merger(h)
+        if not self.residual32:
+            return v.merger(h)
+        m = v.merger   # its norm on the float32 stream, rounded once for fc1
+        x = h.view(-1, m.hidden_size) if m.use_postshuffle_norm else h
+        x = vk.layer_norm(x.contiguous(), m.norm.weight, m.norm.bias, m.norm.eps, out_dtype=dt).view(-1, m.hidden_size)
+        return m.linear_fc2(m.act_fn(m.linear_fc1(x)))
 
     @torch.inference_mode()
     def __call__(self, pixels: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
@@ -193,16 +207,21 @@ class VisionGraphs:
         key = (tuple(map(tuple, grid.tolist())), tuple(pixels.shape), pixels.dtype)
         entry = self.graphs.get(key)
         if entry is None:
-            consts = self._grid_constants(grid.to(pixels.device))
-            buf = torch.empty_like(pixels)
-            buf.copy_(pixels)
-            for _ in range(2):
-                self._body(buf, consts)
-            torch.cuda.synchronize()
-            g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g, pool=self.pool, capture_error_mode=capture_mode()):
-                out = self._body(buf, consts)
-            torch.cuda.synchronize()
+            keep = torch.backends.cuda.matmul.allow_tf32
+            torch.backends.cuda.matmul.allow_tf32 = self.tf32 or keep   # the graph keeps the products it captured
+            try:
+                consts = self._grid_constants(grid.to(pixels.device))
+                buf = torch.empty_like(pixels)
+                buf.copy_(pixels)
+                for _ in range(2):
+                    self._body(buf, consts)
+                torch.cuda.synchronize()
+                g = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(g, pool=self.pool, capture_error_mode=capture_mode()):
+                    out = self._body(buf, consts)
+                torch.cuda.synchronize()
+            finally:
+                torch.backends.cuda.matmul.allow_tf32 = keep
             entry = self.graphs[key] = (g, buf, out, consts)
             while len(self.graphs) > self.max_graphs:
                 self.graphs.popitem(last=False)
