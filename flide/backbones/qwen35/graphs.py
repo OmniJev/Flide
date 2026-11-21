@@ -71,6 +71,7 @@ FLAT_LADDER = (tuple(range(128, 512, 64)) + tuple(range(512, 2048, 128)) + tuple
                + tuple(range(4096, 8192, 256)) + tuple(range(8192, 16385, 512)))
 FLAT_REQUESTS = 64
 CHUNK = 64
+SHARE_MEDIA_HEAD = True   # the tower runs once per media in a flat replay; False runs it per sequence
 # session flat graphs (the session cache on): requests resuming from saved states or saving theirs, per replay, and
 # the keys their prefixes may hold in all (saved ones included)
 SESSION_REQUESTS = 16
@@ -544,8 +545,8 @@ class RequestGraphs:
         inputs whose decay and update are exactly 0, so the recurrent state after a segment is the state after its
         last real token; the convolution window is the last inputs before the end of the real tokens. With two
         segments the state between them is copied to the save-point buffers and B continues from it."""
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T = x.shape[0]
         kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads
@@ -607,8 +608,8 @@ class RequestGraphs:
     def _gdn(self, m, w, x, i, B, keep):
         """Gated DeltaNet over one sequence (B None: from zero state, final state kept when `keep`) or over
         B right-padded rows starting from the kept state."""
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T = x.shape[0]
         rows = 1 if B is None else B
@@ -993,11 +994,23 @@ class RequestGraphs:
         self.staged.record()
         dev_ids = self.flat_in[lay["ids"][0]: lay["ids"][1]]
         torch.index_select(self.lm.embed_tokens.weight, 0, dev_ids, out=self.emb_flat[:T])
+        heads = {}   # sequences of one plan carry the same media in the head they share: its tower runs once
         for j, (seq, _, media, _, _, _) in enumerate(items):
             if media is not None:
+                first = heads.get(id(media[0])) if SHARE_MEDIA_HEAD else None
+                if first is not None:
+                    k, end = first
+                    if len(seq) >= end and seq[:end] == items[k][0][:end]:
+                        self.emb_flat[starts[j]: starts[j] + end] = self.emb_flat[starts[k]: starts[k] + end]
+                        continue
                 s = slice(starts[j], starts[j] + len(seq))
                 self.emb_flat[s] = self.bb.encode_vision(dev_ids[s], self.emb_flat[s], [media[0]],
                                                           graphs=self.bb.vision_graphs(), host_ids=seq)
+                if first is None and SHARE_MEDIA_HEAD:
+                    marks = self.bb.vision_token_ids()
+                    end = 1 + max((i for i, t in enumerate(seq) if t in marks), default=-1)
+                    if end > 0:   # the head through its last vision token
+                        heads[id(media[0])] = (j, end)
 
     @torch.inference_mode()
     def run_flat(self, reqs):
