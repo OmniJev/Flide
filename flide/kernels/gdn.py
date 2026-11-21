@@ -33,7 +33,7 @@ def _blackwell() -> bool:
 def solve(k, g, beta, cu, chunks, HV: int, chunk_size: int = 64):
     """(I + A)^-1 of every chunk in the list, A the strictly lower, gated and beta-weighted part of K K^T, as
     [1, T, HV, 64] in k's dtype (fla's fused kkt + solve kernel, which returns on padding entries)."""
-    from fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_kkt_solve_kernel
+    from .fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_kkt_solve_kernel
 
     if chunk_size != 64:
         raise ValueError(f"chunk size {chunk_size}: the fused solve takes 64")
@@ -50,7 +50,7 @@ def _config_o(HV: int) -> dict:
     and rounds of 4 long or 16 short requests: 64-wide value blocks, 4 warps, 2 stages are
     within 4% of the best everywhere at 32 and 48 value heads; at 16 the 32-wide block costs single sequences less.
     Blackwell runs 2 warps (`_configs`), where a 64-wide block spills."""
-    from fla.utils import check_shared_mem
+    from .fla.utils import check_shared_mem
 
     if _blackwell():
         return dict(BV=32, num_warps=2, num_stages=2)
@@ -265,9 +265,9 @@ def flat(q, k, v, a, beta, A_log, dt_bias, cu, chunks, levels, h0_idx, resume=No
     after level 1, the final state (row of the returned states) it starts from; level 1 starts from
     resume[resume_idx[i]] when given, else from zero. `prepared`: q and k already L2-normalized, beta already through
     its sigmoid (`conv(..., l2norm_heads=...)`, `gates`)."""
-    from fla.modules.l2norm import l2norm_fwd
-    from fla.ops.common.gate import fused_beta_sigmoid
-    from fla.ops.gated_delta_rule.gate import gdn_gate_chunk_cumsum
+    from .fla.modules.norm.l2norm import l2norm_fwd
+    from .fla.ops.common.gate import fused_beta_sigmoid
+    from .fla.ops.gated_delta_rule.gate import gdn_gate_chunk_cumsum
 
     if not prepared:
         q, _ = l2norm_fwd(q)

@@ -111,7 +111,7 @@ def _jit(obj):
 
 def _autotuner(obj):
     """The autotuner inside a module attribute: through Triton's wrappers (`.fn`) and launch wrappers that keep the
-    kernel as `.kernel` (kernels/fla.py)."""
+    kernel as `.kernel`."""
     from triton.runtime.autotuner import Autotuner
 
     while obj is not None and not isinstance(obj, Autotuner):
@@ -270,14 +270,17 @@ def no_bundle() -> str | None:
 
 
 def tune() -> int:
-    """Put held autotuner picks into their autotuners. Kernel modules of flide and fla are imported for it (some
-    are imported only when graphs are captured, after the first kernels have run); others take their picks at a later
-    call once loaded."""
+    """Put held autotuner picks into their autotuners. Kernel modules of flide are imported for it (some are
+    imported only when graphs are captured, after the first kernels have run); others take their picks at a later call
+    once loaded. Picks recorded under fla's module names (bundles made while fla was a dependency) go to the copy in
+    kernels/fla, which keeps fla's module layout."""
     done = 0
     for fn in list(_picks):
         mod, qual = fn.split(":", 1)
+        if mod.split(".")[0] == "fla":
+            mod = f"{__name__.split('.')[0]}.kernels.{mod}"
         m = sys.modules.get(mod)
-        if m is None and mod.split(".")[0] in ("flide", "fla"):
+        if m is None and mod.split(".")[0] == __name__.split(".")[0]:
             try:
                 m = importlib.import_module(mod)
             except Exception as e:
