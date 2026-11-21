@@ -581,16 +581,16 @@ class Engine:
             if hasattr(graphs, "run_sflat"):
                 out = graphs.run_sflat([(plan.prefix, plan.suffixes, entry, start, mark)])
                 if out is not None:
-                    out = (out[0], out[1][0])
+                    out = (out[0], out[1][0])   # a list of (position, snapshot), the earlier mark first
             if out is None:
                 out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark)
             if out is None:
                 return None
-            hidden, snap = out
-            if snap is not None:
+            hidden, snaps = out
+            for pos, snap in snaps:
                 from .session import Entry
 
-                self.sessions.insert(Entry(plan.prefix[:mark], *snap), parent=entry)
+                self.sessions.insert(Entry(plan.prefix[:pos], *snap), parent=entry)
             head = read[0].head
             return self.heads[head](hidden) if head is not None else hidden
         item = self._flat_item(plan, graphs) if hasattr(graphs, "run_flat") else None
@@ -862,9 +862,8 @@ class Engine:
                 head = plans[i].branch_reads(0)[0].head
                 out[i] = self.heads[head](h[at: at + n]) if head is not None else h[at: at + n]
                 at += n
-                if snap is not None:
-                    mark = next(iter(snap[0]))
-                    entry = Entry(plans[i].prefix[:mark], *snap)
+                for pos, snap in snap or ():
+                    entry = Entry(plans[i].prefix, *snap)
                     self.sessions.insert(entry, parent=items[i][2])
                     trunks[i] = entry
 
