@@ -53,6 +53,8 @@ def model_config(model_dir: str):
 
 
 SMALL_CARD = 25 * 2 ** 30
+# requests of one round that share a start of this many tokens or more (in 64-token blocks) compute it once
+MERGE_MIN_TOKENS = 512
 
 
 def default_budget(total_bytes: int) -> int:
@@ -211,7 +213,7 @@ class Engine:
         if family.backbones and config.model_type not in family.backbones:
             raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
-        options = {**family.backbone_options, **(backbone_options or {})}
+        options = {**getattr(self.format, "backbone_options", family.backbone_options), **(backbone_options or {})}
         if family.merge_lora:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
@@ -707,14 +709,16 @@ class Engine:
             rounds.append(cur)
         return rounds
 
-    def _run_flat(self, plans) -> dict:
+    def _run_flat(self, plans, skip=()) -> dict:
         """Plans of a round through flat graphs: as many per replay as fit, in order (a plan without a prefix under block
-        attention as one item per branch, `_alone_items`)."""
+        attention as one item per branch, `_alone_items`); plans in `skip` are left out."""
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         if graphs is None or not hasattr(graphs, "run_flat"):
             return {}
         entries = []
         for i, p in enumerate(plans):
+            if i in skip:
+                continue
             item = self._flat_item(p, graphs)
             if item is not None:
                 entries.append((i, item))
@@ -743,24 +747,98 @@ class Engine:
             out[i] = self.heads[head](y) if head is not None else y
         return out
 
-    def _run_sflat(self, plans, skip) -> dict:
-        """Plans of a round that the session cache takes (resume from a saved state, save their own) through session
-        flat graphs, as many per replay as fit, in order; their save points go into the cache."""
+    def _sflat_reads_ok(self, p: Plan) -> bool:
+        """A plan the session flat graphs can read: text-only, every branch read once, at its last token, after the
+        final layer, by the same head."""
+        if not p.suffixes or not self._session_ok(p):
+            return False
+        reads = {p.branch_reads(b) for b in range(len(p.suffixes))}
+        if len(reads) != 1:
+            return False
+        (read,) = reads
+        return len(read) == 1 and read[0].layer is FINAL and read[0].positions == (-1,)
+
+    def _merge_groups(self, plans, skip=()) -> dict[int, tuple[int, int]]:
+        """Plans of a batch round that share their first MERGE_MIN_TOKENS tokens or more, in whole 64-token blocks:
+        {plan: (carrier, length)}. The carrier (the first plan of its group) runs first and saves its state at that
+        length, and the other plans of the group resume from it there, so the shared start is computed once; the length
+        is the one that saves the most tokens, and plans that share less wait for a group of their own. Only with
+        the session cache (its graphs carry the states). Under the batch-invariant products a merged request keeps the
+        bits it gets alone, with or without the session cache: the cut falls on a 64-token block, as a request's own
+        save points do (bench/merge_check.py --invariant)."""
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         if self.sessions is None or graphs is None or not hasattr(graphs, "run_sflat"):
             return {}
-        items = {}
+        from .session import BLOCK, _Hashes
+
+        cand = [i for i, p in enumerate(plans) if i not in skip and self._sflat_reads_ok(p)]
+        if len(cand) < 2:
+            return {}
+        chains = {i: _Hashes(plans[i].prefix).blocks for i in cand}
+        out: dict[int, tuple[int, int]] = {}
+        for a in cand:
+            if a in out:
+                continue
+            members = []
+            for b in cand:
+                if b == a or b in out:
+                    continue
+                ca, cb = chains[a], chains[b]
+                k = 0
+                while k + 1 < min(len(ca), len(cb)) and ca[k + 1] == cb[k + 1]:
+                    k += 1
+                n = k * BLOCK   # both prefixes run on past it, so each has tokens of its own after the shared start
+                if n >= MERGE_MIN_TOKENS and n < len(plans[a].prefix) and n < len(plans[b].prefix) \
+                        and plans[a].prefix[:n] == plans[b].prefix[:n]:
+                    members.append((b, n))
+            if members:   # the cut that saves the most tokens: the length times the members that share that much
+                n = max({m for _, m in members}, key=lambda c: (c * sum(m >= c for _, m in members), c))
+                out[a] = (a, n)
+                out.update((b, (a, n)) for b, m in members if m >= n)
+        return out
+
+    def _run_sflat(self, plans, skip, merge=None) -> dict:
+        """Plans of a round that the session cache takes (resume from a saved state, save their own) through session
+        flat graphs, as many per replay as fit, in order; their save points go into the cache. `merge` (from
+        `_merge_groups`): the carriers run in the first replays with their save point at the shared length, and the
+        other plans of their groups then resume from the carrier's saved state."""
+        graphs = getattr(self.backbone, "request_graphs", lambda: None)()
+        if self.sessions is None or graphs is None or not hasattr(graphs, "run_sflat"):
+            return {}
+        merge = merge or {}
+        items, later = {}, {}
         for i, p in enumerate(plans):
-            if i in skip or not p.suffixes or len(p.prefix) < self.sessions.min_tokens or not self._session_ok(p):
+            if i in skip or not self._sflat_reads_ok(p):
                 continue
-            reads = {p.branch_reads(b) for b in range(len(p.suffixes))}
-            if len(reads) != 1:
+            carrier, n = merge.get(i, (i, None))
+            if carrier != i:
+                later[i] = (carrier, n)
                 continue
-            (read,) = reads
-            if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,):
+            if n is None and len(p.prefix) < self.sessions.min_tokens:
                 continue
             entry, start = self.sessions.match(p.prefix)
-            items[i] = (p.prefix, p.suffixes, entry, start, self.sessions.mark(len(p.prefix), start))
+            mark = n if n is not None and start < n else self.sessions.mark(len(p.prefix), start)
+            items[i] = (p.prefix, p.suffixes, entry, start, mark)
+        out, trunks = {}, {}
+        self._sflat_rounds(graphs, plans, items, out, trunks)
+        if later:
+            items = {}
+            for i, (carrier, n) in later.items():
+                entry = trunks.get(carrier)
+                if entry is None or len(entry.tokens) != n:   # the carrier did not run or did not save there
+                    continue
+                p = plans[i]
+                self.sessions.hits += 1
+                self.sessions.saved_tokens += n
+                items[i] = (p.prefix, p.suffixes, entry, n, self.sessions.mark(len(p.prefix), n))
+            self._sflat_rounds(graphs, plans, items, out, trunks)
+        return out
+
+    def _sflat_rounds(self, graphs, plans, items, out, trunks) -> None:
+        """Replay `items` (plan -> session flat item) in rounds that fit, in order: head outputs into `out`, each save
+        point into the cache and into `trunks` (plan -> the Entry it saved)."""
+        from .session import Entry
+
         rounds, cur = [], []
         for i in items:
             if cur and graphs.sflat_shape([items[k] for k in cur + [i]]) is None:
@@ -769,7 +847,6 @@ class Engine:
             cur.append(i)
         if cur:
             rounds.append(cur)
-        out = {}
         for sel in rounds:
             res = graphs.run_sflat([items[i] for i in sel])
             if res is None:
@@ -782,11 +859,10 @@ class Engine:
                 out[i] = self.heads[head](h[at: at + n]) if head is not None else h[at: at + n]
                 at += n
                 if snap is not None:
-                    from .session import Entry
-
                     mark = next(iter(snap[0]))
-                    self.sessions.insert(Entry(plans[i].prefix[:mark], *snap), parent=items[i][2])
-        return out
+                    entry = Entry(plans[i].prefix[:mark], *snap)
+                    self.sessions.insert(entry, parent=items[i][2])
+                    trunks[i] = entry
 
     def _graph_outputs(self, plan: Plan):
         y = self._graph_hidden(plan)
@@ -815,9 +891,10 @@ class Engine:
         copies = None
         if mode in ("graphs", "alone", "batch"):
             ys, rest = {}, []
-            batched = self._run_flat(plans) if mode == "batch" else {}
+            merge = self._merge_groups(plans) if mode == "batch" else {}
+            batched = self._run_flat(plans, skip=merge) if mode == "batch" else {}
             if mode == "batch":
-                batched.update(self._run_sflat(plans, batched))
+                batched.update(self._run_sflat(plans, batched, merge))
             ys.update(batched)
             for i, p in enumerate(plans):
                 if i in batched:
