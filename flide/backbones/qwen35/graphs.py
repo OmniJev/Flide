@@ -56,6 +56,7 @@ from .ops import gate as gate_out
 
 log = logging.getLogger("flide.graphs")
 
+MARK_STRIDE = 256   # the session cache's mark spacing: the second save point is one stride before the last
 SEQUENCE_LADDER = (64, 96, 128, 160, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048,
                    2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192, 10240, 12288, 14336, 16384)
 WIDTH_LADDER = (16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048)
@@ -128,10 +129,10 @@ def flat_dims(T: int) -> tuple[int, int, int]:
 
 
 def sflat_dims(T: int) -> tuple[int, int, int]:
-    """Session flat graph of length T: prefix slots (two levels of SESSION_REQUESTS: up to the save point, then the
-    rest), branch slots, chunk-list length."""
+    """Session flat graph of length T: prefix slots (three levels of SESSION_REQUESTS: to the earlier save point, the
+    stride to the later one, then the rest), branch slots, chunk-list length."""
     chunks = T // 32 + 16
-    return 2 * SESSION_REQUESTS, chunks, chunks + SESSION_REQUESTS
+    return 3 * SESSION_REQUESTS, chunks, chunks + SESSION_REQUESTS
 
 
 def _flat_layout(T: int, sess: bool = False) -> dict:
@@ -139,10 +140,10 @@ def _flat_layout(T: int, sess: bool = False) -> dict:
     P, B, C = (sflat_dims if sess else flat_dims)(T)
     S = P + B
     fields = [("ids", T), ("pos", T), ("pos3", 3 * T), ("job", T), ("branch", T), ("ranges", 4 * T), ("src", 3 * T),
-              ("cu", S + 1), ("offsets", S + 1), ("h0", S - P // (2 if sess else 1)), ("chunks", 2 * C), ("reads", S)]
+              ("cu", S + 1), ("offsets", S + 1), ("h0", S - P // (3 if sess else 1)), ("chunks", 2 * C), ("reads", S)]
     if sess:
         R = SESSION_REQUESTS
-        fields += [("ctx", T), ("resume", R), ("snap", R), ("snapconv", 4 * R)]
+        fields += [("ctx", T), ("resume", R), ("snap", R), ("snapconv", 4 * R), ("snap2", R), ("snapconv2", 4 * R)]
     out, at = {}, 0
     for name, n in fields:
         out[name] = (at, at + n)
@@ -353,7 +354,8 @@ class RequestGraphs:
         request's prefix keys and values (saved ones first)."""
         if self.sess is None:
             bb, dev, dt, R = self.bb, self.device, self.dtype, SESSION_REQUESTS
-            sb = {"S": {}, "conv": {}, "snapS": {}, "snapconv": {}, "snapconvT": {}, "convT": {}, "K": {}, "V": {}}
+            sb = {"S": {}, "conv": {}, "snapS": {}, "snapconv": {}, "snapconvT": {}, "snapS2": {}, "snapconv2": {},
+                  "snapconvT2": {}, "convT": {}, "K": {}, "V": {}}
             for i, layer in enumerate(bb.layers):
                 if bb.layer_types[i] == "linear_attention":
                     m = layer.linear_attn
@@ -366,6 +368,9 @@ class RequestGraphs:
                     # the save points' windows and the resumed ones in the Entry layout ([cd, 4], oldest input first),
                     # so a round's saves and restores are contiguous copies grouped by dtype
                     sb["snapconvT"][i] = torch.zeros(R, cd, 4, device=dev, dtype=dt)
+                    sb["snapS2"][i] = torch.zeros(R, *sb["S"][i].shape[1:], device=dev, dtype=torch.float32)
+                    sb["snapconv2"][i] = torch.zeros(4 * R, cd, device=dev, dtype=dt)
+                    sb["snapconvT2"][i] = torch.zeros(R, cd, 4, device=dev, dtype=dt)
                     sb["convT"][i] = torch.zeros(R, cd, 4, device=dev, dtype=dt)
                 else:
                     shape = (SESSION_CTX, bb._w[i]["heads"][1], bb.config.head_dim)
@@ -397,7 +402,7 @@ class RequestGraphs:
                                                         self.attn_cfg["BLOCK_N"], exact=True,
                                                         groups=P + B + 1 if settings.batch_invariant else 2 * P + 1)
         src = f["src"].view(3, T)
-        slots = (f["cu"], f["chunks"].view(C, 2), (P // 2, P // 2) if sess else (P,), f["h0"])
+        slots = (f["cu"], f["chunks"].view(C, 2), (P // 3, P // 3, P // 3) if sess else (P,), f["h0"])
         if sess:
             sb = self._session_buffers()
             ctx_meta = (sb["meta"][0], sb["meta"][1], sb["meta"][2])
@@ -467,13 +472,15 @@ class RequestGraphs:
                          v.view(1, T, nv, m.head_v_dim), a, beta, m.A_log, m.dt_bias, cu, chunks, levels, h0,
                          resume=None if sb is None else sb["S"][i],
                          resume_idx=None if sb is None else sess["resume"], prepared=True)
-        if sb is not None:   # the state and the last four convolution inputs at every save point
-            sb["snapS"][i].copy_(ht.index_select(0, sess["snap"]))
-            idx = sess["snapconv"]   # rows of p (< T) or of the resumed windows (T + row)
-            rows = torch.where((idx < T)[:, None], p[:, :cd].index_select(0, idx.clamp(max=T - 1)),
-                               sb["conv"][i].index_select(0, (idx - T).clamp(min=0)))
-            sb["snapconv"][i].copy_(rows)
-            sb["snapconvT"][i].copy_(rows.view(SESSION_REQUESTS, 4, cd).flip(1).transpose(1, 2))
+        if sb is not None:   # the state and the last four convolution inputs at both save points
+            for key, conv_key, convt_key, state_key in (("snap", "snapconv", "snapconvT", "snapS"),
+                                                         ("snap2", "snapconv2", "snapconvT2", "snapS2")):
+                sb[state_key][i].copy_(ht.index_select(0, sess[key]))
+                idx = sess[conv_key]   # rows of p (< T) or of the resumed windows (T + row)
+                rows = torch.where((idx < T)[:, None], p[:, :cd].index_select(0, idx.clamp(max=T - 1)),
+                                   sb["conv"][i].index_select(0, (idx - T).clamp(min=0)))
+                sb[conv_key][i].copy_(rows)
+                sb[convt_key][i].copy_(rows.view(SESSION_REQUESTS, 4, cd).flip(1).transpose(1, 2))
         y = gated_rms(o.reshape(T, nv, m.head_v_dim), z, m.norm.weight, m.norm.variance_epsilon)
         return mm(y, w["out"])
 
@@ -1052,7 +1059,9 @@ class RequestGraphs:
             seq, sufs, _, _, start, m = self._sflat_parts(req)
             tokens += len(seq) - start + sum(map(len, sufs))
             nb += len(sufs)
-            chunks += -(-(m - start) // CHUNK) + -(-(len(seq) - m) // CHUNK) + sum(-(-len(x) // CHUNK) for x in sufs)
+            m2 = m - MARK_STRIDE if m - MARK_STRIDE > start else m   # no earlier mark to split at: all in level 1
+            chunks += (-(-(m2 - start) // CHUNK) + -(-(m - m2) // CHUNK) + -(-(len(seq) - m) // CHUNK)
+                       + sum(-(-len(x) // CHUNK) for x in sufs))
             ctx += len(seq)
         if ctx >= SESSION_CTX:
             return None
@@ -1086,20 +1095,26 @@ class RequestGraphs:
         cu, offsets, h0, reads = col("cu"), col("offsets"), col("h0"), col("reads")
         chunks = col("chunks").reshape(C, 2)
         ctx, resume, snap, snapconv = col("ctx"), col("resume"), col("snap"), col("snapconv")
+        snap2, snapconv2 = col("snap2"), col("snapconv2")
         meta = sb["host_meta"].numpy()
         dump = SESSION_CTX - 1
         parts = [self._sflat_parts(req) for req in reqs]
+        m2s = [m - MARK_STRIDE if m - MARK_STRIDE > start else m for seq, _, _, entry, start, m in parts]
         lens = np.zeros(S, np.int64)
-        c_at, starts1, starts2, cstart = 0, [], [], []
+        c_at, starts1, starts2, starts3, cstart = 0, [], [], [], []
         at = 0
-        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 1: resume point to save point
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 1: resume point to the earlier mark
             starts1.append(at)
-            at += m - start
-            lens[j] = m - start
-        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 2: the rest of each prefix
+            at += m2s[j] - start
+            lens[j] = m2s[j] - start
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 2: the stride to the last mark
             starts2.append(at)
+            at += m - m2s[j]
+            lens[R + j] = m - m2s[j]
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):   # level 3: the rest of each prefix
+            starts3.append(at)
             at += len(seq) - m
-            lens[R + j] = len(seq) - m
+            lens[2 * R + j] = len(seq) - m
         for j, (seq, *_rest) in enumerate(parts):
             cstart.append(c_at)
             meta[0, c_at: c_at + len(seq)] = j
@@ -1116,12 +1131,15 @@ class RequestGraphs:
                 return -1
             if q < start:
                 return T + 3 * j + (start - q - 1) if entry is not None and start - q <= 3 else -1
-            if q < m:
+            if q < m2s[j]:
                 return starts1[j] + q - start
-            return starts2[j] + q - m
+            if q < m:
+                return starts2[j] + q - m2s[j]
+            return starts3[j] + q - m
 
         for j, (seq, _, _, entry, start, m) in enumerate(parts):
-            for lo, hi, base in ((start, m, starts1[j]), (m, len(seq), starts2[j])):
+            for lo, hi, base in ((start, m2s[j], starts1[j]), (m2s[j], m, starts2[j]),
+                                 (m, len(seq), starts3[j])):
                 if hi <= lo:
                     continue
                 s_ = slice(base, base + hi - lo)
@@ -1162,7 +1180,8 @@ class RequestGraphs:
                     back = ar - d
                     src[d - 1, s_] = [at + x if x >= 0 else where(j, n + x) for x in back]
                 lens[P + b] = k_
-                h0[R + b] = R + j if len(seq) > m else j      # from the end of the prefix: level 2, or level 1
+                # from the end of the prefix: the last level that has tokens, else the one before it
+                h0[2 * R + b] = 2 * R + j if len(seq) > m else (R + j if m > m2s[j] else j)
                 reads[nread] = at + k_ - 1
                 nread += 1
                 at += k_
@@ -1181,24 +1200,34 @@ class RequestGraphs:
             src[:, s_] = -1
             ctx[s_] = dump
             lens[P + b] = T - at
-            h0[R + b] = 0
+            h0[2 * R + b] = 0
             b += 1
         h0[:R] = np.arange(R)                                 # level 2 starts from level 1's end
-        h0[R + b:] = 0
+        # level 3 starts from level 2's end, or from level 1's when level 2 is empty (no earlier mark to split at)
+        for j, (seq, _, _, entry, start, m) in enumerate(parts):
+            h0[R + j] = R + j if m > m2s[j] else j
+        h0[2 * R + b:] = 0
         reads[nread:] = 0
         resume[:] = R
         snap[:] = 0
         snapconv[:] = T + 3 * R                               # the zero row
+        snap2[:] = 0
+        snapconv2[:] = T + 3 * R
         out = []
         for j, (seq, _, _, entry, start, m) in enumerate(parts):
             if entry is not None:
                 resume[j] = j
             mark = reqs[j][4] if reqs[j][4] and reqs[j][4] > start else None
+            earlier = m2s[j] if mark and m2s[j] > start and m2s[j] < mark else None
             if mark:
-                snap[j] = j
+                snap[j] = R + j if m > m2s[j] else j   # level 2's end, or level 1's when level 2 is empty
                 snapconv[4 * j: 4 * j + 4] = [where(j, mark - d) if where(j, mark - d) >= 0 else T + 3 * R
                                               for d in (1, 2, 3, 4)]
-            out.append((cstart[j], mark))
+            if earlier:
+                snap2[j] = j             # the end of level 1, which is the earlier mark
+                snapconv2[4 * j: 4 * j + 4] = [where(j, earlier - d) if where(j, earlier - d) >= 0 else T + 3 * R
+                                               for d in (1, 2, 3, 4)]
+            out.append((cstart[j], mark, earlier))
         cu[0] = 0
         cu[1:] = np.cumsum(lens)
         nch = -(-lens // CHUNK)
@@ -1235,16 +1264,21 @@ class RequestGraphs:
         _grouped_copy(pairs)
         return out
 
-    def _sflat_entry(self, j: int, cstart: int, mark: int, pairs: list):
+    def _sflat_entry(self, j: int, cstart: int, mark: int, pairs: list, second: bool = False,
+                     upto: int | None = None):
         """(states, kv) at request j's save point, in the Entry layout, as views of one device allocation; the copies
-        that fill it are appended to `pairs` (a round's go in a few grouped copies)."""
+        that fill it are appended to `pairs` (a round's go in a few grouped copies). `second`: the earlier of the two
+        save points, whose state and window come from level 1's end."""
         sb = self.sess
-        parts = [sb["snapS"][i][j] for i in sb["snapS"]]
-        for i in sb["snapconvT"]:
-            win = sb["snapconvT"][i][j]                                     # [cd, 4]: oldest input first
+        states = sb["snapS2"] if second else sb["snapS"]
+        windows = sb["snapconvT2"] if second else sb["snapconvT"]
+        parts = [states[i][j] for i in states]
+        for i in windows:
+            win = windows[i][j]                                             # [cd, 4]: oldest input first
             kd = self.conv[i][0].shape[1]
             parts += [win[:kd], win[kd: 2 * kd], win[2 * kd:]]
-        parts += [t[cstart: cstart + mark] for i in sb["K"] for t in (sb["K"][i], sb["V"][i])]
+        upto = mark if upto is None else upto   # the packed path's shape: the whole prefix, not only up to the mark
+        parts += [t[cstart: cstart + upto] for i in sb["K"] for t in (sb["K"][i], sb["V"][i])]
         offsets, at = [], 0
         for p_ in parts:
             offsets.append(at)
@@ -1253,8 +1287,8 @@ class RequestGraphs:
         views = [mem[o: o + p_.numel() * p_.element_size()].view(p_.dtype).view(p_.shape) for p_, o in zip(parts, offsets)]
         pairs += zip(views, parts)
         it = iter(views)
-        S = {i: next(it) for i in sb["snapS"]}
-        conv = {i: [next(it) for _ in range(3)] for i in sb["snapconvT"]}
+        S = {i: next(it) for i in states}
+        conv = {i: [next(it) for _ in range(3)] for i in windows}
         kv = {i: (next(it), next(it)) for i in sb["K"]}
         return {mark: {"S": S, "conv": conv}}, kv
 
@@ -1269,11 +1303,29 @@ class RequestGraphs:
         if T is None or not self.capture(("sflat", T)):
             return None
         where = self._stage_sflat(reqs, T)
+        parts_len = [self._sflat_parts(req)[2] for req in reqs]
         self.graphs[("sflat", T)].replay()
         n = sum(max(1, len(req[1])) for req in reqs)
         hidden = self.out_flat[:n].clone()
         pairs = []
-        snaps = [self._sflat_entry(j, c, mark, pairs) if mark else None for j, (c, mark) in enumerate(where)]
+        snaps = []
+        for j, (c, mark, earlier) in enumerate(where):
+            # one entry, as the packed path saves it: the whole prefix's keys and values, with the state at both
+            # marks. Two entries with the same tokens would only duplicate the prefix.
+            out = []
+            plen = parts_len[j]
+            if earlier:
+                out.append(self._sflat_entry(j, c, earlier, pairs, second=True, upto=plen))
+            if mark:
+                out.append(self._sflat_entry(j, c, mark, pairs, upto=plen))
+            if not out:
+                snaps.append([])
+                continue
+            states, kv = {}, None
+            for st, k in out:
+                states.update(st)
+                kv = k
+            snaps.append([(mark or earlier, (states, kv))])
         _grouped_copy(pairs)
         return hidden, snaps
 
