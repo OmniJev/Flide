@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: the tag whose code goes into the image (default: the commit this runs on)
+        description: "the tag whose code goes into the image (default: the commit this runs on)"
         required: false
 
 env:
