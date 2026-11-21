@@ -85,7 +85,7 @@ def run(args) -> None:
                                 args.host, args.port, args.planners, args.access_log, admission=admission is not None,
                                 api_key=api_key, include_meta=not args.no_meta)
     engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype,
-                    backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize},
+                    backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize, "tp": args.tp},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     batch_invariant=args.batch_invariant, attention_backend=args.attention_backend,
                     **_family_options(family, options))
@@ -138,6 +138,8 @@ def add_parser(sub) -> None:
     s.add_argument("--quantize", default=None, choices=["fp8"],
                    help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+); "
                         "changes the numbers a little")
+    s.add_argument("--tp", type=int, default=1,
+                   help="tensor parallel over this many GPUs, --device and the ones after it (Qwen3.5 dense models)")
     s.add_argument("--max-branch-tokens", type=int, default=None)
     s.add_argument("--max-request-tokens", type=int, default=None)
     s.add_argument("--session-cache-gb", type=_cache_size, default=0.0,

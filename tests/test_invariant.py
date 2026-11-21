@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flide.kernels.invariant import CFG, NEEDS, SMALL_CFG, SMALL_M, pick
+from flide.kernels.invariant import CFG, MID_CFG, NEEDS, SMALL_CFG, SMALL_M, pick
 
 HOPPER = 232448                # sm_90: 227 KB of shared memory per block
 CONSUMER_BLACKWELL = 101376    # sm_120: 99 KB
@@ -27,7 +27,10 @@ def main():
     check("the wide shape fits Hopper's 227 KB", NEEDS[CFG] <= HOPPER, True)
 
     check("a long product on Hopper keeps the wide shape", pick(4096, HOPPER), CFG)
-    check(f"{SMALL_M} rows or fewer keep the narrow shape on Hopper", pick(SMALL_M, HOPPER), SMALL_CFG)
+    check(f"{SMALL_M} rows or fewer take the deeper narrow shape on Hopper", pick(SMALL_M, HOPPER), MID_CFG)
+    check("the deeper narrow shape does not fit 99 KB", NEEDS[MID_CFG] > CONSUMER_BLACKWELL, True)
+    check(f"{SMALL_M} rows or fewer keep the narrow shape on 99 KB", pick(SMALL_M, CONSUMER_BLACKWELL), SMALL_CFG)
+    check("the shapes share BK", len({CFG[2], MID_CFG[2], SMALL_CFG[2]}), 1)
     check("a long product on 99 KB takes the narrow shape", pick(4096, CONSUMER_BLACKWELL), SMALL_CFG)
     check("32 KB fits neither, so the portable kernel serves", pick(4096, 32768), None)
     check("a forced shape is returned unchanged", pick(4096, CONSUMER_BLACKWELL, cfg=CFG), CFG)

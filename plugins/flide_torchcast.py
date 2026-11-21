@@ -9,6 +9,17 @@ first, so the questions fork from it. A choice with one option is answered witho
 final round (grouped again when they are still more than 26); options left out keep `residual` of the mass, shared in
 proportion to their first-round probabilities.
 
+A checkpoint whose decision_config.json says attention_mode "noncausal_full_attention" (torchcast-decision-4b) is read
+as its release reads it: every question a sequence of its own, whole both ways in the full-attention layers (attention
+"blocks", nothing shared, images in the head every sequence starts with). Without the key, or with "causal", the
+questions fork from the evidence as above. A checkpoint with prompt_format "jev_render_v3" (the 4B's render.py) holds
+prompts to 16,384 tokens: a longer text prompt keeps the head and the tail of its state around a "\n...\n" line, cut
+again until it fits, the question and the options always kept; with images a longer prompt is refused.
+
+The yes/no floor (decision_config.json's noul_floor) applies as the release's model.py `_answer` does:
+a probability whose max(p, 1 - p) is under the floor moves onto the floor of its own side; the answer
+never changes.
+
 Images (data URLs or base64), as the release takes them: in a string state "<image>" marks where each goes, else they
 come first ("Image k: " before each when there are several); the image processor works at most 1M pixels and at least
 65,536 per image, and each image token stands for its merged patches.
@@ -34,6 +45,8 @@ SYSTEM = "Apply the criterion to the evidence. Choose exactly one listed option.
 LETTERS = string.ascii_uppercase
 MAX_OPTIONS = 26
 MAX_LEVELS = 10
+BUDGET_V3 = 16384   # jev_render_v3 (torchcast-decision-4b's render.py): the prompt budget, and the cut's marker
+ELLIPSIS = "\n...\n"
 THINK_OFF_SUFFIX = "<think>\n\n</think>\n\n"
 ANNOTATE_MIN = 8
 BARE = re.compile(r"^(?:\(?[A-Za-z][\).]?|\(?\d{1,3}[\).]?|option[_ ]?\d{1,3}|opt[_ ]?\d{1,3})$", re.I)
@@ -41,6 +54,35 @@ READ = Read("letters")
 IMAGE = "<image>"
 SLOT = "\x00IMAGE\x00"
 MAX_PIXELS, MIN_PIXELS = 1 << 20, 65536
+
+
+def attention_of(config: dict) -> str:
+    """decision_config.json's attention_mode as the plan's attention: the release's "noncausal_full_attention" (every
+    prompt whole both ways in the full-attention layers) is "blocks" over sequences of their own; no key, or "causal",
+    stays causal."""
+    mode = config.get("attention_mode") or "causal"
+    if mode == "noncausal_full_attention":
+        return "blocks"
+    if mode == "causal":
+        return "causal"
+    raise ValueError(f"attention_mode {mode!r}: this family reads causal or noncausal_full_attention")
+
+
+def noul_floor_of(config: dict) -> float:
+    """The checkpoint's yes/no commit floor (0 = off), as the release's model.py reads it."""
+    floor = float(config.get("noul_floor", 0.0) or 0.0)
+    if floor and not 0.5 < floor < 1.0:
+        raise ValueError(f"noul_floor {floor}: must be in (0.5, 1), or 0 to turn it off")
+    return floor
+
+
+def noul_with_floor(p_yes: float, floor: float) -> float:
+    """`p_yes` under the release's floor (model.py `_answer`): a yes/no probability whose max(p, 1 - p) is under the
+    floor moves onto the floor of its own side (a tie goes to yes). The answer never changes."""
+    p = float(p_yes)
+    if floor and max(p, 1.0 - p) < floor:
+        return floor if p >= 0.5 else 1.0 - floor
+    return p
 
 
 def annotate(x):
@@ -135,6 +177,10 @@ class Torchcast(Format):
 
         self.model_dir = model_dir
         self.config = json.loads((Path(model_dir) / "decision_config.json").read_text())
+        self.noul_floor = noul_floor_of(self.config)
+        self.whole = attention_of(self.config) == "blocks"
+        if self.whole:
+            self.attention = "blocks"
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
         self.letter_ids = self._letters()
         if self.letter_ids != self.config["letter_token_ids"]:
@@ -143,6 +189,9 @@ class Torchcast(Format):
         wide = self.config.get("wide_choice", {})
         self.group, self.keep, self.residual = wide.get("group", 25), wide.get("keep", 3), wide.get("residual", 1e-3)
         self.max_length = int(max_length)
+        self.cut = self.config.get("prompt_format") == "jev_render_v3"
+        if self.cut:
+            self.max_length = min(self.max_length, BUDGET_V3)
         self._pieces = Pieces(self.tokenizer)
         self._cut_checks = 0
 
@@ -215,6 +264,24 @@ class Torchcast(Format):
                 + "\nOptions:\n" + "\n".join(option_lines(q.type, opts)))
         return self._template(user)
 
+    def _fit(self, state: str, q, opts, n: int) -> list[int]:
+        """A text prompt of n tokens over the budget, as jev_render_v3's prompt_ids cuts it: the state keeps its head
+        and its tail around ELLIPSIS, cut again until the prompt fits."""
+        limit = self.max_length
+        if not self.cut:
+            raise ValueError(f"prompt is {n} tokens, limit is {limit}")
+        tokens = self.tokenizer.encode(state, add_special_tokens=False)
+        keep = len(tokens) - (n - limit) - 16   # room for the marker and for re-tokenisation at the joins
+        while keep > 0:
+            head = keep // 2
+            cut = (self.tokenizer.decode(tokens[:head]) + ELLIPSIS
+                   + self.tokenizer.decode(tokens[len(tokens) - (keep - head):]))
+            ids = self.tokenizer.encode(self._text(cut, q, opts), add_special_tokens=False)
+            if len(ids) <= limit:
+                return ids
+            keep -= max(16, len(ids) - limit + 16)
+        raise ValueError(f"the prompt does not fit in {limit} tokens even without its state")
+
     def _plan(self, request: SystemOneRequest, rows: list[tuple], data: dict) -> Plan:
         """rows: (question id, option keys or None, what the read stands for); one branch each, forked from the
         evidence."""
@@ -231,6 +298,15 @@ class Torchcast(Format):
             texts.append(self._text(state, q, opts))
         if refs:
             return self._media_plan(texts, refs, {**data, "rows": rows})
+        if self.whole:
+            seqs = []
+            for text, (qid, keys, _) in zip(texts, rows):
+                ids = self.tokenizer.encode(text, add_special_tokens=False)
+                if len(ids) > self.max_length:
+                    q = request.questions[qid]
+                    ids = self._fit(state, q, options_of(q, keys), len(ids))
+                seqs.append(ids)
+            return Plan([], seqs, (READ,), {**data, "rows": rows}, attention="blocks")
         shared = texts[0]
         for t in texts[1:]:
             n = 0
@@ -290,7 +366,13 @@ class Torchcast(Format):
             raise ValueError("the images must sit in the evidence, before every question")
         vision = {"pixel_values": enc["pixel_values"], "image_grid_thw": enc["image_grid_thw"],
                   "mm_token_type_ids": (torch.tensor(prefix) == self.image_token).long()[None]}
+        if self.whole:   # every prompt whole, the images in the head they share, which the token types cover
+            return Plan([], rows, (READ,), data, vision=vision, attention="blocks")
         return Plan(prefix, [r[m:] for r in rows], (READ,), data, vision=vision)
+
+    def _noul(self, p_yes: float):
+        """The yes/no answer of `p_yes`, under the checkpoint's floor like the release."""
+        return make_noul(noul_with_floor(p_yes, self.noul_floor))
 
     def _probs(self, out, kind: str, n: int) -> list[float]:
         t = self.temperature.get(kind, 1.0)
@@ -398,7 +480,7 @@ class Torchcast(Format):
                 p = d["wide"][qid]["final"]
                 answers[qid] = make_choice(list(p), list(p.values()))
             elif q.type == "noul":
-                answers[qid] = make_noul(d["plain"][qid][0])
+                answers[qid] = self._noul(d["plain"][qid][0])
             elif q.type == "choice":
                 answers[qid] = make_choice([str(k) for k in q.criteria], d["plain"][qid])
             else:
@@ -532,7 +614,7 @@ class StartLux(Torchcast):
                 p = d["wide"][qid]["final"]
                 answers[qid] = make_choice(list(p), list(p.values()))
             elif q.type == "noul":
-                answers[qid] = make_noul(d["plain"][qid][0])
+                answers[qid] = self._noul(d["plain"][qid][0])
             elif q.type == "choice":
                 answers[qid] = make_choice([str(k) for k in q.criteria], d["plain"][qid])
             else:

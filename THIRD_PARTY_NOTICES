@@ -1,6 +1,8 @@
-flide/kernels/gdn.py contains a Triton kernel derived from two kernels of flash-linear-attention
-(https://github.com/fla-org/flash-linear-attention): chunk_gated_delta_rule_fwd_kernel_h_blockdim64 and
-chunk_fwd_kernel_o. They are used under the MIT License:
+flide/kernels/fla holds the forward Gated DeltaNet kernels of flash-linear-attention 0.6.0
+(https://github.com/fla-org/flash-linear-attention), copied with their wrappers and trimmed to the forward
+path (the chunked gated delta rule, its causal convolution, L2 norm, beta sigmoid and gate), and
+flide/kernels/gdn.py contains a Triton kernel derived from two of them:
+chunk_gated_delta_rule_fwd_kernel_h_blockdim64 and chunk_fwd_kernel_o. They are used under the MIT License:
 
 MIT License
 

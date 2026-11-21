@@ -10,9 +10,14 @@ at the position, plus the full-attention keys and values before it. Nothing is a
 request computes the same function as a fresh one (rounding differs as it does between any two packings).
 
 Lookup hashes the prefix in blocks of 64 tokens, so a probe costs one pass over the request's tokens; a hit is
-confirmed token by token. Entries live on the GPU and are evicted least recently used under a byte budget. An entry
-saved by a request that resumed from another, over the same tokens and further, replaces that one: an agent's step
-holds every key and value its previous step held, so one agent keeps one entry.
+confirmed token by token. An entry saved by a request that resumed from another, over the same tokens and further,
+replaces that one: an agent's step holds every key and value its previous step held, so one agent keeps one entry.
+
+The cache has two segments. A new entry goes to *probation*, a share of the budget; a hit promotes it to
+*protected*, and while protected is over its share the least recently used of it falls back to probation. Eviction
+takes probation first. A request seen once therefore sits in probation and cannot push out a prefix that keeps
+coming back, while a prefix seen twice hits while still in probation -- unlike admitting only a second sighting,
+which would compute it twice.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from collections import OrderedDict
 
 
 BLOCK = 64
+PROTECTED = 0.75   # of the budget that entries a request has hit may hold; the rest is probation
 
 
 def _bytes(x) -> int:
@@ -105,6 +111,14 @@ class SessionCache:
         self._next = 0
         self.hits = self.misses = self.saved_tokens = 0
         self.evictions = self.replaced = 0
+        self.probation: set[int] = set()   # entries no request has hit yet
+        self.pbytes = 0                    # bytes the probation entries hold
+
+    @property
+    def hbudget(self) -> int:
+        """Bytes the protected entries may hold, read from the budget when used: an engine with an automatic size
+        sets the budget after it builds the cache."""
+        return int(self.budget * PROTECTED)
 
     def mark(self, n_prefix: int, start: int = 0) -> int | None:
         """Where to save the state of a prefix of n tokens that starts computing at `start`: the last stride multiple
@@ -116,8 +130,20 @@ class SessionCache:
         return m if start < m < n_prefix else None
 
     def marks(self, n_prefix: int, start: int = 0) -> tuple[int, ...]:
+        """The last stride mark and the one before it. The last is where a request that only extends this prefix
+        resumes from; the earlier one is what a request that shares the prefix but diverges before the last mark
+        still matches -- a shared preamble with a different tail, which otherwise hits nothing and recomputes the
+        whole trunk. Both are stride multiples, so the graph path's ladder could carry them too."""
+        if n_prefix < self.min_tokens:
+            return ()
         m = self.mark(n_prefix, start)
-        return () if m is None else (m,)
+        if m is None:
+            return ()
+        out = [m]
+        previous = m - self.stride
+        if previous > start:
+            out.insert(0, previous)
+        return tuple(out)
 
     def match(self, tokens) -> tuple[Entry | None, int]:
         """The entry and position to resume `tokens` (a prefix) from: the furthest saved position, at most one
@@ -133,6 +159,7 @@ class SessionCache:
             entry = self.entries[eid]
             if entry.tokens[:pos] == tokens[:pos]:
                 self.entries.move_to_end(eid)
+                self._promote(eid)
                 self.hits += 1
                 self.saved_tokens += pos
                 return entry, pos
@@ -141,7 +168,12 @@ class SessionCache:
 
     def insert(self, entry: Entry, parent: Entry | None = None) -> None:
         """Keep `entry`, evicting the least recently used ones it needs room from; `parent`, the entry the request
-        that saved it resumed from, goes first when `entry` covers its tokens."""
+        that saved it resumed from, goes first when `entry` covers its tokens.
+
+        A new entry enters probation unless the request resumed from a cached entry: that prefix has already been
+        reused once, so it goes to protected and one-off requests cannot push it out. Protected is capped at
+        `PROTECTED` of the budget, and the least recently used of it falls back to probation when it is over.
+        Eviction takes probation first."""
         if entry.bytes > self.budget or not entry.states:
             return
         if parent is not None and len(parent.tokens) <= len(entry.tokens) \
@@ -151,20 +183,56 @@ class SessionCache:
                 self._remove(eid)
                 self.replaced += 1
         while self.used + entry.bytes > self.budget and self.entries:
-            self._remove(next(iter(self.entries)))
+            self._remove(self._victim())
             self.evictions += 1
         eid = self._next
         self._next += 1
         self.entries[eid] = entry
         self.used += entry.bytes
+        if parent is None:
+            self.probation.add(eid)
+            self.pbytes += entry.bytes
+        else:
+            self._demote_over_share(eid)
         hashes = _Hashes(entry.tokens)
         for pos in entry.states:
             self.index[hashes.key(pos)] = eid
             self.positions[pos] = self.positions.get(pos, 0) + 1
 
+    def _demote_over_share(self, keep: int | None = None) -> None:
+        """While protected holds more than its share of the budget, its least recently used entry falls back to
+        probation (`keep` is the entry just placed there)."""
+        while self.used - self.pbytes > self.hbudget:
+            oldest = next((k for k in self.entries if k not in self.probation and k != keep), None)
+            if oldest is None:
+                break
+            self.probation.add(oldest)
+            self.pbytes += self.entries[oldest].bytes
+
+    def _victim(self, probation_only: bool = False) -> int:
+        """The entry to evict: the least recently used one in probation, else the least recently used overall."""
+        for eid in self.entries:
+            if eid in self.probation:
+                return eid
+        if probation_only:
+            return None
+        return next(iter(self.entries))
+
+    def _promote(self, eid: int) -> None:
+        """A hit moves an entry from probation to protected, and protected gives back what it holds over its share."""
+        if eid not in self.probation:
+            return
+        entry = self.entries[eid]
+        self.probation.discard(eid)
+        self.pbytes -= entry.bytes
+        self._demote_over_share(eid)
+
     def _remove(self, eid: int) -> None:
         entry = self.entries.pop(eid)
         self.used -= entry.bytes
+        if eid in self.probation:
+            self.probation.discard(eid)
+            self.pbytes -= entry.bytes
         hashes = _Hashes(entry.tokens)
         for pos in entry.states:
             key = hashes.key(pos)
@@ -181,8 +249,11 @@ class SessionCache:
         self.entries.clear()
         self.index.clear()
         self.positions.clear()
+        self.probation.clear()
         self.used = 0
+        self.pbytes = 0
 
     def stats(self) -> dict:
-        return {"entries": len(self.entries), "bytes": self.used, "hits": self.hits, "misses": self.misses,
+        return {"entries": len(self.entries), "bytes": self.used, "probation": len(self.probation),
+                "protected": len(self.entries) - len(self.probation), "hits": self.hits, "misses": self.misses,
                 "saved_tokens": self.saved_tokens, "evictions": self.evictions, "replaced": self.replaced}

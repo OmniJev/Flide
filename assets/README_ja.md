@@ -29,12 +29,14 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、session cache を有効にすると、先頭が同じリクエストはその部分を 1 回だけ計算します。
+- 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列では各 GPU が自分の分の重みだけを読むようになり、FP8 の [mammoth-1](https://huggingface.co/baselabs/mammoth-1) は 2 枚の GPU でそれぞれ 56 GB ではなく 17 GB で読み込めます。
 - 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
-- 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
-- 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
+- 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。
 - 🔥 **2026-11-11** Flide 0.1.13 で [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3)、[JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) に対応し、RTX 40 シリーズ向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.12 で [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max)、[clef-flash](https://huggingface.co/Cloudflare/clef-flash) に対応し、RTX 50 シリーズと RTX PRO 6000 向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.11 で[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)を追加しました。H200 1 枚で 1 万通のメールそれぞれの 8 つの質問に 28 秒で答えます。

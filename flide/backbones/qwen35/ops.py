@@ -31,8 +31,9 @@ def merge(linears) -> torch.Tensor:
 
 
 
-def rms(x, w, eps: float):
-    return pw.rms_norm(x, w, eps)
+def rms(x, w, eps: float, dtype=None):
+    """`dtype`: the output's (x's by default), the products' input when x is a float32 residual stream."""
+    return pw.rms_norm(x, w, eps, dtype=dtype)
 
 
 # with the batch-invariant products the final norm is the Triton kernel (one program per row): torch's reduction
@@ -43,8 +44,8 @@ def final_norm(norm, h):
     return pw.rms_norm(h, norm.weight, norm.eps) if settings.batch_invariant else norm(h)
 
 
-def add_rms(h, d, w, eps: float):
-    return pw.rms_norm(h, w, eps, residual=d)
+def add_rms(h, d, w, eps: float, dtype=None):
+    return pw.rms_norm(h, w, eps, residual=d, dtype=dtype)
 
 
 def lerp(x, y, g: float):

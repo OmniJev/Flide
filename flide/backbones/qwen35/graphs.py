@@ -72,6 +72,7 @@ FLAT_LADDER = (tuple(range(128, 512, 64)) + tuple(range(512, 2048, 128)) + tuple
                + tuple(range(4096, 8192, 256)) + tuple(range(8192, 16385, 512)))
 FLAT_REQUESTS = 64
 CHUNK = 64
+SHARE_MEDIA_HEAD = True   # the tower runs once per media in a flat replay; False runs it per sequence
 # session flat graphs (the session cache on): requests resuming from saved states or saving theirs, per replay, and
 # the keys their prefixes may hold in all (saved ones included)
 SESSION_REQUESTS = 16
@@ -197,7 +198,8 @@ class RequestGraphs:
         # the last copy that reads them has finished.
         self.staged = torch.cuda.Event()
         self.staged.record()
-        self.out = torch.zeros(self.bmax, cfg.hidden_size, device=dev, dtype=dt)
+        odt = torch.float32 if bb.float32_residual else dt   # the final norm's output: float32 with a float32 stream
+        self.out = torch.zeros(self.bmax, cfg.hidden_size, device=dev, dtype=odt)
         self.k1_branch = torch.full((kmax,), -1, dtype=torch.int32, device=dev)
         hd = cfg.head_dim
         self.attn_cfg = attn_kernel.config(dev, dt, hd)
@@ -221,7 +223,7 @@ class RequestGraphs:
         self.flat_in = torch.zeros(nflat, dtype=torch.int32, device=dev)
         self.host_flat = torch.zeros(nflat, dtype=torch.int32, pin_memory=True)
         P, B, _ = flat_dims(FLAT_LADDER[-1])
-        self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=dt)
+        self.out_flat = torch.zeros(P + B, cfg.hidden_size, device=dev, dtype=odt)
         self.flat_max = FLAT_LADDER[-1]
         self.out_whole = None   # final-norm hidden states of the whole stream, for rounds read at every position
         # token embeddings of the round (vision features in place for requests with media), filled before each replay
@@ -283,8 +285,9 @@ class RequestGraphs:
         keep = L <= self.kmax
         self._valid = valid
         last = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -323,8 +326,9 @@ class RequestGraphs:
                                      self.attn_cfg["BLOCK_N"], exact=True)
         last = self.ar[:B] * Wd + self.lens[:B] - 1
         top = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -408,8 +412,9 @@ class RequestGraphs:
                     sb["convT"][i][:, :, 1:].flip(2).transpose(1, 2))
         reads = f["reads"]
         top = -1 if whole else self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         order, start = bb.layer_order(len(bb.layers)), None
         for p, (i, first, end) in enumerate(order):
             layer = bb.layers[i]
@@ -510,8 +515,9 @@ class RequestGraphs:
                                      self.attn_cfg["BLOCK_M"], self.attn_cfg["BLOCK_N"], exact=not Wb)
         dst = torch.where(real, pos, self.kmax)
         top = self._last_layer()
+        h = bb.stream(h)
         n0 = bb.layers[0].input_layernorm
-        x = rms(h, n0.weight, n0.eps)
+        x = rms(h, n0.weight, n0.eps, bb.xdtype)
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
@@ -545,8 +551,8 @@ class RequestGraphs:
         inputs whose decay and update are exactly 0, so the recurrent state after a segment is the state after its
         last real token; the convolution window is the last inputs before the end of the real tokens. With two
         segments the state between them is copied to the save-point buffers and B continues from it."""
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T = x.shape[0]
         kd, vd, nv = m.key_dim, m.value_dim, m.num_v_heads
@@ -596,7 +602,7 @@ class RequestGraphs:
         backbone's layer_order (flat graphs); without it, layer i + 1 follows."""
         bb = self.bb
         n2 = layer.post_attention_layernorm
-        h, x = add_rms(h, d, n2.weight, n2.eps)
+        h, x = add_rms(h, d, n2.weight, n2.eps, bb.xdtype)
         if step is not None:
             return bb.ffn_next(w, x, h, *step)
         return bb.ffn_next(w, x, h, i + 1 if i + 1 < len(bb.layers) else None)
@@ -604,8 +610,8 @@ class RequestGraphs:
     def _gdn(self, m, w, x, i, B, keep):
         """Gated DeltaNet over one sequence (B None: from zero state, final state kept when `keep`) or over
         B right-padded rows starting from the kept state."""
-        from fla.modules.convolution import causal_conv1d
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from ...kernels.fla.modules.causal_conv1d.ops import causal_conv1d
+        from ...kernels.fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 
         T = x.shape[0]
         rows = 1 if B is None else B
@@ -693,7 +699,7 @@ class RequestGraphs:
         if shape[0] == "flatw":
             if self.out_whole is None:
                 self.out_whole = torch.zeros(FLAT_LADDER[-1], self.out_flat.shape[1], device=self.device,
-                                             dtype=self.dtype)
+                                             dtype=self.out_flat.dtype)
             return lambda: self._flat(shape[1], whole=True)
         if shape[0] == "sflat":
             return lambda: self._flat(shape[1], sess=True)
@@ -990,11 +996,23 @@ class RequestGraphs:
         self.staged.record()
         dev_ids = self.flat_in[lay["ids"][0]: lay["ids"][1]]
         torch.index_select(self.lm.embed_tokens.weight, 0, dev_ids, out=self.emb_flat[:T])
+        heads = {}   # sequences of one plan carry the same media in the head they share: its tower runs once
         for j, (seq, _, media, _, _, _) in enumerate(items):
             if media is not None:
+                first = heads.get(id(media[0])) if SHARE_MEDIA_HEAD else None
+                if first is not None:
+                    k, end = first
+                    if len(seq) >= end and seq[:end] == items[k][0][:end]:
+                        self.emb_flat[starts[j]: starts[j] + end] = self.emb_flat[starts[k]: starts[k] + end]
+                        continue
                 s = slice(starts[j], starts[j] + len(seq))
                 self.emb_flat[s] = self.bb.encode_vision(dev_ids[s], self.emb_flat[s], [media[0]],
                                                           graphs=self.bb.vision_graphs(), host_ids=seq)
+                if first is None and SHARE_MEDIA_HEAD:
+                    marks = self.bb.vision_token_ids()
+                    end = 1 + max((i for i, t in enumerate(seq) if t in marks), default=-1)
+                    if end > 0:   # the head through its last vision token
+                        heads[id(media[0])] = (j, end)
 
     @torch.inference_mode()
     def run_flat(self, reqs):
