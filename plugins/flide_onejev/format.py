@@ -14,15 +14,13 @@ from __future__ import annotations
 import bisect
 import hashlib
 import logging
-import threading
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from flide.api.answers import make_choice, make_noul, make_score
 from flide.api.schema import Answer, ChoiceQuestion, SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import Format, Plan, Read, register
-from flide.formats.tokens import SERIAL, Pieces
+from flide.formats.tokens import SERIAL, Pieces, TokenCache, encode_offsets
 
 from . import media as mmedia
 from .calibrate import Calibration, softmax
@@ -86,78 +84,6 @@ class _DeferredResize:
     def patchify(self, images, patch_size, merge_size, temporal_patch_size):
         h, w = self.sizes[-1]
         return images, h // patch_size, w // patch_size
-
-
-def common_prefix_len(a: str, b: str) -> int:
-    """Length of the longest common prefix, by bisection on slices (compared in C; os.path.commonprefix walks the
-    characters in Python, ~1 µs each, which made a lookup cost tens of milliseconds on long prompts)."""
-    n = min(len(a), len(b))
-    if a[:n] == b[:n]:
-        return n
-    lo, hi = 0, n          # a[:lo] == b[:lo], a[:hi] != b[:hi]
-    while hi - lo > 32:
-        mid = (lo + hi) // 2
-        if a[lo:mid] == b[lo:mid]:
-            lo = mid
-        else:
-            hi = mid
-    while lo < hi and a[lo] == b[lo]:
-        lo += 1
-    return lo
-
-
-class TokenCache:
-    """Token ids (with character offsets) of recent prompts, to tokenize a new prompt only after the point where it
-    stops agreeing with one of them. The reuse point is just after a newline that both prompts share, before a shared
-    character that is not whitespace: the pre-tokenizer (GPT-style regex) always starts a new piece there and BPE
-    never merges across pieces, so the result is the whole-prompt tokenization. Shared by a family's per-thread
-    twins; `selfcheck` turns it off for a tokenizer that does not split after newlines."""
-
-    def __init__(self, size: int = 16, min_chars: int = 512):
-        self.items: OrderedDict[int, tuple[str, list[int], list[tuple[int, int]]]] = OrderedDict()
-        self.size = size
-        self.min_chars = min_chars
-        self.lock = threading.Lock()
-        self.enabled = True
-        self.hits = self.misses = self.saved_chars = 0
-        self._next = 0
-
-    def lookup(self, text: str):
-        if not self.enabled:
-            return None
-        with self.lock:
-            items = list(self.items.values())
-        best = None
-        for t, ids, offs in items:
-            if t[: self.min_chars] != text[: self.min_chars]:
-                continue
-            c = common_prefix_len(t, text)
-            if c >= self.min_chars and (best is None or c > best[0]):
-                best = (c, ids, offs)
-        if best is None:
-            return None
-        c, ids, offs = best
-        b = text.rfind("\n", 0, c - 1)      # the boundary b must leave text[b] shared (b < c)
-        while b > 0 and text[b + 1: b + 2].isspace():   # whitespace up to a later newline is one piece with it
-            b = text.rfind("\n", 0, b)
-        if b <= 0:
-            return None
-        b += 1                                # just after a newline; text[b] is not whitespace
-        starts = [o[0] for o in offs]
-        i = bisect.bisect_left(starts, b)
-        if i >= len(starts) or starts[i] != b:
-            return None
-        return ids[:i], offs[:i], b
-
-    def add(self, text: str, ids: list[int], offs: list[tuple[int, int]]) -> None:
-        if not self.enabled or len(text) < self.min_chars:
-            return
-        with self.lock:
-            self.items[self._next] = (text, ids, offs)
-            self._next += 1
-            while len(self.items) > self.size:
-                self.items.popitem(last=False)
-
 
 
 class SlotHead:
@@ -224,7 +150,7 @@ class OneJev(Format):
         self.slot_ids = self._verify_slots()
         self.max_score_levels = self.max_slots
         self.token_cache = TokenCache()
-        self._token_cache_selfcheck()
+        self.token_cache.selfcheck(self.tokenizer)
         self._splitter = Pieces(self.tokenizer)
         self.model_dir = model_dir
         self.media_root = media_root
@@ -307,50 +233,9 @@ class OneJev(Format):
             return [bt.encode(t, add_special_tokens=False).ids for t in texts]
         return [e.ids for e in bt.encode_batch(texts, add_special_tokens=False)]
 
-    def _tokenize_offsets(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
-        """Token ids and character offsets of a text; a long one cut where its tokenizer never merges across
-        (flide.formats.tokens.Pieces) and its pieces tokenized in one batch, in parallel."""
-        bt = self.tokenizer.backend_tokenizer
-        parts = self._splitter.split(text)
-        if len(parts) == 1:
-            e = bt.encode(text, add_special_tokens=False)
-            return list(e.ids), list(e.offsets)
-        ids, offs, a = [], [], 0
-        for p, e in zip(parts, bt.encode_batch(parts, add_special_tokens=False)):
-            ids += e.ids
-            offs += [(x + a, y + a) for x, y in e.offsets]
-            a += len(p)
-        return ids, offs
-
     def _encode_offsets(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
-        """Token ids and character offsets of a whole prompt, tokenizing only what follows the part it shares with
-        a recent prompt (TokenCache), a long remainder in pieces run in parallel (`_tokenize_offsets`)."""
-        hit = self.token_cache.lookup(text)
-        if hit is None:
-            ids, offs = self._tokenize_offsets(text)
-            self.token_cache.misses += 1
-        else:
-            head_ids, head_offs, b = hit
-            tail_ids, tail_offs = self._tokenize_offsets(text[b:])
-            ids = head_ids + tail_ids
-            offs = head_offs + [(x + b, y + b) for x, y in tail_offs]
-            self.token_cache.hits += 1
-            self.token_cache.saved_chars += b
-        self.token_cache.add(text, ids, offs)
-        return ids, offs
-
-    def _token_cache_selfcheck(self) -> None:
-        """Turn the token cache off for a tokenizer whose pieces do not restart after newlines."""
-        probe = ("{\n  \"a\": \"x y z\",\n\n  \"b\": [1, 22, 333],\n  \"ccc\": \"日本語 テスト\"\n}\n"
-                 "Line two\t tabs   spaces\n\n\n   indented\nend\n \nblank\n") * 20
-        whole = self.tokenizer(probe, add_special_tokens=False, return_offsets_mapping=True)
-        starts = {o[0] for o in whole["offset_mapping"]}
-        for b in range(1, len(probe)):
-            if probe[b - 1] == "\n" and not probe[b].isspace():
-                if b not in starts or (self._encode(probe[:b]) + self._encode(probe[b:]) != list(whole["input_ids"])):
-                    self.token_cache.enabled = False
-                    log.info("token cache off: this tokenizer does not split after newline runs")
-                    return
+        """Token ids and character offsets of a whole prompt, through the shared token cache (formats.tokens)."""
+        return encode_offsets(self.tokenizer, self._splitter, self.token_cache, text)
 
     BACKOFF = 16
     MARKER_CHECKS = 32

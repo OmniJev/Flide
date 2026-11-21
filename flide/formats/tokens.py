@@ -21,8 +21,12 @@ start tokenize the start once. `Pieces.ok` is False for any other tokenizer, whi
 """
 from __future__ import annotations
 
+import bisect
 import json
+import logging
 import re
+import threading
+from collections import OrderedDict
 
 CUT = re.compile(r"(?<=\n)(?=\S)|(?<=[A-Za-z0-9]) ")
 # whitespace places a one-word BPE may cut at (before a space after another character, before or after a newline run)
@@ -39,6 +43,7 @@ PATTERNS = (
 PIECE = 1024       # characters per piece of a long text
 LONG = 4 * PIECE   # texts at least this long are tokenized in pieces
 SERIAL = 8         # up to this many short texts are tokenized one by one
+log = logging.getLogger("flide.tokens")
 
 
 def splits_like_gpt(tokenizer) -> bool:
@@ -157,3 +162,123 @@ class Pieces:
             s = c
         parts.append(text[s:])
         return parts
+
+
+def common_prefix_len(a: str, b: str) -> int:
+    """Length of the longest common prefix, by bisection on slices (compared in C; os.path.commonprefix walks the
+    characters in Python, ~1 µs each, which made a lookup cost tens of milliseconds on long prompts)."""
+    n = min(len(a), len(b))
+    if a[:n] == b[:n]:
+        return n
+    lo, hi = 0, n          # a[:lo] == b[:lo], a[:hi] != b[:hi]
+    while hi - lo > 32:
+        mid = (lo + hi) // 2
+        if a[lo:mid] == b[lo:mid]:
+            lo = mid
+        else:
+            hi = mid
+    while lo < hi and a[lo] == b[lo]:
+        lo += 1
+    return lo
+
+
+class TokenCache:
+    """Token ids (with character offsets) of recent prompts, to tokenize a new prompt only after the point where it
+    stops agreeing with one of them (an agent's next step repeats the last one's prompt and adds to it). The reuse
+    point is just after a newline that both prompts share, before a shared character that is not whitespace: the
+    pre-tokenizer (GPT-style regex) always starts a new piece there and BPE never merges across pieces, so the result
+    is the whole-prompt tokenization. Shared by a family's per-thread twins; `selfcheck` turns it off for a tokenizer
+    that does not split after newlines."""
+
+    def __init__(self, size: int = 16, min_chars: int = 512):
+        self.items: OrderedDict[int, tuple[str, list[int], list[tuple[int, int]]]] = OrderedDict()
+        self.size = size
+        self.min_chars = min_chars
+        self.lock = threading.Lock()
+        self.enabled = True
+        self.hits = self.misses = self.saved_chars = 0
+        self._next = 0
+
+    def selfcheck(self, tokenizer) -> None:
+        """Turn the cache off for a tokenizer whose pieces do not restart after newline runs."""
+        probe = ("{\n  \"a\": \"x y z\",\n\n  \"b\": [1, 22, 333],\n  \"ccc\": \"日本語 テスト\"\n}\n"
+                 "Line two\t tabs   spaces\n\n\n   indented\nend\n \nblank\n") * 20
+        whole = tokenizer(probe, add_special_tokens=False, return_offsets_mapping=True)
+        starts = {o[0] for o in whole["offset_mapping"]}
+        enc = lambda t: tokenizer.encode(t, add_special_tokens=False)   # noqa: E731
+        for b in range(1, len(probe)):
+            if probe[b - 1] == "\n" and not probe[b].isspace():
+                if b not in starts or enc(probe[:b]) + enc(probe[b:]) != list(whole["input_ids"]):
+                    self.enabled = False
+                    log.info("token cache off: this tokenizer does not split after newline runs")
+                    return
+
+    def lookup(self, text: str):
+        if not self.enabled:
+            return None
+        with self.lock:
+            items = list(self.items.values())
+        best = None
+        for t, ids, offs in items:
+            if t[: self.min_chars] != text[: self.min_chars]:
+                continue
+            c = common_prefix_len(t, text)
+            if c >= self.min_chars and (best is None or c > best[0]):
+                best = (c, ids, offs)
+        if best is None:
+            return None
+        c, ids, offs = best
+        b = text.rfind("\n", 0, c - 1)      # the boundary b must leave text[b] shared (b < c)
+        while b > 0 and text[b + 1: b + 2].isspace():   # whitespace up to a later newline is one piece with it
+            b = text.rfind("\n", 0, b)
+        if b <= 0:
+            return None
+        b += 1                                # just after a newline; text[b] is not whitespace
+        starts = [o[0] for o in offs]
+        i = bisect.bisect_left(starts, b)
+        if i >= len(starts) or starts[i] != b:
+            return None
+        return ids[:i], offs[:i], b
+
+    def add(self, text: str, ids: list[int], offs: list[tuple[int, int]]) -> None:
+        if not self.enabled or len(text) < self.min_chars:
+            return
+        with self.lock:
+            self.items[self._next] = (text, ids, offs)
+            self._next += 1
+            while len(self.items) > self.size:
+                self.items.popitem(last=False)
+
+
+def tokenize_offsets(tokenizer, pieces: Pieces, text: str) -> tuple[list[int], list[tuple[int, int]]]:
+    """Token ids and character offsets of a text; a long one cut where its tokenizer never merges across (`Pieces`)
+    and its pieces tokenized in one batch, in parallel."""
+    bt = tokenizer.backend_tokenizer
+    parts = pieces.split(text)
+    if len(parts) == 1:
+        e = bt.encode(text, add_special_tokens=False)
+        return list(e.ids), list(e.offsets)
+    ids, offs, a = [], [], 0
+    for p, e in zip(parts, bt.encode_batch(parts, add_special_tokens=False)):
+        ids += e.ids
+        offs += [(x + a, y + a) for x, y in e.offsets]
+        a += len(p)
+    return ids, offs
+
+
+def encode_offsets(tokenizer, pieces: Pieces, cache: TokenCache, text: str) -> tuple[list[int], list[tuple[int, int]]]:
+    """Token ids and character offsets of a whole prompt, tokenizing only what follows the part it shares with a
+    recent prompt in `cache`, a long remainder in pieces run in parallel (`tokenize_offsets`)."""
+    hit = cache.lookup(text)
+    if hit is None:
+        ids, offs = tokenize_offsets(tokenizer, pieces, text)
+        cache.misses += 1
+    else:
+        head_ids, head_offs, b = hit
+        tail_ids, tail_offs = tokenize_offsets(tokenizer, pieces, text[b:])
+        ids = head_ids + tail_ids
+        offs = head_offs + [(x + b, y + b) for x, y in tail_offs]
+        cache.hits += 1
+        cache.saved_chars += b
+    cache.add(text, ids, offs)
+    return ids, offs
