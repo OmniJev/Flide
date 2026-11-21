@@ -15,8 +15,8 @@ import triton.language as tl
 # bf16 tile and launch shape: BM, BN, BK, warps, stages (any fixed choice
 # keeps the products invariant)
 CFG = (128, 256, 64, 8, 3)
-# rows at or below SMALL_M run SMALL_CFG (same BK, so each element is summed in the same order)
-SMALL_M, SMALL_CFG = 256, (64, 128, 64, 4, 4)
+# rows at or below SMALL_M run MID_CFG or SMALL_CFG (same BK, so each element is summed in the same order)
+SMALL_M, SMALL_CFG = 512, (64, 128, 64, 4, 4)
 _sms = None
 _local = threading.local()   # Triton keeps its allocator per thread; the server runs rounds on other threads
 
@@ -77,8 +77,10 @@ def _alloc(size: int, alignment: int, stream):
     return torch.empty(size, device="cuda", dtype=torch.int8)
 
 
+# the narrow tile with a deeper prefetch, for short products where shared memory holds it (Hopper, not sm_120)
+MID_CFG = (64, 128, 64, 4, 6)
 # shared memory each TMA shape asks for, measured on a device; kept below the kernels so their lines do not move
-NEEDS = {CFG: 163856, SMALL_CFG: 90136}
+NEEDS = {CFG: 163856, SMALL_CFG: 90136, MID_CFG: 163888}
 
 
 def budget(device) -> int:
@@ -88,12 +90,13 @@ def budget(device) -> int:
 
 def pick(M: int, budget_bytes: int, cfg: tuple | None = None):
     """The TMA tile shape for an M-row product at this shared-memory budget: the wide shape when the product is long
-    and the shape fits, the narrow one otherwise, None when not even the narrow one fits (the portable kernel below,
+    and the shape fits, for a short one the narrow shape with the deeper prefetch when it fits, the narrow one
+    otherwise, None when not even the narrow one fits (the portable kernel below,
     which is invariant too, serves those devices). `NEEDS` holds the shared memory each shape asks for, measured on a
     device (tests/test_invariant.py pins the numbers this change was made for)."""
     if cfg is not None:
         return cfg
-    order = (SMALL_CFG,) if (SMALL_M and M <= SMALL_M) else (CFG, SMALL_CFG)
+    order = (MID_CFG, SMALL_CFG) if (SMALL_M and M <= SMALL_M) else (CFG, SMALL_CFG)
     return next((c for c in order if NEEDS[c] <= budget_bytes), None)
 
 
