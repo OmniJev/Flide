@@ -143,6 +143,19 @@ The last three columns say how much faster Flide answers one request than the en
 | `--batch-invariant` | the same bits for a request whatever it is batched with, at some cost in speed |
 | `--quantize fp8` | Qwen3.5 in FP8 on Ada, Hopper and Blackwell GPUs |
 | `--frontends 2` | HTTP, rendering and tokenizing in two processes of their own, for many clients |
+| `--max-running-requests 8` | at most eight states from planning through answer completion, shared by all front ends |
+| `--max-queued-requests 16` | at most sixteen states waiting for a running slot; zero disables waiting |
+| `--max-batch-tokens 65536` | token budget for online GPU rounds and engine micro-batches (default 65536) |
+
+Request limits are optional. `--max-queued-requests` requires `--max-running-requests`; a running limit alone leaves
+the waiting queue unlimited. Each state in a batch body counts separately, and a batch reserves capacity for all
+its states at once. Insufficient capacity returns HTTP 429. `/stats` reports running and queued state counts.
+A plan larger than the online token budget runs in its own round; the engine can split its work into micro-batches.
+
+On client disconnect, pending planning and GPU work is cancelled. Work already running finishes before its slot is
+released. A front end that exits has its pending work and unused slots reclaimed, while submitted GPU work keeps
+its slots until collected. Other front ends continue serving. If the last front end exits, the serving process exits
+with an error; if a front end loses its GPU process, outstanding GPU calls fail with HTTP 503 and its listener closes.
 
 ## License
 
