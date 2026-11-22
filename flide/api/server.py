@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as cf
 import logging
+import os
 import threading
 import time
 import uuid
@@ -80,9 +81,15 @@ def _query_options(params, debias: int) -> dict:
 
 
 def create_app(engine, model_name: str, description: str = "", release_date: str = "", batcher=None,
-               ready=None) -> FastAPI:
+               ready=None, api_key: str | None = None, with_meta: bool | None = None) -> FastAPI:
     """`ready`, when given, is asked by /health (503 "loading" until it says yes): front ends start before the model
-    has loaded."""
+    has loaded. `api_key`: every route but /health takes `Authorization: Bearer <key>` (auth.py). `with_meta` False:
+    answers leave out the family's metadata and timings. Both default to the environment (FLIDE_API_KEY,
+    FLIDE_NO_META), which is how `serve` hands them to its front-end processes."""
+    if api_key is None:
+        api_key = os.environ.get("FLIDE_API_KEY") or None
+    if with_meta is None:
+        with_meta = os.environ.get("FLIDE_NO_META", "") not in ("1", "true", "yes", "on")
     family = engine.format
     aliases = set(family.aliases) | {"jev-latest"}   # the API's default model name, whatever the family
     app = FastAPI(title="flide", version=__version__)
@@ -126,10 +133,11 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         return JSONResponse(status_code=404, content={
             "detail": f"model {requested!r} is not served; available: {model_name} plus aliases {sorted(aliases)}"})
 
-    def payload_of(response, meta) -> dict:
+    def payload_of(response, info) -> dict:
         response.model = model_name
         payload = response.model_dump()
-        payload[family.meta_key] = meta
+        if with_meta:
+            payload[family.meta_key] = info
         return payload
 
     async def batch(request: Request, body: dict) -> JSONResponse:
@@ -180,6 +188,10 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
             results.append(item)
         return JSONResponse(content={"model": model_name, "results": results})
 
+    if api_key:   # inside _Stamp, so a refused request still gets its request id
+        from .auth import BearerKey
+
+        app.add_middleware(BearerKey, key=api_key)
     app.add_middleware(_Stamp)
 
     @app.get("/health")
@@ -221,16 +233,13 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
                                 content={"detail": [{"loc": ["query"], "msg": str(exc), "type": "value_error"}]})
         try:
             check_limits(family, req)
-            response, meta = await answer(req, **options)
+            response, info = await answer(req, **options)
         except ValueError as exc:
             return JSONResponse(status_code=422,
                                 content={"detail": [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]})
         except ImportError as exc:   # a package the request needs and the server lacks (torchvision for images)
             return JSONResponse(status_code=500, content={"detail": str(exc)})
-        response.model = model_name
-        payload = response.model_dump()
-        payload[family.meta_key] = meta
-        return JSONResponse(content=payload)
+        return JSONResponse(content=payload_of(response, info))
 
     @app.api_route("/flush_cache", methods=["GET", "POST"])
     async def flush_cache():

@@ -60,6 +60,10 @@ def run(args) -> None:
             raise SystemExit("--max-media-mb is a positive number")
         os.environ["FLIDE_MAX_MEDIA_MB"] = str(args.max_media_mb)
         settings.max_media_bytes = int(args.max_media_mb * 2 ** 20)
+    if args.api_key:   # in the environment too, for the processes of --frontends (FLIDE_API_KEY works alone)
+        os.environ["FLIDE_API_KEY"] = args.api_key
+    if args.no_meta:
+        os.environ["FLIDE_NO_META"] = "1"
     model_dir = resolve_model(args.model)
     family = formats.detect(model_dir, model_config(model_dir), args.format)
     options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
@@ -124,6 +128,9 @@ def add_parser(sub) -> None:
                    help="wait this long after the first waiting request for more to join its GPU round")
     s.add_argument("--gather-ms", type=float, default=None,
                    help="wait up to this long for requests still being planned to join a round (default 2)")
+    s.add_argument("--api-key", default=None,
+                   help="require 'Authorization: Bearer KEY' on every route but /health (or set FLIDE_API_KEY)")
+    s.add_argument("--no-meta", action="store_true", help="answers without the family's metadata and timings")
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--access-log", action="store_true",
