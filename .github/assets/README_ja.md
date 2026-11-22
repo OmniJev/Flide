@@ -91,14 +91,6 @@ mkdir -p ~/.cache/huggingface
 docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-Docker のないクラスターでは、Apptainer で同じイメージを動かせます。
-
-```bash
-mkdir -p ~/.cache/huggingface ~/.cache/flide
-apptainer build flide.sif docker://omnijev/flide
-apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
-```
-
 ## 例
 
 Flide は 1 万通のメールそれぞれの 8 つの質問に、わずか 28 秒で答えます。[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/examples)に自分で動かすためのコードがあります。

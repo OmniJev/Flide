@@ -91,14 +91,6 @@ mkdir -p ~/.cache/huggingface
 docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-没有 Docker 的集群上，用 Apptainer 跑同一个镜像。
-
-```bash
-mkdir -p ~/.cache/huggingface ~/.cache/flide
-apptainer build flide.sif docker://omnijev/flide
-apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
-```
-
 ## 示例
 
 Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/examples)里有自己复现的代码。

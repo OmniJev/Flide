@@ -91,14 +91,6 @@ mkdir -p ~/.cache/huggingface
 docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-Docker가 없는 클러스터에서는 Apptainer로 같은 이미지를 실행합니다.
-
-```bash
-mkdir -p ~/.cache/huggingface ~/.cache/flide
-apptainer build flide.sif docker://omnijev/flide
-apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
-```
-
 ## 예시
 
 Flide는 이메일 10,000통 각각의 질문 8개에 단 28초 만에 답합니다. [이메일 분류 데모](https://github.com/OmniJev/Flide/tree/main/examples)에 직접 실행해 볼 수 있는 코드가 있습니다.

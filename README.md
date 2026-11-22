@@ -91,14 +91,6 @@ mkdir -p ~/.cache/huggingface
 docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
 ```
 
-On a cluster without Docker, Apptainer runs the same image.
-
-```bash
-mkdir -p ~/.cache/huggingface ~/.cache/flide
-apptainer build flide.sif docker://omnijev/flide
-apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
-```
-
 ## Example
 
 Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/examples) has the code to run it yourself.
