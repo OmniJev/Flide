@@ -79,3 +79,18 @@ Triton (https://github.com/triton-lang/triton). It is used under the MIT License
 * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
+
+
+plugins/liquamen ports the prompt rendering, option orders, length rule, order averaging and Latent01 head readout
+of plantwaterer/liquamen (https://huggingface.co/plantwaterer/liquamen, revision 4278ee2c: garas_core.py,
+garas_engine.py, garas_vbll_engine.py, vbll_core.py, oavg_engine.py, lenavg_engine.py, lenavg_bayes_engine.py,
+lenavg_bayes_l6k_engine.py, lenavg_bayes_balanced_k5_engine.py). They are used under the Apache License, Version
+2.0, whose text is in LICENSE.
+
+
+flide/backbones/lfm3/vision.py ports the LFM3-VL vision encoder and multimodal projector of Hugging Face
+transformers (https://github.com/huggingface/transformers, commit 69da1b47, src/transformers/models/lfm3_vl/
+modeling_lfm3_vl.py), and lfm3_picture in plugins/d1 its image processor (image_processing_lfm3_vl.py), in the
+copies LiquidAI/d1-2B ships. They are used under the Apache License, Version 2.0, whose text is in LICENSE:
+
+Copyright 2026 The HuggingFace Team. All rights reserved.
