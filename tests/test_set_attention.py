@@ -59,6 +59,17 @@ def main():
         except ValueError:
             check(f"refuses {why}", True)
 
+    # media at the head of every set sequence (d1-2B's pictures): each sequence's job carries them
+    media = {"pixel_values": "pv", "image_grid_thw": "grid"}
+    two_seqs = Plan([], [seq, seq], (Read("h", FINAL, (6, 9)),), attention="set", segments=[(4, 7, 10)] * 2,
+                    vision=media, positions=[None, None], offset=[0, 0])
+    pieces = split_plan(0, two_seqs, budget=1 << 16)
+    check("each set sequence's job holds the media", [p.job.vision for p in pieces] == [media, media],
+          [p.job.vision for p in pieces])
+    check("and keeps its segments", [p.job.segments for p in pieces] == [(4, 7, 10)] * 2)
+    b = pack([p.job for p in pieces], "cpu")
+    check("pack lists the media once per job", b.vision == [media, media], b.vision)
+
     print("ALL PASS" if fails == 0 else f"{fails} FAILED")
     return fails
 

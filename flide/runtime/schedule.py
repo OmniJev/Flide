@@ -47,8 +47,8 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
         # sequences of their own: each is a job whose last token is its one branch; under block attention the whole
         # sequence is the job's prefix (one block) and a copy of its last token the branch, which nothing reads
         blocks = plan.attention in ("blocks", "set")
-        if plan.vision is not None and plan.attention != "blocks":
-            raise ValueError("a plan without a prefix takes media under block attention only")
+        if plan.vision is not None and plan.attention not in ("blocks", "set"):
+            raise ValueError("a plan without a prefix takes media under block or set attention only")
         out = []
         for b, s in enumerate(plan.suffixes):
             if len(s) < 2:
@@ -58,8 +58,8 @@ def split_plan(i: int, plan: Plan, budget: int, session: dict | None = None) -> 
                               for r in plan.branch_reads(b))
                 media = {} if plan.vision is None else {"vision": plan.vision, "positions": plan.positions[b],
                                                         "offset": plan.offset[b]}
-                if plan.attention == "set":
-                    out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], segments=tuple(plan.segments[b]))))
+                if plan.attention == "set":   # each sequence holds the request's media at its head
+                    out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], segments=tuple(plan.segments[b]), **media)))
                 else:
                     out.append(Piece(i, [b], Job(s, [s[-1:]], [reads], blocks=True, **media)))
             else:

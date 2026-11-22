@@ -41,8 +41,8 @@ class Plan:
 
     An empty `prefix` makes every suffix a sequence of its own (nothing shared); with attention "blocks" each such
     sequence is one block, read bidirectionally whole in the full-attention layers. Such sequences may hold media under
-    attention "blocks": the same media in each, inside the head every sequence starts with, which `vision`'s token types
-    (when it has them) cover; `positions` and `offset` are then lists, one per sequence.
+    attention "blocks" or "set": the same media in each, inside the head every sequence starts with, which `vision`'s
+    token types (when it has them) cover; `positions` and `offset` are then lists, one per sequence.
 
     `attention` "blocks": in the full-attention layers the prefix sees all of itself and each suffix sees the prefix
     and all of itself (the block-bidirectional mask some checkpoints are trained with); recurrent layers stay causal,
