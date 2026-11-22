@@ -1,7 +1,8 @@
 """Requests from CUDA graphs (lfm3), as lfm2's (lfm2/graphs.py: one packed stream a round, one graph per length rung)
 with what LFM3 adds: the sliding layers read the causal ranges cut to their window, and the full-attention layers a
 second set of ranges, staged with the tokens, so the same graphs run causal rounds (those ranges are the causal ones)
-and attention "set" (`run_set`: a plan's sequences, each a state and its questions, read at every answer slot).
+and attention "set" (`run_set`: a plan's sequences, each a state and its questions, read at every answer slot). A set
+plan's pictures go through the vision tower outside the graphs, once a plan, into the embeddings the graphs read.
 """
 from __future__ import annotations
 
@@ -42,20 +43,26 @@ class Lfm3Graphs(Lfm2Graphs):
         super()._stage(reqs, L)
         self.sranges[:L].copy_(self.ranges[:L])   # causal rounds: the full-attention layers read causally too
 
+    @property
+    def set_media(self) -> bool:
+        """Set plans with pictures at the head of every sequence: the tower runs outside the graphs, once a plan."""
+        return getattr(self.bb, "vision", None) is not None
+
     @torch.inference_mode()
-    def run_set(self, seqs, segments, positions, lazy: bool = True):
+    def run_set(self, seqs, segments, positions, lazy: bool = True, media=None):
         """Final-norm hidden states at every slot of a "set" plan's sequences (`positions` per sequence, from its start
-        or negative from its end), in sequence and slot order, one replay; None when they do not fit the graphs."""
+        or negative from its end), in sequence and slot order, one replay; None when they do not fit the graphs.
+        `media`: the plan's pictures (vision inputs), the same at the head of every sequence."""
         T = sum(len(s) for s in seqs)
         nreads = sum(len(p) for p in positions)
         L = self._rung(T, nreads, len(seqs))
         if L is None or (not lazy and L not in self.graphs) or not self.capture(L):
             return None
-        self._stage_set(seqs, segments, positions, L)
+        self._stage_set(seqs, segments, positions, L, media)
         self.graphs[L].replay()
         return self.out[:nreads].clone()
 
-    def _stage_set(self, seqs, segments, positions, L: int) -> None:
+    def _stage_set(self, seqs, segments, positions, L: int, media=None) -> None:
         self.staged.synchronize()
         K = self.keep
         h = self.host.numpy()[:, :L]
@@ -110,3 +117,9 @@ class Lfm3Graphs(Lfm2Graphs):
         self.reads.copy_(self.host_reads, non_blocking=True)
         self.staged.record()
         self.emb[:L] = self.bb.lm.embed_tokens(self.ids[:L])
+        if media is not None:   # the pictures' features into their placeholders, the same rows in every sequence
+            feats = self.bb.vision.features(media["pixel_values"].to(self.bb.device), media["image_grid_thw"])
+            mask = self.ids[:L] == self.bb.image_token
+            if int(mask.sum()) != feats.shape[0] * len(seqs):
+                raise ValueError(f"{int(mask.sum())} image tokens for {feats.shape[0]} image features x {len(seqs)}")
+            self.emb[:L].masked_scatter_(mask[:, None], feats.to(self.emb.dtype).repeat(len(seqs), 1))

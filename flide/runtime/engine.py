@@ -524,14 +524,16 @@ class Engine:
         the plan or its shape does not fit them (reads other than the last token after the final layer, or lengths
         beyond the graph ladders). `lazy=False` uses sequence and branch graphs only when they were captured already."""
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
-        if graphs is None or (plan.vision is not None and not graphs.media) or self._eager(plan):
+        set_media = plan.attention == "set" and getattr(graphs, "set_media", False)   # pictures heading set sequences
+        if graphs is None or (plan.vision is not None and not graphs.media and not set_media) or self._eager(plan):
             return None
         if plan.attention == "set":   # one replay of all its sequences, read at every slot, on graphs that run "set"
             reads = [plan.branch_reads(b) for b in range(len(plan.suffixes))]
-            if (not getattr(graphs, "set_attention", False) or plan.vision is not None
+            if (not getattr(graphs, "set_attention", False) or (plan.vision is not None and not set_media)
                     or any(len(r) != 1 or r[0].layer is not FINAL or r[0].head != reads[0][0].head for r in reads)):
                 return None
-            hidden = graphs.run_set(plan.suffixes, plan.segments, [r[0].positions for r in reads], lazy=lazy)
+            media = {} if plan.vision is None else {"media": plan.vision}
+            hidden = graphs.run_set(plan.suffixes, plan.segments, [r[0].positions for r in reads], lazy=lazy, **media)
             if hidden is None:
                 return None
             head = reads[0][0].head

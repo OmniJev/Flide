@@ -1,4 +1,4 @@
-"""Packed forward for LFM3 decoders (lfm3, and the language model of lfm3_vl: LiquidAI's d1-2B), text only for now.
+"""Packed forward for LFM3 decoders (lfm3, and lfm3_vl: LiquidAI's d1-2B, whose pictures go through vision.py).
 
 An LFM3 layer is a gated short convolution, full attention or sliding-window attention (fused.py). None keeps a
 recurrent state: the attention is flide's Triton kernel over the packed metadata, the convolution gathers each
@@ -28,26 +28,41 @@ class Lfm3(Backbone):
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
              loader: str = "direct", merge_lora: bool = False, **options) -> "Lfm3":
-        """The language model alone (an lfm3_vl checkpoint's vision tower is not loaded yet). `loader` "direct" reads
-        the safetensors straight onto the device (flide.backbones.load), "none" reads no weights (zeros)."""
+        """The language model, and an lfm3_vl checkpoint's vision tower and projector (vision.py) unless `vision` is
+        False. `loader` "direct" reads the safetensors straight onto the device (flide.backbones.load), "none"
+        reads no weights (zeros)."""
+        import json
+        from pathlib import Path
+
         from ..load import blank, build, load_into
         from .model import Lfm3ForCausalLM, text_config
 
-        if vision:
-            raise NotImplementedError("lfm3: images are not supported yet")
+        if vision is None:
+            vision = "vision_config" in json.loads((Path(model_dir) / "config.json").read_text())
         cfg = text_config(model_dir)
         model = build(Lfm3ForCausalLM, cfg, torch.device(device), getattr(torch, dtype))
+        parts = None
+        if vision:
+            from .vision import Vision, vision_config
+
+            parts = build(Vision, vision_config(model_dir), torch.device(device), getattr(torch, dtype))
         if loader == "none":
             blank(model)
+            if parts is not None:
+                blank(parts)
         elif loader == "direct":
             load_into(model, model_dir, device, key_map=[(r"^model\.language_model\.", "model.")],
                       skip=("model.vision_tower", "model.multi_modal_projector"), merge=merge_lora)
+            if parts is not None:
+                load_into(parts, model_dir, device, key_map=[(r"^model\.", "")], skip=("model.language_model",))
         else:
             raise ValueError(f"lfm3: loader {loader!r}; it reads checkpoints with the direct loader only")
         model.eval()
-        return cls(model, **options)
+        if parts is not None:
+            parts.eval()
+        return cls(model, vision=parts, **options)
 
-    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, **_):
+    def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, vision=None, **_):
         if quantize is not None:
             raise NotImplementedError("lfm3: --quantize is not supported yet")
         if tp is not None and tp[1] > 1:
@@ -59,9 +74,25 @@ class Lfm3(Backbone):
         p0 = next(model.parameters())
         self.device, self.dtype = p0.device, p0.dtype
         self.cuda_graphs = cuda_graphs
-        self.vlm = None   # text only for now
+        self.vision = vision   # vision.Vision, or None for text alone
+        self.vlm = None   # the graphs take no pictures: plans with pictures run packed
+        self.image_token = vision.config.image_token_id if vision is not None else None
         self._fused = None
         self.decoder()
+
+    def vision_positions(self, ids, vision):
+        """LFM3-VL places every token at its index (no multimodal rotary positions)."""
+        return None, 0
+
+    def encode_vision(self, ids: torch.Tensor, h: torch.Tensor, visions: list) -> torch.Tensor:
+        """Embeddings with the pictures' features in their placeholders; `visions` are the jobs' processor outputs
+        (pixel_values, image_grid_thw), in the order their tokens appear."""
+        feats = [self.vision.features(v["pixel_values"].to(self.device), v["image_grid_thw"]) for v in visions]
+        feats = torch.cat(feats).to(h.dtype)
+        mask = ids == self.image_token
+        if int(mask.sum()) != feats.shape[0]:
+            raise ValueError(f"{int(mask.sum())} image tokens for {feats.shape[0]} image features")
+        return h.masked_scatter(mask[:, None], feats)
 
     def decoder(self):
         from .fused import FusedDecoder
@@ -92,8 +123,8 @@ class Lfm3(Backbone):
             raise NotImplementedError("lfm3: the session cache is not supported yet")
         if any(j.blocks or j.prefix_two_way for j in b.jobs):
             raise NotImplementedError("lfm3: causal and set attention only")
-        if b.vision:
-            raise NotImplementedError("lfm3: images are not supported yet")
+        if b.vision and self.vision is None:
+            raise ValueError("this checkpoint was loaded without its vision tower")
         ints = [k for k in b.reads if k is not FINAL]
         tok = (b.job.int(), b.branch.int(), b.positions.int())
         groups = b.attn_runs or attn_kernel.runs(b.key_ranges.cpu().numpy(), by_row=True)
@@ -107,6 +138,8 @@ class Lfm3(Backbone):
             set_meta = _Meta(tok, b.set_ranges, groups=attn_kernel.runs(b.set_ranges.cpu().numpy(), by_row=True))
         ids = b.input_ids
         emb = self.lm.embed_tokens(ids)
+        if b.vision:
+            emb = self.encode_vision(ids, emb, b.vision)
         dec = self.decoder()
         T = ids.shape[0]
         prev = conv_prev(T, b.n_prefix_tokens, b.cu_prefix, b.cu_suffix, b.branch, b.branch_job, dec.keep)

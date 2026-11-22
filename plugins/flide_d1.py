@@ -14,8 +14,9 @@ a zero-width space after its first character; the reply opens with `<think></thi
 coded AA, AB and so on (`d1_codes` 2); every score is divided by `calibration.json`'s temperature before the softmax;
 a score question answers its median level.
 Its attention is "set" (`d1_attention`): up to `d1_set_size` questions packed after the state in one sequence, the
-first tokenized with the state, each further one after `QUESTION:\n`, every one read at its last token. Text only for
-now.
+first tokenized with the state, each further one after `QUESTION:\n`, every one read at its last token. Its pictures
+are capped at `d1_vision_max_pixels` and processed as its own LFM3-VL processor does (`lfm3_picture`); each heads the
+state of every sequence as `<|vision_start|>`, one `<|image|>` per merge block, `<|vision_end|>`.
 """
 from __future__ import annotations
 
@@ -41,6 +42,46 @@ POOL = ([chr(c) for c in range(ord("A"), ord("Z") + 1)] + [f"{i:02d}" for i in r
         + [chr(c) for c in range(ord("a"), ord("z") + 1)] + [f"#{i}" for i in range(200)]
         + [chr(a) + chr(b) for a in range(ord("A"), ord("Z") + 1) for b in range(ord("A"), ord("Z") + 1)])
 PLACEHOLDER = re.compile(r"^opt\d+$")
+VISION_START, IMAGE, VISION_END = "<|vision_start|>", "<|image|>", "<|vision_end|>"
+# LFM3-VL's picture processor (Lfm3VlImageProcessor, the copy d1-2B ships), overridden by processor_config.json
+LFM3_PICTURES = {"image_processor_type": "Lfm3VlImageProcessor", "patch_size": 16, "merge_size": 2,
+                 "temporal_patch_size": 2, "image_mean": [0.5, 0.5, 0.5], "image_std": [0.5, 0.5, 0.5],
+                 "rescale_factor": 1 / 255, "resample": 3, "size": {"shortest_edge": 65536, "longest_edge": 16777216}}
+
+
+def _smart_resize(height: int, width: int, factor: int, min_pixels: int, max_pixels: int) -> tuple[int, int]:
+    """Both sides a multiple of `factor`, the area within the bounds, the aspect kept (the processor's smart_resize)."""
+    if max(height, width) / min(height, width) > 200:
+        raise ValueError(f"a picture's aspect ratio must be under 200, got {max(height, width) / min(height, width)}")
+    h, w = round(height / factor) * factor, round(width / factor) * factor
+    if h * w > max_pixels:
+        beta = math.sqrt((height * width) / max_pixels)
+        h = max(factor, math.floor(height / beta / factor) * factor)
+        w = max(factor, math.floor(width / beta / factor) * factor)
+    elif h * w < min_pixels:
+        beta = math.sqrt(min_pixels / (height * width))
+        h, w = math.ceil(height * beta / factor) * factor, math.ceil(width * beta / factor) * factor
+    return h, w
+
+
+def lfm3_picture(image, s: dict):
+    """One RGB picture as LFM3-VL's processor gives it: resized (bicubic, antialiased, on its 8-bit pixels) to a grid of
+    whole merge blocks, rescaled and normalized in float32, cut into patches in merge-block order, each patch repeated
+    over the temporal axis. Returns (pixel_values [patches, 3 * t * p * p], image_grid_thw [1, 3], its tokens)."""
+    import torch
+    from torchvision.transforms.v2 import functional as tvF
+
+    p, m, t = s["patch_size"], s["merge_size"], s["temporal_patch_size"]
+    x = tvF.pil_to_tensor(image)[None]
+    h, w = _smart_resize(x.shape[-2], x.shape[-1], p * m, s["size"]["shortest_edge"], s["size"]["longest_edge"])
+    x = tvF.resize(x, [h, w], interpolation=tvF.InterpolationMode.BICUBIC, antialias=True)
+    mean = torch.tensor(s["image_mean"]) * (1.0 / s["rescale_factor"])   # rescale and normalize fused, as the processor
+    std = torch.tensor(s["image_std"]) * (1.0 / s["rescale_factor"])
+    x = tvF.normalize(x.to(torch.float32), mean, std)
+    gh, gw = h // p, w // p
+    x = x.reshape(1, 3, gh // m, m, p, gw // m, m, p).permute(0, 2, 5, 3, 6, 1, 4, 7)
+    x = x.unsqueeze(6).expand(-1, -1, -1, -1, -1, -1, t, -1, -1).reshape(gh * gw, 3 * t * p * p)
+    return x, torch.tensor([[1, gh, gw]], dtype=torch.long), gh * gw // (m * m)
 
 
 def _given(model) -> dict:
@@ -105,6 +146,7 @@ class D1(Format):
             raise ValueError(f"d1: attention {attention!r} is not supported")
         self.set_size = int(raw.get("d1_set_size", 4)) if attention == "set" else None
         self.lead = "<think></think>" if self.lfm3 else ""
+        self.max_pixels = int(raw.get("d1_vision_max_pixels") or MAX_PIXELS)
         self.temperature = 1.0
         if (d / "calibration.json").is_file():
             cal = json.loads((d / "calibration.json").read_text())
@@ -261,9 +303,17 @@ class D1(Format):
         enc = lambda s: self.tokenizer.encode(s, add_special_tokens=False)
         vision = None
         if self.set_size:   # "set": the state and up to set_size questions one sequence, every one read at its end
-            if refs:
-                raise ValueError("d1: images on LFM3 checkpoints are not supported yet")
-            head = self.prefix_text(state)
+            media = ""
+            if refs:   # LFM3-VL: the pictures head the state of every sequence, as its processor writes them
+                import torch
+
+                from flide.formats.next_token import NextToken
+
+                pics = [lfm3_picture(self._cap(NextToken._open(r)), self.vision_settings) for r in refs]
+                media = "".join(f"{VISION_START}{IMAGE * n}{VISION_END}" for _, _, n in pics)
+                vision = {"pixel_values": torch.cat([p for p, _, _ in pics]),
+                          "image_grid_thw": torch.cat([g for _, g, _ in pics])}
+            head = self.prefix_text(state, media)
             seqs, segments, reads = [], [], []
             for k in range(0, len(qs), self.set_size):
                 group = suffixes[k: k + self.set_size]
@@ -280,7 +330,7 @@ class D1(Format):
             if total > self.max_request_tokens:
                 raise ValueError(f"request is {total} tokens, limit is {self.max_request_tokens}")
             data = [(name, q.type, groups[k]) for k, (name, q) in enumerate(qs)]
-            return Plan([], seqs, reads, data, attention="set", segments=segments)
+            return Plan([], seqs, reads, data, attention="set", segments=segments, vision=vision)
         if not refs:
             prefix = enc(self.prefix_text(state))
             if len(qs) == 1:   # the release reads a lone question as one row, tokenized whole
@@ -316,16 +366,29 @@ class D1(Format):
         data = [(name, q.type, groups[k]) for k, (name, q) in enumerate(qs)]
         return Plan(prefix, branches, (Read(HEAD),), data, vision=vision)
 
-    @staticmethod
-    def _cap(image):
+    def _cap(self, image):
+        """A picture downscaled to at most the checkpoint's pixel budget, bicubic, as the release's media.cap_pixels."""
         image = image.convert("RGB") if hasattr(image, "convert") else image
         w, h = image.size
-        if w * h <= MAX_PIXELS:
+        if w * h <= self.max_pixels:
             return image
         from PIL import Image
 
-        s = math.sqrt(MAX_PIXELS / (w * h))
+        s = math.sqrt(self.max_pixels / (w * h))
         return image.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.BICUBIC)
+
+    @property
+    def vision_settings(self) -> dict:
+        """The picture processor's settings from processor_config.json (LFM3-VL)."""
+        s = getattr(self, "_vision_settings", None)
+        if s is None:
+            p = Path(self.model_dir) / "processor_config.json"
+            raw = json.loads(p.read_text()).get("image_processor", {}) if p.is_file() else {}
+            s = {**LFM3_PICTURES, **{k: raw[k] for k in LFM3_PICTURES if k in raw}}
+            if s["image_processor_type"] != "Lfm3VlImageProcessor" or s["resample"] != 3:
+                raise ValueError(f"d1: picture processor {s['image_processor_type']} with resample {s['resample']}")
+            self._vision_settings = s
+        return s
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         import torch
