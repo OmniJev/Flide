@@ -2,14 +2,14 @@
   <img alt="Flide：厳密な状態フォークによる超高速な意思決定推論" src="ja/banner.svg" width="100%">
 </p>
 
-<p align="center"><a href="../README.md">English</a> · <a href="README_zh.md">简体中文</a> · <b>日本語</b> · <a href="README_ko.md">한국어</a></p>
+<p align="center"><a href="../../README.md">English</a> · <a href="README_zh.md">简体中文</a> · <b>日本語</b> · <a href="README_ko.md">한국어</a></p>
 
 <p align="center">
   <a href="https://arxiv.org/abs/2610.42148"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-Paper-B31B1B?style=flat-square&logo=arxiv&logoColor=white"></a>
   <a href="https://pypi.org/project/flide/"><img alt="PyPI" src="https://img.shields.io/pypi/v/flide?style=flat-square&logo=pypi&logoColor=white&color=3A86FF"></a>
   <a href="https://flide.org"><img alt="Website" src="https://img.shields.io/badge/Website-flide.org-00A890?style=flat-square&logo=googlechrome&logoColor=white"></a>
   <a href="https://docs.flide.org"><img alt="Docs" src="https://img.shields.io/badge/Docs-latest-1F5FD1?style=flat-square&logo=materialformkdocs&logoColor=white"></a>
-  <a href="../LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
+  <a href="../../LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
   <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-F28E2B?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
 </p>
@@ -29,17 +29,18 @@
 
 ## 🔥 ニュース
 
-- 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、session cache を有効にすると、先頭が同じリクエストはその部分を 1 回だけ計算します。
-- 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列では各 GPU が自分の分の重みだけを読むようになり、FP8 の [mammoth-1](https://huggingface.co/baselabs/mammoth-1) は 2 枚の GPU でそれぞれ 56 GB ではなく 17 GB で読み込めます。
-- 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
+- 🔥 **2026-11-22** Flide 0.1.19 で [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1)、[turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) に対応し、[d1-2B](https://huggingface.co/LiquidAI/d1-2B) が画像を読めるようになり、[Docker イメージ](https://hub.docker.com/r/omnijev/flide)も公開しました。
+- 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、オプションの session cache を追加しました。
+- 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列の GPU メモリ使用量を減らしました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
 - 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
 - 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。
 - 🔥 **2026-11-11** Flide 0.1.13 で [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3)、[JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) に対応し、RTX 40 シリーズ向けのコンパイル済みカーネルを同梱しました。
 - 🔥 **2026-11-10** Flide 0.1.12 で [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max)、[clef-flash](https://huggingface.co/Cloudflare/clef-flash) に対応し、RTX 50 シリーズと RTX PRO 6000 向けのコンパイル済みカーネルを同梱しました。
-- 🔥 **2026-11-10** Flide 0.1.11 で[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)を追加しました。H200 1 枚で 1 万通のメールそれぞれの 8 つの質問に 28 秒で答えます。
+- 🔥 **2026-11-10** Flide 0.1.11 で[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/examples)を追加しました。H200 1 枚で 1 万通のメールそれぞれの 8 つの質問に 28 秒で答えます。
 - 🔥 **2026-11-09** Flide 0.1.10 で [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision)、[KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) に対応し、KnowLine ファミリーが画像を読めるようになりました。
 - 🔥 **2026-11-09** Flide 0.1.9 で [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b)、[JEV-35B](https://huggingface.co/autotrust/JEV-35B) に対応し、`/v1/systemone` が 1 つのリクエスト本文で複数のリクエストを受け付けるようになりました。
 - 🔥 **2026-11-08** Flide 0.1.8 で [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98)、[Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) の 2 つの意思決定モデルファミリーを追加し、[drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1) にも対応しました。
@@ -83,23 +84,38 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
+Flide は Docker イメージでも使えます。イメージにモデルは入っていません。モデルはマウントした Hugging Face キャッシュにダウンロードされ、別のモデルは `--model` を変えるだけで起動します。ホストに必要なのは NVIDIA ドライバーだけです（580 以降。それより古いドライバーでは `omnijev/flide:cu126` を使います）。
+
+```bash
+mkdir -p ~/.cache/huggingface
+docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
+```
+
+Docker のないクラスターでは、Apptainer で同じイメージを動かせます。
+
+```bash
+mkdir -p ~/.cache/huggingface ~/.cache/flide
+apptainer build flide.sif docker://omnijev/flide
+apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
+```
+
 ## 例
 
-Flide は 1 万通のメールそれぞれの 8 つの質問に、わずか 28 秒で答えます。[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)に自分で動かすためのコードがあります。
+Flide は 1 万通のメールそれぞれの 8 つの質問に、わずか 28 秒で答えます。[メール仕分けのデモ](https://github.com/OmniJev/Flide/tree/main/examples)に自分で動かすためのコードがあります。
 
 <p align="center">
-  <img alt="1 通のメールと 8 つの答え、すべて 1 回の順伝播から" src="../demos/email_triage/answers.gif" width="100%">
+  <img alt="1 通のメールと 8 つの答え、すべて 1 回の順伝播から" src="../../examples/answers.gif" width="100%">
 </p>
 
 <p align="center">
-  <img alt="1 通と 1 万通のメールにかかる時間、Flide とほかの 3 つのエンジン" src="../demos/email_triage/chart.png" width="100%">
+  <img alt="1 通と 1 万通のメールにかかる時間、Flide とほかの 3 つのエンジン" src="../../examples/chart.png" width="100%">
 </p>
 
 H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 秒で答えます。ほかのエンジンで最速のものと比べて、それぞれ 3.5 倍と 4.1 倍の速さです。
 
 ## モデル
 
-最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine 35B はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine 35B と Turion はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
 
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -109,8 +125,9 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | テキスト | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | テキスト | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | ~1.7× | ~1.3× | ~1.1× |
-| [d3](https://huggingface.co/vllm-sr/d3-turbo) | テキスト、画像 | ~5.1× | ~1.6× | ~1.8× |
+| [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | テキスト | 1.4× | 2.0× | 1.4× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | ~1.6× | ~1.3× | ~1.1× |
+| [d3](https://huggingface.co/vllm-sr/d3-turbo) | テキスト、画像 | ~5.0× | ~1.5× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト、画像 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | テキスト | 1.1× | 2.0× | 2.8× |
@@ -126,6 +143,8 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト、画像 | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
+| [liquamen](https://huggingface.co/plantwaterer/liquamen) | テキスト | 1.7× | 1.9× | 1.7× |
+| [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | テキスト | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | テキスト、画像 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | テキスト | 1.4× | 1.5× | 1.4× |
 | [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | ~4.3× | ~2.8× | ~1.8× |
@@ -135,12 +154,14 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | テキスト、画像 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | テキスト | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | テキスト、画像 | ~2.1× | ~4.8× | ~1.3× |
+| [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | テキスト | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | テキスト | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | テキスト | 4.3× | 1.5× | 2.0× |
-| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.4× |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.5× |
+| [Turion](https://huggingface.co/turion-ai/turion-jev-31b) | テキスト | 1.1× | 1.1× | 1.0× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | テキスト | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | テキスト、画像、動画 | 2.5× | 6.2× | 2.8× |
 

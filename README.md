@@ -1,8 +1,8 @@
 <p align="center">
-  <img alt="Flide: Extremely Fast Decision Inference with Exact State Forking" src="assets/banner.svg" width="100%">
+  <img alt="Flide: Extremely Fast Decision Inference with Exact State Forking" src=".github/assets/banner.svg" width="100%">
 </p>
 
-<p align="center"><b>English</b> · <a href="assets/README_zh.md">简体中文</a> · <a href="assets/README_ja.md">日本語</a> · <a href="assets/README_ko.md">한국어</a></p>
+<p align="center"><b>English</b> · <a href=".github/assets/README_zh.md">简体中文</a> · <a href=".github/assets/README_ja.md">日本語</a> · <a href=".github/assets/README_ko.md">한국어</a></p>
 
 <p align="center">
   <a href="https://arxiv.org/abs/2610.42148"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-Paper-B31B1B?style=flat-square&logo=arxiv&logoColor=white"></a>
@@ -19,27 +19,28 @@
 [Flide](https://docs.flide.org) is fast inference infrastructure for Jev-style decision models. With exact state forking it is up to 9.5 times faster than vLLM and SGLang, and every answer is the one the model gives the question alone. It serves the Jev `/v1/systemone` API.
 
 <p align="center">
-  <img alt="9.5 times faster than vLLM and SGLang; exact state forking; extremely fast" src="assets/highlights.svg" width="100%">
+  <img alt="9.5 times faster than vLLM and SGLang; exact state forking; extremely fast" src=".github/assets/highlights.svg" width="100%">
 </p>
 
 <p align="center">
-  <img alt="One state forked into three questions, each answered in one forward pass" src="assets/answers.svg" width="100%">
+  <img alt="One state forked into three questions, each answered in one forward pass" src=".github/assets/answers.svg" width="100%">
 </p>
 
 
 ## 🔥 News
 
-- 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and with the session cache on, requests that share a start compute it once.
-- 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now reads only each GPU's part of the weights, so [mammoth-1](https://huggingface.co/baselabs/mammoth-1) in FP8 loads with 17 GB on each of two GPUs instead of 56.
-- 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
+- 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
+- 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
+- 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
 - 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
 - 🔥 **2026-11-12** We added [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) and [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) in Flide 0.1.14, and GLiDE-27B also reads images.
 - 🔥 **2026-11-11** We added [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1), [Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) and [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1) in Flide 0.1.13, and precompiled kernels for RTX 40 series GPUs.
 - 🔥 **2026-11-10** We added [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b), [Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) and [clef-flash](https://huggingface.co/Cloudflare/clef-flash) in Flide 0.1.12, and precompiled kernels for RTX 50 series and RTX PRO 6000 GPUs.
-- 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
+- 🔥 **2026-11-10** We added an [email triage demo](https://github.com/OmniJev/Flide/tree/main/examples) in Flide 0.1.11, where Flide tags 10,000 emails with eight questions each in 28 seconds on one H200.
 - 🔥 **2026-11-09** We added [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0), [Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) and [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5) in Flide 0.1.10, and the KnowLine family now reads images.
 - 🔥 **2026-11-09** We added [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) and [JEV-35B](https://huggingface.co/autotrust/JEV-35B) in Flide 0.1.9, and `/v1/systemone` now takes several requests in one body.
 - 🔥 **2026-11-08** We added two decision model families in Flide 0.1.8, including [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) and [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6), and also [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1).
@@ -83,23 +84,38 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
+Flide also comes as a Docker image. The image holds no model. Models download into the mounted Hugging Face cache, and another model only needs a different `--model`. The host needs only the NVIDIA driver (580 or newer; `omnijev/flide:cu126` runs on older drivers).
+
+```bash
+mkdir -p ~/.cache/huggingface
+docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
+```
+
+On a cluster without Docker, Apptainer runs the same image.
+
+```bash
+mkdir -p ~/.cache/huggingface ~/.cache/flide
+apptainer build flide.sif docker://omnijev/flide
+apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
+```
+
 ## Example
 
-Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/demos/email_triage) has the code to run it yourself.
+Flide answers eight questions for each of 10,000 emails in only 28 s. The [email triage demo](https://github.com/OmniJev/Flide/tree/main/examples) has the code to run it yourself.
 
 <p align="center">
-  <img alt="An email and its eight answers, all from one forward pass" src="demos/email_triage/answers.gif" width="100%">
+  <img alt="An email and its eight answers, all from one forward pass" src="examples/answers.gif" width="100%">
 </p>
 
 <p align="center">
-  <img alt="Time for one email and for 10,000 emails, Flide against three other engines" src="demos/email_triage/chart.png" width="100%">
+  <img alt="Time for one email and for 10,000 emails, Flide against three other engines" src="examples/chart.png" width="100%">
 </p>
 
 On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,000 in 28 seconds, 3.5 times as fast as the fastest other engine for one email and 4.1 times for all of them.
 
 ## Models
 
-The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B runs with `--quantize fp8`, as its release serves it in FP8. A value marked ~ is the average over the sizes tested.
+The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested.
 
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -109,7 +125,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | text | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | ~1.7× | ~1.3× | ~1.1× |
+| [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | text | 1.4× | 2.0× | 1.4× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | ~1.6× | ~1.3× | ~1.1× |
 | [d3](https://huggingface.co/vllm-sr/d3-turbo) | text, images | ~5.0× | ~1.5× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
@@ -126,6 +143,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
+| [liquamen](https://huggingface.co/plantwaterer/liquamen) | text | 1.7× | 1.9× | 1.7× |
+| [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | text | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | text, images | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | text | 1.4× | 1.5× | 1.4× |
 | [mammoth](https://huggingface.co/baselabs/mammoth-1) | text, images | ~4.3× | ~2.8× | ~1.8× |
@@ -142,6 +161,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | text | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | text | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | text, images | 1.6× | 8.4× | 1.5× |
+| [Turion](https://huggingface.co/turion-ai/turion-jev-31b) | text | 1.1× | 1.1× | 1.0× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
 

@@ -2,14 +2,14 @@
   <img alt="Flide：以精确的状态分叉实现极速决策推理" src="zh/banner.svg" width="100%">
 </p>
 
-<p align="center"><a href="../README.md">English</a> · <b>简体中文</b> · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
+<p align="center"><a href="../../README.md">English</a> · <b>简体中文</b> · <a href="README_ja.md">日本語</a> · <a href="README_ko.md">한국어</a></p>
 
 <p align="center">
   <a href="https://arxiv.org/abs/2610.42148"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-Paper-B31B1B?style=flat-square&logo=arxiv&logoColor=white"></a>
   <a href="https://pypi.org/project/flide/"><img alt="PyPI" src="https://img.shields.io/pypi/v/flide?style=flat-square&logo=pypi&logoColor=white&color=3A86FF"></a>
   <a href="https://flide.org"><img alt="Website" src="https://img.shields.io/badge/Website-flide.org-00A890?style=flat-square&logo=googlechrome&logoColor=white"></a>
   <a href="https://docs.flide.org"><img alt="Docs" src="https://img.shields.io/badge/Docs-latest-1F5FD1?style=flat-square&logo=materialformkdocs&logoColor=white"></a>
-  <a href="../LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
+  <a href="../../LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-EF476F?style=flat-square&logo=apache&logoColor=white"></a>
   <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-F28E2B?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pytorch.org"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.12%2B-5B6680?style=flat-square&logo=pytorch&logoColor=white"></a>
 </p>
@@ -29,17 +29,18 @@
 
 ## 🔥 动态
 
-- 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，开着 session cache 时，开头相同的请求只算一次开头。
-- 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行现在每张卡只读自己那一份权重，FP8 的 [mammoth-1](https://huggingface.co/baselabs/mammoth-1) 在两张卡上每张只占 17 GB，原来是 56 GB。
-- 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
+- 🔥 **2026-11-22** Flide 0.1.19 新增 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) 和 [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)，[d1-2B](https://huggingface.co/LiquidAI/d1-2B) 能读图片了，并提供 [Docker 镜像](https://hub.docker.com/r/omnijev/flide)。
+- 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，并加了可选的 session cache。
+- 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行更省显存。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
 - 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
 - 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。
 - 🔥 **2026-11-11** Flide 0.1.13 新增 [FlexDM-LoRA-v2.1](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1)、[Sieve-31B-v3](https://huggingface.co/sthanika-ai/Sieve-31B-v3) 和 [JDI-Decision-V1](https://huggingface.co/JoyIndustrial/JDI-Decision-V1)，并为 RTX 40 系显卡提供预编译内核。
 - 🔥 **2026-11-10** Flide 0.1.12 新增 [GLiDE](https://huggingface.co/collections/fastino/glide-6ada5467fb7eb6ac014fcc4b)、[Nimble-v4-max](https://huggingface.co/bespokelabs/Nimble-v4-max) 和 [clef-flash](https://huggingface.co/Cloudflare/clef-flash)，并为 RTX 50 系和 RTX PRO 6000 显卡提供预编译内核。
-- 🔥 **2026-11-10** Flide 0.1.11 新增[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)，在一张 H200 上 28 秒给 1 万封邮件各回答 8 个问题。
+- 🔥 **2026-11-10** Flide 0.1.11 新增[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/examples)，在一张 H200 上 28 秒给 1 万封邮件各回答 8 个问题。
 - 🔥 **2026-11-09** Flide 0.1.10 支持 [Ainvest-Decision](https://huggingface.co/Ainvest-World/Ainvest-Decision-27b-v1.0)、[Darwin-27B-RSI-Decision](https://huggingface.co/FINAL-Bench/Darwin-27B-RSI-Decision) 和 [KnowLine-31B-Gen1.5](https://huggingface.co/PelaAI/KnowLine-31B-Gen1.5)，KnowLine 系列也能读图片了。
 - 🔥 **2026-11-09** Flide 0.1.9 支持 [pplx-decider-v1.1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b) 和 [JEV-35B](https://huggingface.co/autotrust/JEV-35B)，`/v1/systemone` 也能在一个请求体里接收多个请求。
 - 🔥 **2026-11-08** Flide 0.1.8 新增两个决策模型家族，包括 [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) 和 [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6)，并支持 [drex-max-v1](https://huggingface.co/nace-ai/drex-max-v1)。
@@ -83,23 +84,38 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 }'
 ```
 
+Flide 也有 Docker 镜像。镜像里不带模型，模型下载到挂进去的 Hugging Face 缓存里，换模型只改 `--model`。主机只要装好 NVIDIA 驱动（580 或更新；更旧的驱动用 `omnijev/flide:cu126`）。
+
+```bash
+mkdir -p ~/.cache/huggingface
+docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
+```
+
+没有 Docker 的集群上，用 Apptainer 跑同一个镜像。
+
+```bash
+mkdir -p ~/.cache/huggingface ~/.cache/flide
+apptainer build flide.sif docker://omnijev/flide
+apptainer run --nv --cleanenv --bind ~/.cache/huggingface:/data/hf --bind ~/.cache/flide:/data/triton flide.sif serve --model OmniJev/OneJev1.6-0.8B
+```
+
 ## 示例
 
-Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/demos/email_triage)里有自己复现的代码。
+Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示例](https://github.com/OmniJev/Flide/tree/main/examples)里有自己复现的代码。
 
 <p align="center">
-  <img alt="一封邮件和它的 8 个答案，都来自一次前向计算" src="../demos/email_triage/answers.gif" width="100%">
+  <img alt="一封邮件和它的 8 个答案，都来自一次前向计算" src="../../examples/answers.gif" width="100%">
 </p>
 
 <p align="center">
-  <img alt="回答一封邮件和 1 万封邮件的用时，Flide 对比另外三个引擎" src="../demos/email_triage/chart.png" width="100%">
+  <img alt="回答一封邮件和 1 万封邮件的用时，Flide 对比另外三个引擎" src="../../examples/chart.png" width="100%">
 </p>
 
 在一张 H200 上用 OneJev1.6-0.8B，Flide 回答一封邮件要 10.0 毫秒，1 万封要 28 秒，比其他引擎里最快的分别快 3.5 倍和 4.1 倍。
 
 ## 模型
 
-后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 35B 和它的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 35B 与 Turion 和各自的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
 
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -109,8 +125,9 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 文本 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.7× | ~1.1× | ~1.0× |
-| [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | ~1.7× | ~1.3× | ~1.1× |
-| [d3](https://huggingface.co/vllm-sr/d3-turbo) | 文本、图片 | ~5.1× | ~1.6× | ~1.8× |
+| [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | 文本 | 1.4× | 2.0× | 1.4× |
+| [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | ~1.6× | ~1.3× | ~1.1× |
+| [d3](https://huggingface.co/vllm-sr/d3-turbo) | 文本、图片 | ~5.0× | ~1.5× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 文本 | 1.1× | 2.0× | 2.8× |
@@ -126,6 +143,8 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.4× | ~4.3× | ~1.5× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
+| [liquamen](https://huggingface.co/plantwaterer/liquamen) | 文本 | 1.7× | 1.9× | 1.7× |
+| [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | 文本 | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | 文本、图片 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | 文本 | 1.4× | 1.5× | 1.4× |
 | [mammoth](https://huggingface.co/baselabs/mammoth-1) | 文本、图片 | ~4.3× | ~2.8× | ~1.8× |
@@ -135,12 +154,14 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 文本、图片 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 文本 | ~3.9× | ~7.1× | ~1.6× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 文本、图片 | ~2.1× | ~4.8× | ~1.3× |
+| [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | 文本 | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 文本 | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 文本 | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 文本 | 2.6× | 1.1× | 1.2× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | 文本 | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | 文本 | 4.3× | 1.5× | 2.0× |
-| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.4× |
+| [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 文本、图片 | 1.6× | 8.4× | 1.5× |
+| [Turion](https://huggingface.co/turion-ai/turion-jev-31b) | 文本 | 1.1× | 1.1× | 1.0× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | 文本 | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | 文本、图片、视频 | 2.5× | 6.2× | 2.8× |
 

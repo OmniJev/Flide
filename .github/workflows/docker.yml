@@ -54,7 +54,6 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile
           platforms: ${{ matrix.platforms }}
           build-args: TORCH_INDEX=${{ matrix.index }}
           push: true

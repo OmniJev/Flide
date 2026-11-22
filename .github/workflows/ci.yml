@@ -19,7 +19,7 @@ jobs:
           pip install "torch>=2.12,<2.15" --index-url https://download.pytorch.org/whl/cpu
           pip install .
       - name: Compile
-        run: python -m compileall -q flide plugins demos tests
+        run: python -m compileall -q flide plugins examples tests
       - name: Kernel bundle tests
         run: |
           # torch's CPU wheel does not depend on triton, and fla-core requires it only under extras,
@@ -41,5 +41,5 @@ jobs:
           flide --help
       - name: Demo scripts
         run: |
-          python demos/email_triage/make_requests.py --help
-          python demos/email_triage/bench.py --help
+          python examples/make_requests.py --help
+          python examples/bench.py --help
