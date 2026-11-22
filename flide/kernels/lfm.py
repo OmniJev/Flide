@@ -9,7 +9,7 @@ import triton.language as tl
 
 @triton.jit
 def _short_conv_kernel(bcx, w, prev, y, T, C, s_bcx, s_prev, s_y, K: tl.constexpr, BLOCK: tl.constexpr):
-    t = tl.program_id(0)
+    t = tl.program_id(0).to(tl.int64)
     offs = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
     m = offs < C
     row = bcx + t * s_bcx
@@ -17,7 +17,7 @@ def _short_conv_kernel(bcx, w, prev, y, T, C, s_bcx, s_prev, s_y, K: tl.constexp
            * tl.load(row + 2 * C + offs, mask=m, other=0.0).to(tl.float32)
            * tl.load(w + offs * K + (K - 1), mask=m, other=0.0).to(tl.float32))
     for j in tl.static_range(1, K):
-        p = tl.load(prev + t * s_prev + (j - 1))
+        p = tl.load(prev + t * s_prev + (j - 1)).to(tl.int64)
         ok = m & (p < T)
         pr = bcx + p * s_bcx
         bx = (tl.load(pr + offs, mask=ok, other=0.0).to(tl.float32)
@@ -46,7 +46,7 @@ def short_conv(bcx: torch.Tensor, weight: torch.Tensor, prev: torch.Tensor) -> t
 
 @triton.jit
 def _gate_kernel(o, g, s_ot, s_oh, s_gt, H, D, BLOCK_D: tl.constexpr):
-    t = tl.program_id(0)
+    t = tl.program_id(0).to(tl.int64)
     h = tl.program_id(1)
     offs = tl.arange(0, BLOCK_D)
     m = offs < D

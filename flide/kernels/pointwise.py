@@ -21,7 +21,7 @@ def _p2(n: int) -> int:
 @triton.jit
 def _rms_kernel(X, D, W, H_OUT, Y, N, sx, sd, sh, sy, eps, ADD: tl.constexpr, OFFSET: tl.constexpr,
                 BLOCK: tl.constexpr):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     cols = tl.arange(0, BLOCK)
     m = cols < N
     x = tl.load(X + row * sx + cols, mask=m, other=0.0)
@@ -51,7 +51,7 @@ def rms_norm(x, w, eps: float, residual=None, offset: bool = True, dtype=None):
 
 @triton.jit
 def _swiglu_kernel(GU, OUT, N, sg, so, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     cols = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
     m = cols < N
     a = tl.load(GU + row * sg + cols, mask=m, other=0.0).to(tl.float32)
@@ -71,7 +71,7 @@ def swiglu(gu, n: int):
 
 @triton.jit
 def _gated_rms_kernel(O, Z, W, OUT, T, DV, so_t, so_h, sz_t, sout_t, eps, BT: tl.constexpr, BLOCK: tl.constexpr):
-    t = tl.program_id(0) * BT + tl.arange(0, BT)
+    t = tl.program_id(0).to(tl.int64) * BT + tl.arange(0, BT)
     h = tl.program_id(1)
     cols = tl.arange(0, BLOCK)
     mc = cols < DV
@@ -100,7 +100,7 @@ def gated_rms(o, z, w, eps: float):
 @triton.jit
 def _qk_kernel(X, COS, SIN, W, OUT, T, HD, R, sx_t, sx_h, sc_t, so_t, so_h, eps, BT: tl.constexpr,
                BLOCK: tl.constexpr):
-    t = tl.program_id(0) * BT + tl.arange(0, BT)
+    t = tl.program_id(0).to(tl.int64) * BT + tl.arange(0, BT)
     h = tl.program_id(1)
     d = tl.arange(0, BLOCK)
     mt = t < T
@@ -145,7 +145,7 @@ def norm_rope(x, cos, sin, w, eps: float):
 
 @triton.jit
 def _gate_kernel(O, G, OUT, T, HD, so_t, so_h, sg_t, sg_h, sout_t, BT: tl.constexpr, BLOCK: tl.constexpr):
-    t = tl.program_id(0) * BT + tl.arange(0, BT)
+    t = tl.program_id(0).to(tl.int64) * BT + tl.arange(0, BT)
     h = tl.program_id(1)
     d = tl.arange(0, BLOCK)
     m = (t < T)[:, None] & (d < HD)[None, :]
@@ -169,7 +169,7 @@ def gate(o, g):
 @triton.jit
 def _gnorm_rope_kernel(X, COS, SIN, W, OUT, T, HD, sx_t, sx_h, sc_t, so_t, so_h, eps, HAS_W: tl.constexpr,
                        ROPE: tl.constexpr, BT: tl.constexpr, BLOCK: tl.constexpr):
-    t = tl.program_id(0) * BT + tl.arange(0, BT)
+    t = tl.program_id(0).to(tl.int64) * BT + tl.arange(0, BT)
     h = tl.program_id(1)
     d = tl.arange(0, BLOCK)
     mt = t < T
@@ -213,7 +213,7 @@ def gemma_norm_rope(x, cos, sin, w, eps: float):
 @triton.jit
 def _sandwich_kernel(D, H, W1, S, W2, H_OUT, Y, N, sd, sh, sho, sy, eps, HAS_S: tl.constexpr, NEXT: tl.constexpr,
                      BLOCK: tl.constexpr):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     cols = tl.arange(0, BLOCK)
     m = cols < N
     d = tl.load(D + row * sd + cols, mask=m, other=0.0).to(tl.float32)
@@ -247,7 +247,7 @@ def sandwich(d, h, w1, eps: float, scale=None, w2=None, dtype=None):
 
 @triton.jit
 def _geglu_kernel(A, B, OUT, N, sa, sb, so, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     cols = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
     m = cols < N
     a = tl.load(A + row * sa + cols, mask=m, other=0.0).to(tl.float32)

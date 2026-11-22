@@ -55,11 +55,7 @@ def lerp(x, y, g: float):
 
 
 def swiglu(gu, n: int):
-    """The kernel addresses a row as row x stride in 32 bits, so a stream of more rows than that holds goes in pieces."""
-    step = (2 ** 31 - 1) // max(gu.stride(0), 1)
-    if gu.shape[0] <= step:
-        return pw.swiglu(gu, n)
-    return torch.cat([pw.swiglu(gu[i: i + step], n) for i in range(0, gu.shape[0], step)])
+    return pw.swiglu(gu, n)
 
 
 def ffn(w: dict, x):

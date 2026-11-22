@@ -26,12 +26,7 @@ from ...kernels.fp8 import mm
 
 
 def _geglu(a, b):
-    """pointwise.geglu, whose kernel addresses a row as row x stride in 32 bits: a stream of more rows than that holds
-    (a large packed round of Gemma 4 31B, 43008 numbers a row) goes in pieces."""
-    step = (2 ** 31 - 1) // max(a.stride(0), b.stride(0), 1)
-    if a.shape[0] <= step:
-        return pw.geglu(a, b)
-    return torch.cat([pw.geglu(a[i: i + step], b[i: i + step]) for i in range(0, a.shape[0], step)])
+    return pw.geglu(a, b)
 
 
 def rmm(x, w):

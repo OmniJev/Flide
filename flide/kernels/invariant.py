@@ -33,8 +33,8 @@ def _mm_kernel(X, W, Y, M, N, K, sxm, swn, sym, BM: tl.constexpr, BN: tl.constex
     size = min(num_m - first, GROUP)
     pm = first + (pid % width) % size
     pn = (pid % width) // size
-    rm = pm * BM + tl.arange(0, BM)
-    rn = pn * BN + tl.arange(0, BN)
+    rm = pm.to(tl.int64) * BM + tl.arange(0, BM)
+    rn = pn.to(tl.int64) * BN + tl.arange(0, BN)
     rk = tl.arange(0, BK)
     acc = tl.zeros((BM, BN), dtype=tl.float32)
     for k0 in range(0, K, BK):
