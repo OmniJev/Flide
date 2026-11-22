@@ -19,6 +19,7 @@ _BUILTIN = {"qwen3_5": "flide.backbones.qwen35:Qwen35", "qwen3_5_text": "flide.b
             "qwen3_5_moe": "flide.backbones.qwen35:Qwen35", "qwen3_5_moe_text": "flide.backbones.qwen35:Qwen35",
             "gemma4": "flide.backbones.gemma4:Gemma4", "gemma4_text": "flide.backbones.gemma4:Gemma4",
             "gemma4_unified": "flide.backbones.gemma4:Gemma4",
+            "gemma4_unified_text": "flide.backbones.gemma4:Gemma4",
             "lfm2": "flide.backbones.lfm2:Lfm2", "lfm2_vl": "flide.backbones.lfm2:Lfm2",
             "lfm3": "flide.backbones.lfm3:Lfm3", "lfm3_vl": "flide.backbones.lfm3:Lfm3"}
 _loaded = False

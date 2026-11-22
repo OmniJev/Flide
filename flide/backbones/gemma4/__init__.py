@@ -1,4 +1,4 @@
-"""Packed forward for Gemma 4 decoders (gemma4, gemma4_text, gemma4_unified: E2B, E4B, 12B, 26B-A4B, 31B).
+"""Packed forward for Gemma 4 decoders (gemma4, gemma4_text, gemma4_unified[_text]: E2B, E4B, 12B, 26B-A4B, 31B).
 
 Gemma 4 has no recurrent layers, so the packed stream needs nothing but attention that knows which tokens see which:
 every other step is per token. The decoder runs as the checkpoint's own transformers modules over the stream as one
@@ -150,8 +150,9 @@ def _register() -> None:
 
 
 class Gemma4(Backbone):
-    model_types = ("gemma4", "gemma4_text", "gemma4_unified")
+    model_types = ("gemma4", "gemma4_text", "gemma4_unified", "gemma4_unified_text")
     block_attention = True
+    prefix_attention = True   # Plan.attention "prefix": the prefix both ways in the global layers, branches one way
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
@@ -375,7 +376,7 @@ class Gemma4(Backbone):
         their window and also letting the tokens of one image see each other on the sizes trained so (their key
         ranges are widened to the end of the image in place). A batch with sessions reads prefix keys from a context
         buffer."""
-        if batch is not None and any(j.blocks for j in batch.jobs):
+        if batch is not None and any(j.blocks or j.prefix_two_way for j in batch.jobs):
             return self._block_meta(tok, ranges, batch)
         ctx = k1 = None
         if batch is not None and batch.ctx is not None:
@@ -398,14 +399,17 @@ class Gemma4(Backbone):
                 "sliding_attention": _Meta(sl_tok, sl_ranges, k1, ctx, groups, tiles=full_ranges)}
 
     def _block_meta(self, tok, ranges, batch: PackedBatch) -> dict:
-        """Block attention (formats.base.Plan): the global layers see every block whole, from the batch's key ranges and a
-        block number per token (a block job's prefix 0, its branches 1, every other token -1); the sliding layers read
-        the same queries causally, cut to their window. Text without sessions."""
+        """Block and prefix attention (formats.base.Plan): the global layers see every block whole, from the batch's key
+        ranges and a block number per token (a block job's prefix 0 and its branches 1; a prefix job's prefix 0 and its
+        branches -1, which pack's ranges keep one way; every other token -1); the sliding layers read the same queries
+        causally, cut to their window. Text without sessions."""
         if batch.vision or batch.ctx is not None:
-            raise ValueError("block attention on gemma4 takes text without session states")
+            raise ValueError("block and prefix attention on gemma4 take text without session states")
         job, branch, qpos = tok
-        isblk = torch.tensor([j.blocks for j in batch.jobs], device=job.device)[job.long()]
-        blk = torch.where(isblk, (branch >= 0).int(), -1).to(torch.int32)
+        jl = job.long()
+        isblk = torch.tensor([j.blocks for j in batch.jobs], device=job.device)[jl]
+        istwo = torch.tensor([j.prefix_two_way for j in batch.jobs], device=job.device)[jl]
+        blk = torch.where(isblk, (branch >= 0).int(), torch.where(istwo & (branch < 0), 0, -1)).to(torch.int32)
         causal = ranges.clone()
         idx = torch.arange(ranges.shape[0], device=ranges.device, dtype=ranges.dtype)
         causal[:, 1] = torch.where(branch < 0, torch.minimum(ranges[:, 1], ranges[:, 0] + qpos.to(ranges.dtype) + 1),

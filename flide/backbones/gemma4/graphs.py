@@ -44,6 +44,7 @@ REQUESTS = 64   # requests per replay, at most one per 32 tokens of its length
 
 class GemmaGraphs:
     block_attention = True   # rounds of block-attention requests replay the graphs in `bgraphs`
+    prefix_attention = True   # and prefix-attention ones (fourth field "prefix": the branches one way)
     alone_reads = True   # a sequence read whole under block attention, as its own request read at its last token
 
     def __init__(self, bb, ladder=LADDER, bmax: int = BMAX, pick: int = 0):
@@ -289,6 +290,7 @@ class GemmaGraphs:
             one = len(req[1]) == 1 and not (settings.batch_invariant and req[0])
             items.append((req[0] + req[1][0], [], media) if one else (req[0], req[1], media))
         blocks = [len(req) > 3 and bool(req[3]) for req in reqs]
+        two = [len(req) > 3 and req[3] == "prefix" for req in reqs]   # prefix attention: only the prefix both ways
         blk[:] = -1
         if any(blocks):   # only rounds with block attention read the global layers' block numbers
             gblk[:] = -1
@@ -306,8 +308,12 @@ class GemmaGraphs:
             r[2:, s] = 0
             if blocks[j]:   # the prefix whole; a one-branch request's branch, run as part of its sequence, whole too
                 p = len(reqs[j][0])
-                r[1, s] = np.where(ar < p, at + p, at + n)
-                gblk[s] = (ar >= p).astype(np.int64)
+                if two[j]:   # prefix attention: that branch one way, outside every block
+                    r[1, s] = np.where(ar < p, at + p, ar + at + 1)
+                    gblk[s] = np.where(ar < p, 0, -1)
+                else:
+                    r[1, s] = np.where(ar < p, at + p, at + n)
+                    gblk[s] = (ar >= p).astype(np.int64)
             if media is not None and bb.bidir:   # the tokens of one image see each other (sliding layers)
                 for a, e in vision_runs(ids[s], bb.placeholders):
                     blk[at + a: at + e] = nblk
@@ -333,9 +339,9 @@ class GemmaGraphs:
                 r[0, s] = p0
                 r[1, s] = p0 + n
                 r[2, s] = at
-                r[3, s] = at + m if blocks[j] else ar + at + 1
+                r[3, s] = at + m if blocks[j] and not two[j] else ar + at + 1
                 if blocks[j]:
-                    gblk[s] = 1
+                    gblk[s] = -1 if two[j] else 1
                 reads[nread] = at + m - 1
                 nread += 1
                 at += m
