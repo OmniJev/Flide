@@ -57,39 +57,17 @@
 
 ## Quick start
 
-Flide runs on an NVIDIA GPU under Linux or Windows WSL2. See the [docs](https://docs.flide.org) for every model, images, the API and all options.
+Flide runs on an NVIDIA GPU under Linux or Windows WSL2. Install it with uv, or pull the Docker image.
 
 ```bash
-uv venv -p 3.12 && source .venv/bin/activate
-uv pip install flide torchvision
-flide serve --model OmniJev/OneJev1.6-0.8B
+uv pip install flide
 ```
-
-Any model in the [model table](#models) starts the same way, for example Perplexity's decision model.
 
 ```bash
-flide serve --model perplexity-ai/pplx-decider-flash-v1.2
+docker pull omnijev/flide
 ```
 
-Every one of them answers this request.
-
-```bash
-curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
-  "state": "Order #1182 arrived with a cracked screen. The customer asks for a refund and attached two photos.",
-  "questions": {
-    "action": {"type": "choice", "instructions": "What should support do next?",
-               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}},
-    "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
-  }
-}'
-```
-
-Flide also comes as a Docker image. The image holds no model. Models download into the mounted Hugging Face cache, and another model only needs a different `--model`. The host needs only the NVIDIA driver (580 or newer; `omnijev/flide:cu126` runs on older drivers).
-
-```bash
-mkdir -p ~/.cache/huggingface
-docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
-```
+See the [docs](https://docs.flide.org) for every model, images, the API and all options.
 
 ## Example
 

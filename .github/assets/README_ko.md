@@ -57,39 +57,17 @@
 
 ## 빠른 시작
 
-Flide는 NVIDIA GPU가 필요하며 Linux 또는 Windows WSL2에서 실행됩니다. 모든 모델, 이미지, API, 전체 옵션은 [문서](https://docs.flide.org)를 참고하세요.
+Flide는 NVIDIA GPU가 필요하며 Linux 또는 Windows WSL2에서 실행됩니다. uv로 설치하거나 Docker 이미지를 받으세요.
 
 ```bash
-uv venv -p 3.12 && source .venv/bin/activate
-uv pip install flide torchvision
-flide serve --model OmniJev/OneJev1.6-0.8B
+uv pip install flide
 ```
-
-[모델 표](#모델)의 어떤 모델이든 같은 방식으로 시작합니다. 예를 들어 Perplexity의 의사결정 모델은 이렇게 실행합니다.
 
 ```bash
-flide serve --model perplexity-ai/pplx-decider-flash-v1.2
+docker pull omnijev/flide
 ```
 
-모든 모델이 이 요청에 답합니다.
-
-```bash
-curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
-  "state": "Order #1182 arrived with a cracked screen. The customer asks for a refund and attached two photos.",
-  "questions": {
-    "action": {"type": "choice", "instructions": "What should support do next?",
-               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}},
-    "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
-  }
-}'
-```
-
-Flide는 Docker 이미지로도 제공됩니다. 이미지에는 모델이 들어 있지 않습니다. 모델은 마운트한 Hugging Face 캐시로 내려받아지고, 다른 모델은 `--model`만 바꾸면 됩니다. 호스트에는 NVIDIA 드라이버만 있으면 됩니다(580 이상, 더 오래된 드라이버에서는 `omnijev/flide:cu126`).
-
-```bash
-mkdir -p ~/.cache/huggingface
-docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
-```
+모든 모델, 이미지, API, 전체 옵션은 [문서](https://docs.flide.org)를 참고하세요.
 
 ## 예시
 

@@ -57,39 +57,17 @@
 
 ## 快速开始
 
-Flide 需要 NVIDIA 显卡，在 Linux 或 Windows 的 WSL2 上运行。每个模型的用法、图片、接口和全部选项见[文档](https://docs.flide.org)。
+Flide 需要 NVIDIA 显卡，在 Linux 或 Windows 的 WSL2 上运行。用 uv 安装，或者拉取 Docker 镜像。
 
 ```bash
-uv venv -p 3.12 && source .venv/bin/activate
-uv pip install flide torchvision
-flide serve --model OmniJev/OneJev1.6-0.8B
+uv pip install flide
 ```
-
-[模型表](#模型)里的任何模型都这样启动，比如 Perplexity 的决策模型。
 
 ```bash
-flide serve --model perplexity-ai/pplx-decider-flash-v1.2
+docker pull omnijev/flide
 ```
 
-它们都能回答这个请求。
-
-```bash
-curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
-  "state": "Order #1182 arrived with a cracked screen. The customer asks for a refund and attached two photos.",
-  "questions": {
-    "action": {"type": "choice", "instructions": "What should support do next?",
-               "criteria": {"refund": "refund the order", "replace": "send a replacement", "escalate": "ask a human"}},
-    "urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"}
-  }
-}'
-```
-
-Flide 也有 Docker 镜像。镜像里不带模型，模型下载到挂进去的 Hugging Face 缓存里，换模型只改 `--model`。主机只要装好 NVIDIA 驱动（580 或更新；更旧的驱动用 `omnijev/flide:cu126`）。
-
-```bash
-mkdir -p ~/.cache/huggingface
-docker run --gpus all -p 8000:8000 --user $(id -u):$(id -g) -v ~/.cache/huggingface:/data/hf omnijev/flide serve --model OmniJev/OneJev1.6-0.8B
-```
+每个模型的用法、图片、接口和全部选项见[文档](https://docs.flide.org)。
 
 ## 示例
 
