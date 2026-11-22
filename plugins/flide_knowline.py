@@ -1,5 +1,7 @@
 """KnowLine family (PelaAI/KnowLine-26B-A4B-Gen2.5 on Gemma 4 26B-A4B, and the other KnowLine releases): the release's
 own front end, knowline_server.py with knowline_layout.py, in its default setting (chat style, temperature 1, read twice).
+Poindexter-Labs/Copernicus-31B ships the same front end as copernicus_server.py with copernicus_layout.py and is served
+the same way.
 
 The state becomes chat turns (a list of role messages, or {"messages": [...]}, stays a chat; anything else is one user
 message, flattened to indented text), then one user turn holds the instruction, the question and its options labeled A,
@@ -43,6 +45,7 @@ READ_AGAIN = "Read the same input again before answering:\n"
 HEADER_HEAD = "Questions that will be asked about the conversation or state below:\n"
 MAX_LABELS = 255
 MAX_QUESTIONS = 64
+SERVERS = ("knowline_server.py", "copernicus_server.py")   # the front end a checkpoint ships, under either name
 SLOT1, SLOT2 = "KNOWLINE_9f0c1e7a4b2d4c5e8a6b3f1d2c7e9a01", "KNOWLINE_5b8e2d6c1a9f4e3b7c0d2a6e8f1b4c93"
 TEMPLATE_KW = {"tokenize": False, "add_generation_prompt": True, "enable_thinking": False}
 READ = Read("labels")
@@ -463,8 +466,8 @@ class KnowLine(Format):
         self.temperatures = {k: float(v) for k, v in (temperatures or {}).items()}
         config = json.loads((Path(model_dir) / "config.json").read_text())
         self.vision = config.get("vision_config") is not None
-        server = Path(model_dir) / "knowline_server.py"
-        self.assets = server.is_file() and "def load_assets(" in server.read_text()
+        server = next((Path(model_dir) / f for f in SERVERS if (Path(model_dir) / f).is_file()), None)
+        self.assets = server is not None and "def load_assets(" in server.read_text()
         self._pieces = Pieces(self.tokenizer)
         self._cut_checks = 0
         prefix, _, ending, _ = self._scaffold("x", False)
@@ -473,7 +476,7 @@ class KnowLine(Format):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
-        return (Path(model_dir) / "knowline_server.py").is_file()
+        return any((Path(model_dir) / f).is_file() for f in SERVERS)
 
     def _find_labels(self, context: str) -> tuple[list[str], list[int]]:
         """Labels A..Z, AA.. that are one token right after `context`, a real prompt ending."""
