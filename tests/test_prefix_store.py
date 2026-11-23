@@ -16,12 +16,14 @@ def test_store_shares_prefix_rows_in_one_arena():
     store.configure("cpu")
     k = torch.arange(100, dtype=torch.float32).reshape(100, 1)
     v = k + 1000
-    root = store.insert([*range(100)], {64: {"s": torch.tensor([64.0])}}, {0: (k, v)})
+    root, root_states, root_state_keys, _ = store.insert(
+        list(range(100)), {64: {"s": torch.tensor([64.0])}}, {0: (k, v)}
+    )
     child_k, child_v = (
         torch.arange(150, dtype=torch.float32).reshape(150, 1),
         torch.arange(150, dtype=torch.float32).reshape(150, 1) + 1000,
     )
-    child = store.insert(
+    child, child_states, _, _ = store.insert(
         [*range(150)], {128: {"s": torch.tensor([128.0])}}, {0: (child_k, child_v)}
     )
 
@@ -29,12 +31,47 @@ def test_store_shares_prefix_rows_in_one_arena():
     assert child.parent is root
     assert child.tokens == list(range(100, 150))
     assert store.used == 1208  # 100 rows of K/V + 50 rows of K/V + two 4-byte states
-    parts = store.entry_data(child)[1][0][0]
-    assert [(lo, hi) for _, lo, hi in parts] == [(0, 100), (100, 150)]
-    assert parts[0][0].data_ptr() == root.kv[0][0].data_ptr()
-    assert parts[1][0].data_ptr() == child.kv[0][0].data_ptr()
-    assert torch.equal(parts[0][0], k)
-    assert torch.equal(parts[1][0], child_k[100:])
+    parts = store.entry_data(child)[0][0]
+    assert [(lo, hi) for _, lo, hi in parts] == [(0, 64), (64, 100), (100, 150)]
+    assert parts[0][0].data_ptr() == root.parent.kv[0][0].data_ptr()
+    assert parts[1][0].data_ptr() == root.kv[0][0].data_ptr()
+    assert parts[2][0].data_ptr() == child.kv[0][0].data_ptr()
+    assert torch.equal(torch.cat([part[0] for part in parts[:2]]), k)
+    assert torch.equal(parts[2][0], child_k[100:])
+    assert torch.equal(child_states[128]["s"], torch.tensor([128.0]))
+
+
+def test_siblings_share_full_blocks_before_their_divergence():
+    store = Store(1 << 20)
+    store.configure("cpu")
+    common = list(range(100))
+
+    def kv(tokens):
+        keys = torch.arange(len(tokens), dtype=torch.float32).reshape(-1, 1)
+        return {0: (keys, keys + 1)}
+
+    first_tokens = common + list(range(1000, 1100))
+    second_tokens = common + list(range(2000, 2100))
+    first, _, _, _ = store.insert(first_tokens, {}, kv(first_tokens))
+    assert store._parent(second_tokens)[1] == 64
+    second, _, _, _ = store.insert(second_tokens, {}, kv(second_tokens))
+
+    assert first is not None and second is not None
+    assert store.used == (len(first_tokens) + len(second_tokens) - 64) * 8
+    first_root, second_root = first, second
+    while first_root.parent is not None:
+        first_root = first_root.parent
+    while second_root.parent is not None:
+        second_root = second_root.parent
+    assert first_root is second_root
+    assert first_root.end == 64
+    segments = store.entry_data(second)[0][0]
+    assert [(lo, hi) for _, lo, hi in segments] == [
+        (0, 64),
+        (64, 128),
+        (128, 192),
+        (192, 200),
+    ]
 
 
 def test_session_cache_reuses_trunk_across_siblings():
@@ -57,13 +94,10 @@ def test_session_cache_reuses_trunk_across_siblings():
     assert cache.used == 1612
     assert cache.pstore is not None
     assert cache.pstore.used == cache.used
-    assert len(cache.pstore.nodes) == 3  # shared trunk plus two distinct tails
-    assert sorted(node.span for node in cache.pstore.nodes.values()) == [0, 100, 100]
-    assert all(
-        node.parent is not None
-        for node in cache.pstore.nodes.values()
-        if node.span == 100
-    )
+    assert len(cache.pstore.nodes) == 4  # two shared blocks plus distinct tails
+    assert sum(node.span == 0 for node in cache.pstore.nodes.values()) == 1
+    assert sum(node.span == 64 for node in cache.pstore.nodes.values()) == 1
+    assert sum(node.span == 100 for node in cache.pstore.nodes.values()) == 2
 
     cache.clear()
     assert cache.used == 0
@@ -71,21 +105,53 @@ def test_session_cache_reuses_trunk_across_siblings():
     assert not cache.pstore.nodes
 
 
+def test_agent_releases_obsolete_state_marks():
+    cache = SessionCache(1 << 20, min_tokens=1, stride=64, margin=8)
+    cache.attach_prefix_store("cpu")
+    parent = None
+    for mark in range(64, 64 * 9, 64):
+        tokens = list(range(mark + 8))
+        keys = torch.arange(len(tokens), dtype=torch.float32).reshape(-1, 1)
+        entry = Entry(
+            tokens,
+            {mark: {"s": torch.full((256,), float(mark))}},
+            {0: (keys, keys + 1)},
+        )
+        cache.insert(entry, parent=parent)
+        parent = entry
+
+    assert cache.stats()["entries"] == 1
+    assert sorted(
+        record.position for record in cache.pstore.state_records.values()
+    ) == [
+        64 * 7,
+        64 * 8,
+    ]
+    assert (
+        sum(record.bytes for record in cache.pstore.state_records.values())
+        == 2 * 256 * 4
+    )
+
+
 def test_store_reclaims_parent_after_last_child_reference():
     store = Store(1 << 16)
     store.configure("cpu")
     root_kv = {0: (torch.zeros(64, 1), torch.zeros(64, 1))}
-    root = store.insert(list(range(64)), {32: {"s": torch.zeros(2)}}, root_kv)
-    child = store.insert(
+    root, _, root_state_keys, _ = store.insert(
+        list(range(64)), {32: {"s": torch.zeros(2)}}, root_kv
+    )
+    child, _, child_state_keys, _ = store.insert(
         list(range(96)),
         {80: {"s": torch.zeros(2)}},
         {0: (torch.zeros(96, 1), torch.zeros(96, 1))},
     )
     assert root is not None and child is not None
     before = store.used
-    assert store.release(root) == 0  # child still depends on the trunk
-    freed = store.release(child)
-    assert freed == before
+    assert (
+        store.release(root, root_state_keys) == 8
+    )  # child still depends on the K/V trunk
+    freed = store.release(child, child_state_keys)
+    assert freed + 8 == before
     assert store.used == 0
     assert not store.nodes
 
@@ -99,10 +165,10 @@ def test_store_reuses_one_arena_for_mixed_tensor_dtypes():
         "s": torch.arange(4, dtype=torch.float32),
         "conv": [torch.ones(2, dtype=torch.bfloat16)],
     }
-    node = store.insert(list(range(16)), {8: state}, {0: (keys, values)})
+    node, states, _, _ = store.insert(list(range(16)), {8: state}, {0: (keys, values)})
 
     assert node is not None
-    states, layers = store.entry_data(node)
+    layers = store.entry_data(node)
     assert store.used == 16 * 2 + 16 * 2 + 4 * 4 + 2 * 2
     assert torch.equal(layers[0][0][0][0], keys)
     assert torch.equal(layers[0][1][0][0], values)

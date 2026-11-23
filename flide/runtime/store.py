@@ -18,7 +18,7 @@ def key_of(parent: bytes, tokens) -> bytes:
 
 
 class Node:
-    """One prefix extension, with only its newly-owned rows and snapshots."""
+    """One token block, with only the K/V rows it owns."""
 
     __slots__ = (
         "allocations",
@@ -30,7 +30,6 @@ class Node:
         "refs",
         "sessions",
         "span",
-        "states",
         "tokens",
     )
 
@@ -40,8 +39,7 @@ class Node:
         self.parent = parent
         self.children: dict[bytes, Node] = {}
         self.kv = {}
-        self.states = {}
-        self.refs = 1
+        self.refs = 0
         self.sessions: set = set()
         self.span = parent.end if parent is not None else 0
         self.allocations: list[tuple[int, int]] = []
@@ -50,6 +48,20 @@ class Node:
     @property
     def end(self) -> int:
         return self.span + len(self.tokens)
+
+
+class StateSnapshot:
+    """One saved recurrent state, shared by entries with the same prefix and position."""
+
+    __slots__ = ("position", "tokens", "value", "refs", "allocations", "bytes")
+
+    def __init__(self, position, tokens, value, allocations):
+        self.position = position
+        self.tokens = tuple(tokens)
+        self.value = value
+        self.refs = 0
+        self.allocations = allocations
+        self.bytes = sum(size for _, size in allocations)
 
 
 class Store:
@@ -65,6 +77,7 @@ class Store:
         self.used = 0
         self.nodes: OrderedDict[bytes, Node] = OrderedDict()
         self.by_position: dict[int, set[bytes]] = {}
+        self.state_records: dict[bytes, StateSnapshot] = {}
         self.evictions = 0
         self.buffer = None
         self.device = None
@@ -204,14 +217,6 @@ class Store:
             node = node.parent
         return list(reversed(out))
 
-    def _has_state(self, parent: Node | None, pos: int) -> bool:
-        node = parent
-        while node is not None:
-            if pos in node.states:
-                return True
-            node = node.parent
-        return False
-
     def _parent(self, tokens) -> tuple[Node | None, int]:
         parent, best = None, 0
         for node in self.nodes.values():
@@ -222,98 +227,141 @@ class Store:
                 parent, best = node, end
         return parent, best
 
-    def insert(self, tokens, states: dict, kv: dict, session=None) -> Node | None:
-        """Add one prefix entry, copying only K/V rows and states not already held by ancestors.
+    def _state_key(
+        self, position: int, prefix, staged: dict[bytes, StateSnapshot]
+    ) -> bytes:
+        seed = b"state" + position.to_bytes(8, "little", signed=True)
+        base = key_of(seed, prefix)
+        key, nonce = base, 0
+        target = tuple(prefix)
+        while True:
+            record = staged.get(key) or self.state_records.get(key)
+            if record is None or (
+                record.position == position and record.tokens == target
+            ):
+                return key
+            nonce += 1
+            key = hashlib.blake2b(
+                base + nonce.to_bytes(8, "little"), digest_size=16
+            ).digest()
 
-        Returns ``None`` without changing the store if the arena cannot fit the
-        new data. The caller can then evict cache entries and retry.
+    def _node_key(
+        self, parent: Node | None, tokens, staged: dict[bytes, Node]
+    ) -> bytes:
+        base = key_of(parent.key if parent is not None else b"", tokens)
+        key, nonce = base, 0
+        while True:
+            node = staged.get(key) or self.nodes.get(key)
+            if node is None or (node.parent is parent and node.tokens == list(tokens)):
+                return key
+            nonce += 1
+            key = hashlib.blake2b(
+                base + nonce.to_bytes(8, "little"), digest_size=16
+            ).digest()
+
+    def insert(self, tokens, states: dict, kv: dict, session=None):
+        """Insert token blocks, K/V tails, and independently referenced save points.
+
+        Nodes are split at ``BLOCK`` boundaries, so siblings share their common
+        token blocks even when neither complete prefix contains the other.
+        Returns ``(leaf, stored_states, state_keys, added_bytes)`` or ``None``
+        without changing the store if its arena cannot fit the insertion.
         """
         parent, shared = self._parent(tokens)
-        node = parent if parent is not None and shared == len(tokens) else None
-        if node is None:
-            key = key_of(parent.key if parent is not None else b"", tokens[shared:])
-            node = self.nodes.get(key)
-            if node is not None and not self._prefix_equals(node, len(tokens), tokens):
-                # Do not let even a digest collision replace an unrelated live path.
-                base = key
-                nonce = 1
-                while node is not None and not self._prefix_equals(
-                    node, len(tokens), tokens
-                ):
-                    key = hashlib.blake2b(
-                        base + nonce.to_bytes(8, "little"), digest_size=16
-                    ).digest()
-                    node = self.nodes.get(key)
-                    nonce += 1
+        staged_nodes: list[Node] = []
+        staged_by_key: dict[bytes, Node] = {}
+        kv_allocations: list[tuple[int, int]] = []
+        state_allocations: list[tuple[int, int]] = []
+        new_states: dict[bytes, StateSnapshot] = {}
+        state_keys: list[bytes] = []
+        stored_states = {}
 
-        if node is not None:
-            allocations: list[tuple[int, int]] = []
-            copied_states = {}
-            try:
-                for pos, state in states.items():
-                    if pos > len(tokens) or self._has_state(node, pos):
-                        continue
-                    copied = self._copy_tree(state, allocations)
-                    if copied is None:
-                        self._rollback(allocations)
-                        return None
-                    copied_states[pos] = copied
-            except Exception:
-                self._rollback(allocations)
-                raise
-            node.states.update(copied_states)
-            for pos in copied_states:
-                self.by_position.setdefault(pos, set()).add(node.key)
-            node.allocations.extend(allocations)
-            added = sum(size for _, size in allocations)
-            node.bytes += added
-            self.used += added
-            node.refs += 1
-            if session is not None:
-                node.sessions.add(session)
-            return node
-
-        node = Node(tokens[shared:], key, parent)
-        missing_states = {
-            pos: state
-            for pos, state in states.items()
-            if pos <= len(tokens) and not self._has_state(parent, pos)
-        }
-        allocations: list[tuple[int, int]] = []
-        copied_states = {}
         try:
-            for pos, state in missing_states.items():
-                copied_states[pos] = self._copy_tree(state, allocations)
-                if copied_states[pos] is None:
-                    self._rollback(allocations)
-                    return None
+            # K/V storage is chunked independently of the input's original
+            # allocation boundaries.
+            cursor, leaf = shared, parent
+            if cursor < len(tokens):
+                while cursor < len(tokens):
+                    end = min(cursor + BLOCK, len(tokens))
+                    block = tokens[cursor:end]
+                    key = self._node_key(leaf, block, staged_by_key)
+                    existing = staged_by_key.get(key) or self.nodes.get(key)
+                    if (
+                        existing is not None
+                        and existing.parent is leaf
+                        and existing.tokens == list(block)
+                    ):
+                        leaf = existing
+                        cursor = end
+                        continue
+                    node_alloc_start = len(kv_allocations)
+                    node = Node(block, key, leaf)
+                    for layer, (keys, values) in kv.items():
+                        k = self._copy_rows(keys, cursor, end, kv_allocations)
+                        v = self._copy_rows(values, cursor, end, kv_allocations)
+                        if k is None or v is None:
+                            raise MemoryError("prefix-store arena is full")
+                        node.kv[layer] = (k, v)
+                    node.allocations = [
+                        allocation for allocation in kv_allocations[node_alloc_start:]
+                    ]
+                    node.bytes = sum(size for _, size in node.allocations)
+                    staged_nodes.append(node)
+                    staged_by_key[key] = node
+                    leaf = node
+                    cursor = end
 
-            copied_kv = {}
-            for layer, (keys, values) in kv.items():
-                k = self._copy_rows(keys, shared, len(tokens), allocations)
-                v = self._copy_rows(values, shared, len(tokens), allocations)
-                if k is None or v is None:
-                    self._rollback(allocations)
-                    return None
-                copied_kv[layer] = (k, v)
+            leaf = leaf or parent
+            if leaf is None:
+                raise ValueError("a session prefix store needs at least one token")
+
+            # State snapshots have their own lifetime: retaining the last few
+            # marks does not keep every obsolete mark on the K/V ancestor path.
+            for position, state in states.items():
+                if not 0 <= position <= len(tokens):
+                    continue
+                prefix = tokens[:position]
+                key = self._state_key(position, prefix, new_states)
+                record = new_states.get(key) or self.state_records.get(key)
+                if record is None:
+                    allocation_start = len(state_allocations)
+                    value = self._copy_tree(state, state_allocations)
+                    if value is None:
+                        raise MemoryError("prefix-store arena is full")
+                    allocations = state_allocations[allocation_start:]
+                    record = StateSnapshot(position, prefix, value, allocations)
+                    new_states[key] = record
+                stored_states[position] = record.value
+                state_keys.append(key)
+        except MemoryError:
+            self._rollback(kv_allocations)
+            self._rollback(state_allocations)
+            return None
         except Exception:
-            if allocations:
-                self._rollback(allocations)
+            self._rollback(kv_allocations)
+            self._rollback(state_allocations)
             raise
 
-        node.states = copied_states
-        node.kv = copied_kv
-        node.allocations = allocations
-        node.bytes = sum(size for _, size in allocations)
-        if parent is not None:
-            parent.children[key] = node
+        # Publish only after all data has been copied successfully.
+        for node in staged_nodes:
+            if node.parent is not None:
+                node.parent.children[node.key] = node
+            self.nodes[node.key] = node
+        leaf.refs += 1
         if session is not None:
-            node.sessions.add(session)
-        self.nodes[key] = node
-        self.used += node.bytes
-        for pos in node.states:
-            self.by_position.setdefault(pos, set()).add(key)
-        return node
+            leaf.sessions.add(session)
+        for key, record in new_states.items():
+            self.state_records[key] = record
+            self.by_position.setdefault(record.position, set()).add(key)
+        for key in state_keys:
+            record = new_states.get(key) or self.state_records[key]
+            record.refs += 1
+
+        added_bytes = sum(node.bytes for node in staged_nodes) + sum(
+            record.bytes for record in new_states.values()
+        )
+        self.used += added_bytes
+        return leaf, stored_states, tuple(state_keys), added_bytes
 
     def _rollback(self, allocations) -> None:
         for offset, size in allocations:
@@ -331,47 +379,55 @@ class Store:
             at += n
         return at >= pos
 
-    def match(self, tokens) -> tuple[Node | None, int]:
-        """Return the deepest saved position whose tokens match."""
+    def match(self, tokens) -> tuple[StateSnapshot | None, int]:
+        """Return the deepest saved state whose prefix tokens match."""
         best, pos = None, 0
-        for node in self.nodes.values():
-            for mark in node.states:
-                if pos < mark <= len(tokens) and self._prefix_equals(
-                    node, mark, tokens
-                ):
-                    best, pos = node, mark
+        for record in self.state_records.values():
+            mark = record.position
+            if pos < mark <= len(tokens) and tuple(tokens[:mark]) == record.tokens:
+                best, pos = record, mark
         return best, pos
 
-    def entry_data(self, node: Node) -> tuple[dict, dict]:
-        """Build a view of the states and K/V segments held along a node's path."""
-        states, layers = {}, {}
+    def entry_data(self, node: Node) -> dict:
+        """Build an entry's K/V segment view from its prefix path."""
+        layers = {}
         for part in self._path(node):
-            states.update(part.states)
             for layer, (k, v) in part.kv.items():
                 layers.setdefault(layer, ([], []))
                 layers[layer][0].append((k, part.span, part.end))
                 layers[layer][1].append((v, part.span, part.end))
-        return states, layers
+        return layers
 
     def _drop(self, node: Node) -> int:
         self.nodes.pop(node.key, None)
         if node.parent is not None:
             node.parent.children.pop(node.key, None)
-        for pos in node.states:
-            holders = self.by_position.get(pos)
-            if holders is not None:
-                holders.discard(node.key)
-                if not holders:
-                    self.by_position.pop(pos, None)
         for offset, size in node.allocations:
             self._free(offset, size)
         self.used -= node.bytes
         return node.bytes
 
-    def release(self, node: Node) -> int:
-        """Release one entry reference, collecting newly-unreferenced ancestors."""
-        node.refs -= 1
+    def release(self, node: Node, state_keys=()) -> int:
+        """Release an entry's state marks and node reference, collecting unused storage."""
         freed = 0
+        for key in state_keys:
+            record = self.state_records.get(key)
+            if record is None:
+                continue
+            record.refs -= 1
+            if record.refs > 0:
+                continue
+            self.state_records.pop(key, None)
+            holders = self.by_position.get(record.position)
+            if holders is not None:
+                holders.discard(key)
+                if not holders:
+                    self.by_position.pop(record.position, None)
+            for offset, size in record.allocations:
+                self._free(offset, size)
+            self.used -= record.bytes
+            freed += record.bytes
+        node.refs -= 1
         while node.refs <= 0 and not node.children and not node.sessions:
             parent = node.parent
             freed += self._drop(node)
@@ -383,6 +439,7 @@ class Store:
     def clear(self) -> None:
         """Forget every entry and make the arena available again."""
         self.nodes.clear()
+        self.state_records.clear()
         self.by_position.clear()
         self.used = 0
         self.free = (
