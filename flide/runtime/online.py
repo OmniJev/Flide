@@ -190,14 +190,11 @@ class Batcher:
 
     # ---- GPU thread ------------------------------------------------------------------------------
 
-    def _take(self, wait: bool) -> list[_Item]:
+    def _take(self) -> list[_Item]:
         if self._carry is not None:
             items, self._carry = [self._carry], None
         else:
-            try:
-                items = [self.q.get(timeout=None if wait else 0)]
-            except queue.Empty:
-                return []
+            items = [self.q.get()]
         tokens = items[0].plan.tokens
         start = time.perf_counter()
         while tokens < self.max_round_tokens:
@@ -223,14 +220,13 @@ class Batcher:
         import torch
 
         torch.cuda.set_device(self.engine.backbone.device)
-        inflight = None   # (items, launched round, start): queued on the GPU, outputs not yet collected
+        collector = cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="flide-collect",
+                                          initializer=torch.cuda.set_device, initargs=(self.engine.backbone.device,))
+        retiring = None
         while True:
-            items = self._take(wait=inflight is None)
+            items = self._take()
             items = [item for item in items if item.future.set_running_or_notify_cancel()]
             if not items:
-                if inflight is not None:
-                    self._deliver(*inflight)
-                    inflight = None
                 continue
             t0 = time.perf_counter()
             try:
@@ -239,11 +235,13 @@ class Batcher:
                 log.exception("round of %d requests failed", len(items))
                 for it in items:
                     it.future.set_exception(exc)
-                launched = None
-            # the next round is on the GPU behind this one: now wait for the previous round's outputs
-            if inflight is not None:
-                self._deliver(*inflight)
-            inflight = (items, launched, t0) if launched is not None else None
+                continue
+            # A single collector owns delivery and its counters. Overlap the next launch with
+            # collection, then apply backpressure before accepting a third round.
+            if retiring is not None:
+                retiring.result()
+            retiring = collector.submit(self._deliver, items, launched, t0)
+            del items, launched
 
     def _deliver(self, items, launched, t0):
         try:

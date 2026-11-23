@@ -21,6 +21,8 @@ from flide.api.admission import Admission
 from flide.api.frontend import RemoteBatcher, _dispatch_channels, dispatch, run_frontend, serve
 from flide.api.schema import SystemOneResponse, Usage
 from flide.api.server import _stage, create_app
+from flide.formats.base import Plan, Read
+from flide.runtime.engine import Engine
 from flide.runtime.online import Batcher
 
 
@@ -157,6 +159,71 @@ def test_online_limits_and_disconnect(monkeypatch, remote):
         asyncio.run(asyncio.wait_for(scenario(), timeout=3))
     finally:
         engine.unblock.set()
+
+
+def test_collect_mixed_graph_and_packed_micro_batches(monkeypatch):
+    # A graph in the middle of two packed requests must keep its position in the returned round.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    engine = Engine.__new__(Engine)
+    engine.budget = 2
+    engine.sessions = None
+    engine.heads = {}
+    calls = []
+
+    def forward(batch, pad_to):
+        calls.append(batch.n_tokens)
+        return {layer: batch.input_ids[indices].float()[:, None] for layer, indices in batch.reads.items()}
+
+    engine.backbone = SimpleNamespace(device=torch.device("cpu"), forward=forward)
+    engine._merge_groups = lambda plans: {}
+    engine._run_flat = lambda plans, skip: {1: torch.tensor([[12.]])}
+    engine._run_sflat = lambda plans, batched, merge: {}
+    engine._graph_hidden = lambda plan, lazy: None
+    plans = [Plan([i], [[i + 10]], (Read(None),)) for i in (1, 2, 3)]
+
+    launched = engine.forward_launch(plans, mode="batch")
+    assert calls == [2, 2]
+    outs, paths = engine.forward_collect(launched)
+    assert paths == ["packed", "graph", "packed"]
+    expected, stats = engine.run_plans(plans)
+    assert outs == expected
+    assert stats["micro_batches"] == 3
+
+
+def test_completed_round_is_delivered_during_next_launch(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
+    engine = _Engine()
+    second_launch = threading.Event()
+    finish_first = threading.Event()
+    finish_second = threading.Event()
+
+    def launch(plans, *, mode):
+        if plans[0].state == "second":
+            second_launch.set()
+            assert finish_second.wait(5)
+        return plans
+
+    def collect(plans):
+        if plans[0].state == "first":
+            assert finish_first.wait(5)
+        return [plans[0].state], ["packed"]
+
+    engine.forward_launch = launch
+    engine.forward_collect = collect
+    batcher = Batcher(engine, planners=1, max_round_tokens=1)
+    batcher._planned(2)
+    try:
+        first = batcher.forward(_Plan("first", 1))
+        second = batcher.forward(_Plan("second", 1))
+        assert second_launch.wait(3)
+        finish_first.set()
+        assert first.result(timeout=2)[0] == "first"
+        assert not second.done()
+        finish_second.set()
+        assert second.result(timeout=2)[0] == "second"
+    finally:
+        finish_first.set()
+        finish_second.set()
 
 
 def test_batch_token_budget_preserves_oversized_requests(monkeypatch):

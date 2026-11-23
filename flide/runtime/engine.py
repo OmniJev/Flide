@@ -327,6 +327,11 @@ class Engine:
     def run_plans(self, plans: Sequence[Plan | None], budget: int | None = None,
                   log_fn: Callable[[str], None] | None = None, warmup: int = 0) -> tuple[list, dict]:
         """Head outputs for every plan: out[plan][branch][read] is a list of rows, one per read position."""
+        finish = self._launch_packed(plans, budget, log_fn, warmup)
+        return finish(sync_device=True)
+
+    def _launch_packed(self, plans, budget=None, log_fn=None, warmup=0):
+        """Submit packed micro-batches and return a callback to collect the final batch."""
         import torch
 
         budget = budget or self.budget
@@ -340,6 +345,7 @@ class Engine:
         sessions = self._sessions_for(plans)
         batches = schedule(plans, budget, sessions)
         tokens = sum(b.tokens for b in batches)
+        micro_batches = len(batches)
         if log_fn:
             log_fn(f"forward: {len(batches)} micro-batches, {tokens} tokens, budget {budget}")
 
@@ -405,12 +411,16 @@ class Engine:
             done += mb.tokens
             if log_fn and (k + 1) % step == 0:
                 log_fn(f"forward {k + 1}/{len(batches)} micro-batches, {done / max(tokens, 1):.0%} of tokens")
-        if pending is not None:
-            collect(pending)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        stats = {"tokens": tokens, "micro_batches": len(batches), "forward_s": time.perf_counter() - t_start}
-        return outputs, stats
+
+        def finish(*, sync_device=False):
+            if pending is not None:
+                collect(pending)
+            if sync_device and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            stats = {"tokens": tokens, "micro_batches": micro_batches, "forward_s": time.perf_counter() - t_start}
+            return outputs, stats
+
+        return finish
 
     def _kept(self, head) -> bool:
         return head is not None and getattr(self.heads[head], "on_device", False)
@@ -882,9 +892,7 @@ class Engine:
         return self.forward_collect(self.forward_launch(plans, mode))
 
     def forward_launch(self, plans: Sequence[Plan], mode: str = "graphs"):
-        """The first half of `forward`: the round's graphs are queued on the GPU and their head outputs start coming
-        back to the host, without waiting (plans that do not fit the graphs are computed here, packed). The online
-        batcher queues the next round before collecting this one, so the GPU does not wait for the host."""
+        """Submit a round. In batch mode both graph copies and the final packed micro-batch can be collected later."""
         import torch
 
         plans = [_rooted(p) for p in plans]
@@ -920,6 +928,9 @@ class Engine:
         if rest and mode == "alone":
             for i in rest:
                 outs[i] = self.run_plans([plans[i]])[0][0]
+        elif rest and mode == "batch":
+            finish = self._launch_packed([plans[i] for i in rest])
+            return outs, paths, copies, (rest, finish)
         elif rest:
             packed, _ = self.run_plans([plans[i] for i in rest])
             for i, br in zip(rest, packed):
@@ -929,7 +940,12 @@ class Engine:
     @staticmethod
     def forward_collect(launched) -> tuple[list, list[str]]:
         """The second half of `forward`: wait for the round's head outputs and lay them out per branch and read."""
-        outs, paths, copies = launched
+        outs, paths, copies = launched[:3]
+        if len(launched) == 4:
+            indices, finish = launched[3]
+            packed, _ = finish()
+            for i, br in zip(indices, packed):
+                outs[i] = br
         if copies is not None:
             host, done, counts = copies
             if done is not None:
