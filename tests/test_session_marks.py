@@ -9,6 +9,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from flide.runtime.engine import session_saves
 from flide.runtime.session import SessionCache, Entry
 
 
@@ -43,6 +44,13 @@ def main():
     check("an extension matches the last mark", pos == 2816, pos)
     _, missed = cache.match(list(range(2000)) + list(range(50000, 51000)))
     check("a prefix that shares no mark misses", missed == 0, missed)
+
+    # what the continuation graphs hand back, in each of their forms, as the list the engine saves from
+    snap = ({0: "S"}, {})
+    check("a list of saves stays as it is", session_saves([(512, snap), (768, snap)], 768) == [(512, snap), (768, snap)])
+    check("no save without a mark", session_saves(None, None) == [])
+    check("an empty list saves nothing", session_saves([], None) == [])
+    check("one snapshot of the stepwise path saves at the mark", session_saves(snap, 768) == [(768, snap)])
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)
