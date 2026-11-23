@@ -36,8 +36,11 @@ def timed(eng, state, question):
 
 
 def engine(**kw):
-    return Engine("models/OneJev1.6-0.8B", device="cuda:0", capture=4096, budget=8192, session_cache_gb=4.0,
-                  session_min_tokens=512, backbone_options={"cuda_graphs": True}, **kw)
+    eng = Engine("models/OneJev1.6-0.8B", device="cuda:0", capture=4096, budget=8192, session_cache_gb=4.0,
+                 session_min_tokens=512, backbone_options={"cuda_graphs": True}, **kw)
+    if getattr(eng.sessions, "pstore", None) is None:      # the shared prefix store is attached on the serve path
+        eng.sessions.attach_prefix_store(eng.backbone.device)
+    return eng
 
 
 def siblings(chars, runs):
