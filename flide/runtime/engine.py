@@ -300,12 +300,10 @@ class Engine:
         mem_graphs = _gib()
         self._capture_on = capture is not False
         if self.sessions is not None and not auto:
-            from .session import reserve
-
             if hasattr(self.backbone, "kv_arena"):
                 self._attach_store(self.sessions.budget)
             else:
-                reserve(self.sessions.budget, self.backbone.device)
+                self.sessions.attach_prefix_store(self.backbone.device)
         if capture is not False:
             tune()
             self.warmup()
@@ -603,6 +601,9 @@ class Engine:
         log.info("session cache %.2f GiB (auto)%s", n / 2 ** 30, "" if n else ": too little memory left, so it saves nothing")
         if n and hasattr(self.backbone, "kv_arena"):
             return self._attach_store(n)
+        if n and self.sessions is not None:
+            self.sessions.budget = n
+            return self.sessions.attach_prefix_store(dev)
         reserve(n, dev)
         return n
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 from collections import OrderedDict
 
+from .store import Node, Store
 
 BLOCK = 64
 PROTECTED = 0.75   # of the budget that entries a request has hit may hold; the rest is probation
@@ -177,7 +178,7 @@ class KV:
         self.parts = list(parts)
 
     @classmethod
-    def wrap(cls, x) -> "KV":
+    def wrap(cls, x) -> KV:
         """A plain tensor as one segment; an object that only reports its size (a test's stand-in) has no rows."""
         if isinstance(x, cls):
             return x
@@ -215,8 +216,13 @@ class Entry:
     def __init__(self, tokens, states: dict, kv: dict):
         self.tokens = list(tokens)
         self.states = states
-        self.kv = {layer: (KV.wrap(k), KV.wrap(v)) for layer, (k, v) in kv.items()}
-        self.bytes = _bytes(states) + sum(pair[0].nbytes + pair[1].nbytes for pair in self.kv.values())
+        if hasattr(kv, "items"):
+            self.kv = {layer: (KV.wrap(k), KV.wrap(v)) for layer, (k, v) in kv.items()}
+            kv_bytes = sum(pair[0].nbytes + pair[1].nbytes for pair in self.kv.values())
+        else:  # Gemma 4's KVArena rows are allocated and released by the graph cache.
+            self.kv = kv
+            kv_bytes = _bytes(kv)
+        self.bytes = _bytes(states) + kv_bytes
 
 
 class _Hashes:
@@ -258,7 +264,9 @@ class SessionCache:
         self.evictions = self.replaced = 0
         self.probation: set[int] = set()   # entries no request has hit yet
         self.pbytes = 0                    # bytes the probation entries hold
-        self.store = None                  # a KVArena the entries keep their keys and values in (`attach`)
+        self.store = None                  # Gemma 4's KVArena; prefix sharing uses pstore
+        self.pstore: Store | None = None
+        self.node_of: dict[int, Node] = {}
         self.pinned: set[int] = set()      # ids of entries a forward being set up reads: `reserve` leaves them
         self.clock = 0                     # lookups so far
         self.seen: dict[int, int] = {}     # entry id -> the lookup that last used it
@@ -271,6 +279,12 @@ class SessionCache:
         reserves its rows before the forward that writes them."""
         self.store = store
         self.budget = store.capacity
+
+    def attach_prefix_store(self, device) -> int:
+        """Reserve one shared prefix/KV arena for the cache's non-Gemma session path."""
+        self.pstore = Store(self.budget)
+        self.pstore.configure(device)
+        return self.pstore.budget
 
     def reserve(self, need: dict, keep=()):
         """Rows of the store for a state about to be saved (kind -> count), as ArenaRows, evicting what it needs room
@@ -354,9 +368,25 @@ class SessionCache:
         reused once, so it goes to protected and one-off requests cannot push it out. A new entry that extends a
         ghost goes to protected too when `_admit` says so. Protected is capped at `PROTECTED` of the budget, and the
         least recently used of it falls back to probation when it is over. Eviction takes probation first."""
-        if entry.bytes > self.budget or not entry.states:
+        if (self.pstore is None and entry.bytes > self.budget) or not entry.states:
             _free(entry)
             return
+        node = None
+        if self.pstore is not None:
+            while node is None:
+                node = self.pstore.insert(entry.tokens, entry.states, entry.kv)
+                if node is not None:
+                    break
+                victim = self._victim()
+                if victim is None:
+                    _free(entry)
+                    return
+                self._evict(victim)
+            states, layers = self.pstore.entry_data(node)
+            entry.states = states
+            entry.kv = {layer: (KV(keys), KV(values)) for layer, (keys, values) in layers.items()}
+            entry.bytes = node.bytes
+            self.used = self.pstore.used
         if parent is not None and len(parent.tokens) <= len(entry.tokens) \
                 and entry.tokens[:len(parent.tokens)] == parent.tokens:
             eid = next((k for k, e in self.entries.items() if e is parent), None)
@@ -364,12 +394,21 @@ class SessionCache:
                 self._remove(eid)
                 self.replaced += 1
         back = self._came_back(entry.tokens) if parent is None else None
-        while self.used + entry.bytes > self.budget and self.entries:
-            self._evict(self._victim())
+        if self.pstore is None:
+            while self.used + entry.bytes > self.budget and self.entries:
+                victim = self._victim()
+                if victim is None:
+                    break
+                self._evict(victim)
         eid = self._next
         self._next += 1
+        if node is not None:
+            self.node_of[eid] = node
         self.entries[eid] = entry
-        self.used += entry.bytes
+        if node is None:
+            self.used += entry.bytes
+        else:
+            self.used = self.pstore.used
         self.seen[eid] = self.clock
         if back is not None:
             self.returning += 1
@@ -441,14 +480,20 @@ class SessionCache:
             self.pbytes += self.entries[oldest].bytes
 
     def _victim(self, probation_only: bool = False, skip=frozenset()) -> int:
-        """The entry to evict: the least recently used one in probation, else the least recently used overall;
-        entries whose id is in `skip` stay."""
-        for eid, e in self.entries.items():
-            if eid in self.probation and id(e) not in skip:
-                return eid
-        if probation_only:
-            return None
-        return next((eid for eid, e in self.entries.items() if id(e) not in skip), None)
+        """Evict a leaf first, preferring probation and then the least recently used entry."""
+        pools = [[k for k, e in self.entries.items() if k in self.probation and id(e) not in skip]]
+        if not probation_only:
+            pools.append([k for k, e in self.entries.items() if k not in self.probation and id(e) not in skip])
+        for candidates in pools:
+            if not candidates:
+                continue
+            if self.pstore is not None:
+                leaves = [k for k in candidates if (node := self.node_of.get(k)) is not None
+                          and node.refs == 1 and not node.children]
+                if leaves:
+                    return leaves[0]
+            return candidates[0]
+        return None
 
     def _promote(self, eid: int) -> None:
         """A hit moves an entry from probation to protected, and protected gives back what it holds over its share."""
@@ -462,11 +507,17 @@ class SessionCache:
     def _remove(self, eid: int) -> None:
         entry = self.entries.pop(eid)
         self.seen.pop(eid, None)
+        node = self.node_of.pop(eid, None)
+        if node is not None:
+            self.pstore.release(node)
+            self.used = self.pstore.used
         _free(entry)
-        self.used -= entry.bytes
+        if node is None:
+            self.used -= entry.bytes
         if eid in self.probation:
             self.probation.discard(eid)
             self.pbytes -= entry.bytes
+        self.pbytes = min(self.pbytes, self.used)
         hashes = _Hashes(entry.tokens)
         for pos in entry.states:
             key = hashes.key(pos)
@@ -481,8 +532,14 @@ class SessionCache:
     def clear(self) -> None:
         """Drop every entry (requests that already matched one keep their reference; with a store its rows go back to
         it, so nothing may be reading them)."""
-        for e in self.entries.values():
-            _free(e)
+        for eid, e in list(self.entries.items()):
+            node = self.node_of.pop(eid, None)
+            if node is not None:
+                self.pstore.release(node)
+            else:
+                _free(e)
+        if self.pstore is not None:
+            self.pstore.clear()
         self.entries.clear()
         self.index.clear()
         self.positions.clear()
@@ -492,6 +549,7 @@ class SessionCache:
         self.gpos.clear()
         self.used = 0
         self.pbytes = 0
+        self.node_of.clear()
 
     def stats(self) -> dict:
         return {"entries": len(self.entries), "bytes": self.used, "probation": len(self.probation),
