@@ -74,6 +74,34 @@ def test_siblings_share_full_blocks_before_their_divergence():
     ]
 
 
+def test_five_long_prefix_siblings_share_the_common_trunk():
+    store = Store(1 << 20)
+    store.configure("cpu")
+    common = list(range(2934))
+    head_dim = 3
+    state_size = 1566 * 2 * head_dim
+    old_bytes = 0
+
+    for request in range(5):
+        suffix = list(range(100_000 + request * 1000, 100_200 + request * 1000))
+        tokens = common + suffix
+        keys = torch.zeros(len(tokens), head_dim)
+        values = torch.ones(len(tokens), head_dim)
+        marks = {pos: {"s": torch.zeros(state_size)} for pos in (2560, 2816)}
+        old_bytes += (keys.numel() + values.numel()) * keys.element_size()
+        old_bytes += sum(
+            state["s"].numel() * state["s"].element_size() for state in marks.values()
+        )
+        result = store.insert(tokens, marks, {0: (keys, values)})
+        assert result is not None
+
+    # K/V is 24 bytes per token, making each mark's state equivalent to 1566
+    # tokens of K/V. One boundary block may repeat at the divergence point.
+    assert old_bytes / store.used > 4.2
+    assert store.used == 4150 * 24 + 2 * state_size * 4
+    assert len(store.state_records) == 2
+
+
 def test_session_cache_reuses_trunk_across_siblings():
     cache = SessionCache(1 << 20, min_tokens=1, stride=64, margin=8)
     cache.attach_prefix_store("cpu")
