@@ -27,13 +27,17 @@ the model is asked and read:
                (recurrent and sliding-window layers stay causal), so every question is a sequence of its own and nothing is
                shared (a request's images are read again in each); "causal" (the default) shares the state between
                questions; "prefix": the request, through the last occurrence of the text "prefix_ends", is read both
-               ways and shared, and each question's tail after it one way (text only)
+               ways and shared, and each question's tail after it one way (text only); "blocks": the shared prefix
+               and each branch are bidirectional, with separate Jinja templates "shared_prefix" for the state and
+               "prompt" for each question (text only). The prefix and each branch are tokenized separately
   images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
                the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
                without it images are refused. max_prompt_tokens counts the images' tokens
   midloop      the checkpoint's recurrent depth (decision_config "midloop"): blocks of layers that run again inside the
                pass, each pass stepping from the stream that entered it (the backbone's set_midloop)
   types, max_options, max_prompt_tokens
+  round_noul, count_output_tokens   default true. A checkpoint can return unrounded binary probabilities and
+                                    report zero output tokens when it only runs a separate classifier
   state        the state as the prompt shows it, cut to a token budget: "text" (a Jinja template of state, the prompt
                reads it as state_text), "max_tokens", "min_tokens", "keep" ("head" or "tail", or one per state shape
                {"list": ..., "default": ...}) and "marks" (the text before and after the kept tokens, per side); while
@@ -43,12 +47,11 @@ a directory of another name) is served with --format template --format-arg spec=
 
 Template variables: state, state_text, question (key, type, instructions, criteria, given: the fields the request
 wrote), options (label, key, description, index) in the prompt's order, questions (every question of the request, in
-its order, as question is). Filters: describe (a string as it is, anything else
-JSON), text (the same with compact separators) and json (indent, compact); test: matching(pattern); functions:
-refuse(message), which turns the request down, boundary(), where the text before and after is tokenized apart, and
-labels_for(type, n), the labels a question of that type and n options reads. Every question is its own prompt and the state comes first, so the questions fork where their
-prompts part. The answer is the softmax over the question's labels at the last prompt position, divided by the
-temperature of its type.
+its order, as question is), special_tokens (the tokenizer's special tokens, longest first). Filters: describe (a string
+as it is, anything else JSON), text (the same with compact separators) and json (indent, compact); test:
+matching(pattern); functions: refuse(message), which turns the request down, boundary(), where the text before and
+after is tokenized apart, and labels_for(type, n), the labels a question of that type and n options reads. The answer
+is the softmax over the question's temperature-scaled label logits at the last prompt position.
 """
 from __future__ import annotations
 
@@ -62,7 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from ..api.answers import make_choice, make_noul, make_score
-from ..api.schema import ChoiceQuestion, NoulQuestion, SystemOneRequest, SystemOneResponse, Usage
+from ..api.schema import ChoiceQuestion, NoulAnswer, NoulQuestion, SystemOneRequest, SystemOneResponse, Usage
 from . import register
 from .base import Format, Plan, Read
 from .next_token import NextToken, TokenRows
@@ -150,7 +153,7 @@ def known(model_dir: str, decision_config: dict | None) -> dict | None:
 
 @register("template", format_ids=(FORMAT_ID,))
 class Template(Format):
-    backbones = ("qwen3_5", "qwen3_5_text", "gemma4", "gemma4_text", "gemma4_unified")
+    backbones = ("qwen2", "qwen3", "qwen3_moe", "qwen3_5", "qwen3_5_text", "gemma4", "gemma4_text", "gemma4_unified")
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -170,7 +173,7 @@ class Template(Format):
             spec = dc if dc and dc.get("format_id") == FORMAT_ID else known(model_dir, dc)
         if spec is None:
             raise ValueError(f"{model_dir}: no template configuration")
-        self.spec = spec = {k: (v if k in ("messages", "prompt", "match") else _value(v, model_dir))
+        self.spec = spec = {k: (v if k in ("messages", "prompt", "shared_prefix", "match") else _value(v, model_dir))
                             for k, v in spec.items()}
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
         self._pieces, self._cut_checks = Pieces(self.tokenizer), 0
@@ -180,6 +183,8 @@ class Template(Format):
         env.filters["text"] = _text
         env.globals["refuse"] = _refuse
         env.globals["labels_for"] = lambda kind, n: self._labels(kind, n)
+        env.globals["special_tokens"] = tuple(sorted(set(getattr(self.tokenizer, "all_special_tokens", ())),
+                                                    key=len, reverse=True))
         self.boundary = f"\x00{uuid.uuid4().hex}\x00"
         env.globals["boundary"] = lambda: self.boundary
         env.tests["matching"] = lambda s, pattern: isinstance(s, str) and re.search(pattern, s) is not None
@@ -193,14 +198,22 @@ class Template(Format):
         if sorted(self.noul) != ["false", "true"]:
             raise ValueError("noul lists false and true once each")
         self.noul_text = dict(spec.get("noul_text", {}))
+        self.round_noul = spec.get("round_noul", True)
+        self.count_output_tokens = spec.get("count_output_tokens", True)
         self.types = tuple(spec.get("types", TYPES))
         self.max_prompt_tokens = int(spec.get("max_prompt_tokens", 32768))
         self.images = spec.get("images")
         if self.images is not None and self.prompt is not None:
             raise ValueError("images go in a user turn: a configuration with images has messages")
-        if spec.get("attention", "causal") not in ("causal", "bidirectional", "prefix"):
-            raise ValueError("attention is causal, bidirectional or prefix")
-        self.attention = {"bidirectional": "blocks", "prefix": "prefix"}.get(spec.get("attention"), "causal")
+        attention = spec.get("attention", "causal")
+        if attention not in ("causal", "bidirectional", "prefix", "blocks"):
+            raise ValueError("attention is causal, bidirectional, prefix or blocks")
+        if (attention == "blocks") != ("shared_prefix" in spec):
+            raise ValueError("shared_prefix is required for attention blocks and only valid with that mode")
+        if attention == "blocks" and (self.prompt is None or self.images is not None):
+            raise ValueError("attention blocks uses a raw text prompt")
+        self.shared_prefix = env.from_string(spec["shared_prefix"]) if "shared_prefix" in spec else None
+        self.attention = "blocks" if attention == "bidirectional" else attention
         if (self.attention == "prefix") != ("prefix_ends" in spec) or (self.attention == "prefix" and self.images):
             raise ValueError("attention prefix takes prefix_ends and no images")
         self.prefix_ends = (self.tokenizer(spec["prefix_ends"], add_special_tokens=False)["input_ids"]
@@ -441,7 +454,13 @@ class Template(Format):
             state_text, n = self._cut_state(request.state, budget) if self.state_text is not None else (None, 0)
             texts = [self._render(request.state, kind, q, keys, descs, labels, state_text, qid, everyone, len(refs))
                      for qid, q, kind, keys, descs, labels in questions]
-            head, tails = self._rows(texts)
+            if self.shared_prefix is None:
+                head, tails = self._rows(texts)
+            else:
+                prefix = self.shared_prefix.render(state=request.state, state_text=state_text, questions=everyone)
+                head, *tails = self._encode([prefix, *texts])
+                if not head or any(not tail for tail in tails):
+                    raise ValueError("attention blocks needs a nonempty prefix and branch")
             over = len(head) + max(len(t) for t in tails) - self.max_prompt_tokens
             if over <= 0:
                 break
@@ -452,6 +471,8 @@ class Template(Format):
                 raise ValueError(f"the questions leave no room for the state within {self.max_prompt_tokens} tokens")
         else:
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
+        if self.shared_prefix is not None:
+            return Plan(head, tails, (READ,), data, attention="blocks")
         if self.attention == "blocks" and not refs:   # whole prompts read both ways: sequences of their own
             return Plan([], [head + t for t in tails], (READ,), data, attention="blocks")
         if self.attention == "prefix":   # the request through the last prefix_ends read both ways, each tail one way
@@ -499,12 +520,13 @@ class Template(Format):
             s = sum(w)
             probs = [x / s for x in w]
             if kind == "noul":
-                answers[qid] = make_noul(probs[keys.index("true")])
+                p_yes = probs[keys.index("true")]
+                answers[qid] = make_noul(p_yes) if self.round_noul else NoulAnswer(noul=p_yes)
             elif kind == "choice":
                 answers[qid] = make_choice(keys, probs)
             else:
                 answers[qid] = make_score(list(request.questions[qid].criteria), probs)
-        usage = Usage(input_tokens=plan.tokens, output_tokens=len(plan.data))
+        usage = Usage(input_tokens=plan.tokens, output_tokens=len(plan.data) if self.count_output_tokens else 0)
         return SystemOneResponse(model="", answers=answers, usage=usage), {"format": "template",
                                                                           "prefix_tokens": len(plan.prefix),
                                                                           "branches": len(plan.suffixes)}

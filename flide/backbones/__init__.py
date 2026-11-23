@@ -1,7 +1,7 @@
 """Backbones by HuggingFace `model_type`. A backbone owns the weights and the packed forward; it reads
 hidden states where the runtime asks and knows nothing of prompts or heads.
 
-Built in: qwen3_5 (dense and MoE), gemma4, lfm2, lfm3. Other packages add backbones through the `flide.backbones` entry point group
+Built in: qwen2, qwen3 and qwen3_5 (dense and MoE), gemma4, lfm2, lfm3. Other packages add backbones through the `flide.backbones` entry point group
 (value: the Backbone subclass), or with `register`.
 """
 from __future__ import annotations
@@ -15,7 +15,10 @@ log = logging.getLogger("flide.backbones")
 
 GROUP = "flide.backbones"
 _BACKBONES: dict[str, type[Backbone]] = {}
-_BUILTIN = {"qwen3_5": "flide.backbones.qwen35:Qwen35", "qwen3_5_text": "flide.backbones.qwen35:Qwen35",
+_BUILTIN = {"qwen2": "flide.backbones.qwen2:Qwen2",
+            "qwen3": "flide.backbones.qwen3:Qwen3",
+            "qwen3_moe": "flide.backbones.qwen3.moe:Qwen3Moe",
+            "qwen3_5": "flide.backbones.qwen35:Qwen35", "qwen3_5_text": "flide.backbones.qwen35:Qwen35",
             "qwen3_5_moe": "flide.backbones.qwen35:Qwen35", "qwen3_5_moe_text": "flide.backbones.qwen35:Qwen35",
             "gemma4": "flide.backbones.gemma4:Gemma4", "gemma4_text": "flide.backbones.gemma4:Gemma4",
             "gemma4_unified": "flide.backbones.gemma4:Gemma4",
