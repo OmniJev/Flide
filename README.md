@@ -86,21 +86,33 @@ On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,0
 
 ## Models
 
-Qwen2.5 and Qwen3 text checkpoints with full attention use the packed Triton attention path on A100 (SM80), H100 and
-H200 (SM90). Qwen3 supports dense checkpoints and single-GPU MoE checkpoints.
-Use `next_token` for Instruct checkpoints or `template` for a decision checkpoint with a `flide-template-v1` configuration.
-A decision checkpoint that shares a bidirectional prefix across branches can declare `attention: "blocks"` and separate
-`shared_prefix` and `prompt` templates in its own `decision_config.json`.
+### Qwen2.5 and Qwen3 text backbones
+
+Flide supports unquantized, full-attention text checkpoints for Qwen2.5 and Qwen3 Dense, plus Qwen3 MoE on a single GPU.
+
+Serve Instruct checkpoints through the default `next_token` decision format.
 
 ```bash
 flide serve --model Qwen/Qwen2.5-7B-Instruct
 flide serve --model Qwen/Qwen3-4B-Instruct-2507
 ```
 
-CUDA graphs batch text decisions by shape, including block and prefix attention plans. On one GPU, the optional session
-cache reuses KV rows across causal requests. For larger dense checkpoints, `--tp` shards
-weights across GPUs when the attention heads, KV heads, and MLP width divide evenly. Tensor parallelism runs without the
-session cache. Triton compiles any missing kernels on first use and reuses its cache at later starts.
+For a custom decision checkpoint, put the tokenizer, any separate readout weights, and `decision_config.json` next
+to the backbone weights. With `"format_id": "flide-template-v1"`, Flide picks the template format automatically.
+
+```bash
+flide serve --model /path/to/checkpoint
+```
+
+If the checkpoint uses a bidirectional prefix shared across independent questions, set `"attention": "blocks"` and
+provide a `shared_prefix` template for the prefix and a `prompt` template for each question. Use the prompt and
+attention layout the checkpoint was trained with.
+
+The text backbones use packed Triton attention on A100 (SM80) and H100/H200 (SM90). CUDA graphs batch supported text
+plans by shape, including prefix and block attention. The optional single-GPU session cache reuses KV rows across
+causal requests. Dense models can use `--tp` when the attention heads, KV heads, and MLP width divide evenly across ranks.
+
+### Serving benchmarks
 
 The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested.
 
