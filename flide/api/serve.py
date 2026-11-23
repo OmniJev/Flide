@@ -135,9 +135,9 @@ def add_parser(sub) -> None:
                    help="attention backend (default: FLIDE_ATTENTION_BACKEND or triton; unsupported inputs use Triton)")
     s.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits at any load (slower)")
-    s.add_argument("--quantize", default=None, choices=["fp8"],
-                   help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+); "
-                        "changes the numbers a little")
+    s.add_argument("--quantize", default=None, choices=["fp8", "nvfp4", "fp4"],
+                   help="fp8: per-row weights and per-token inputs; nvfp4/fp4: prequantized Qwen3.5 routed experts "
+                        "on SM120; changes numerical results")
     s.add_argument("--tp", type=int, default=1,
                    help="tensor parallel over this many GPUs, --device and the ones after it (Qwen3.5 dense models)")
     s.add_argument("--max-branch-tokens", type=int, default=None)

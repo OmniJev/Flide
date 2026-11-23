@@ -38,6 +38,32 @@ import torch
 log = logging.getLogger("flide.load")
 
 
+class PackedFP4CheckpointError(RuntimeError):
+    """Packed FP4 cannot use the native BF16/FP8 weight and MoE paths."""
+
+
+def check_checkpoint_quantization(model_dir: str) -> None:
+    def packed_fp4(section):
+        if not isinstance(section, dict):
+            return False
+        if "NVFP4" in str(section.get("quant_algo", "")).upper():
+            return True
+        layers = section.get("quantized_layers") or {}
+        return isinstance(layers, dict) and any(packed_fp4(layer) for layer in layers.values())
+
+    for filename in ("config.json", "hf_quant_config.json"):
+        path = Path(model_dir) / filename
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text())
+        section = data.get("quantization_config", data.get("quantization", data))
+        if packed_fp4(section):
+            raise PackedFP4CheckpointError(
+                f"{model_dir}: packed ModelOpt NVFP4 checkpoint is not supported by Flide's native "
+                "BF16/FP8 loader and MoE kernels. --quantize fp8 cannot convert packed FP4 weights; "
+                "an NVFP4 checkpoint loader and MoE backend are required.")
+
+
 def checkpoint_files(model_dir: str) -> list[Path]:
     d = Path(model_dir)
     index = d / "model.safetensors.index.json"
@@ -164,6 +190,7 @@ def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | No
               cut=None, held: dict | None = None) -> dict:
     from .. import lora
 
+    check_checkpoint_quantization(model_dir)
     adapter = lora.load(model_dir, device, merge)
     if adapter is None:
         return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None, cut, held)

@@ -171,6 +171,10 @@ The last three columns say how much faster Flide answers one request than the en
 
 Install the experimental SM120 CuTe attention backend with `pip install '.[cute]'` and select it with `--attention-backend cute`; see [installation, coverage and fallback behavior](docs/attention-backends.md).
 
+KnowLine NVFP4 stores each of the eight Down outputs in BF16 before applying
+its routing weight. Combine accumulates the weighted rows in slot order using FP32 fused multiply-adds,
+then rounds to BF16. This reduces intermediate storage and can change predictions relative to earlier releases.
+
 | Option | What it does |
 |---|---|
 | `--session-cache-gb 40` | keeps the states of earlier requests, so an agent's next step reads only what is new |

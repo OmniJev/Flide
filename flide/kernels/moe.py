@@ -254,38 +254,100 @@ def align(ids: torch.Tensor, experts: int, bm: int = BM):
 
 
 @triton.jit
-def _combine_kernel(Y, S, G, OUT, H, K: tl.constexpr, BH: tl.constexpr):
+def _nvfp4_sum8(Y, TOP, row, cols, stride, mask):
+    if TOP is not None:
+        base = row * 8 * stride + cols
+        acc = tl.full(cols.shape, 0, tl.float32)
+        for slot in tl.static_range(8):
+            down = tl.load(Y + base + slot * stride, mask, 0.0).to(tl.float32)
+            weight = tl.load(TOP + row * 8 + slot)
+            acc = tl.fma(weight, down, acc)
+        return acc.to(tl.bfloat16).to(tl.float32)
+    # Match the four-accumulator FP32 sum before the BF16 boundary.
+    base = row * 8 * stride + cols
+    a = tl.load(Y + base, mask, 0.0).to(tl.float32)
+    b = tl.load(Y + base + 4 * stride, mask, 0.0).to(tl.float32)
+    p0 = _sum_pair(a, b)
+    a = tl.load(Y + base + stride, mask, 0.0).to(tl.float32)
+    b = tl.load(Y + base + 5 * stride, mask, 0.0).to(tl.float32)
+    p1 = _sum_pair(a, b)
+    a = tl.load(Y + base + 2 * stride, mask, 0.0).to(tl.float32)
+    b = tl.load(Y + base + 6 * stride, mask, 0.0).to(tl.float32)
+    p2 = _sum_pair(a, b)
+    a = tl.load(Y + base + 3 * stride, mask, 0.0).to(tl.float32)
+    b = tl.load(Y + base + 7 * stride, mask, 0.0).to(tl.float32)
+    p3 = _sum_pair(a, b)
+    return tl.inline_asm_elementwise(
+        "{ .reg .f32 v; .reg .b16 r; add.rn.f32 v, $1, $2; add.rn.f32 v, v, $3; "
+        "add.rn.f32 v, v, $4; cvt.rn.bf16.f32 r, v; cvt.f32.bf16 $0, r; }",
+        constraints="=f,f,f,f,f", args=[p0, p1, p2, p3], dtype=tl.float32, is_pure=True, pack=1)
+
+
+@triton.jit
+def _sum_pair(a, b):
+    return tl.inline_asm_elementwise(
+        "{ .reg .f32 v; add.rn.f32 v, 0f00000000, $1; add.rn.f32 $0, v, $2; }",
+        constraints="=f,f,f", args=[a, b], dtype=tl.float32, is_pure=True, pack=1)
+
+
+@triton.jit
+def _combine_kernel(Y, TOP, S, G, OUT, H, K: tl.constexpr, BH: tl.constexpr, ROUND_EXPERTS: tl.constexpr):
     t = tl.program_id(0).to(tl.int64)
     c = tl.program_id(1) * BH + tl.arange(0, BH)
     m = c < H
-    acc = tl.zeros([BH], tl.float32)
-    for j in tl.static_range(K):   # the token's experts in slot order
-        acc += tl.load(Y + (t * K + j) * H + c, mask=m, other=0.0).to(tl.float32)
+    if ROUND_EXPERTS:
+        acc = _nvfp4_sum8(Y, TOP, t, c, H, m)
+        acc = tl.inline_asm_elementwise("add.rn.f32 $0, 0f00000000, $1;",
+                                      constraints="=f,f", args=[acc], dtype=tl.float32, is_pure=True, pack=1)
+    else:
+        acc = tl.zeros([BH], tl.float32)
+        for j in tl.static_range(K):   # the token's experts in slot order
+            acc += tl.load(Y + (t * K + j) * H + c, mask=m, other=0.0).to(tl.float32)
     g = tl.load(G + t).to(tl.float32)
     sh = tl.load(S + t * H + c, mask=m, other=0.0).to(tl.float32)
     tl.store(OUT + t * H + c, (acc + sh / (1.0 + tl.exp(-g))).to(OUT.dtype.element_ty), mask=m)
 
 
-def combine(y: torch.Tensor, shared: torch.Tensor, gate: torch.Tensor, k: int) -> torch.Tensor:
+def _check_nvfp4_sum(y, shared, k, top):
+    if (k != 8 or y.dtype not in (torch.float32, torch.bfloat16) or shared.dtype != torch.bfloat16
+            or shared.shape[1] < 4 or shared.shape[1] % 4 or y.stride(1) != 1):
+        raise ValueError("NVFP4 fused sum requires FP32/BF16 top-8 rows and BF16 shared output with aligned columns")
+    if top is not None and (y.dtype != torch.bfloat16 or top.dtype != torch.float32
+                            or top.shape != (shared.shape[0], k) or not top.is_contiguous()
+                            or top.device != y.device):
+        raise ValueError("Slot-order combine requires unweighted BF16 rows and contiguous FP32 routing weights")
+
+
+def combine(y: torch.Tensor, shared: torch.Tensor, gate: torch.Tensor, k: int,
+            round_experts: bool = False, top: torch.Tensor | None = None) -> torch.Tensor:
     """sum over each token's k expert rows of y [T * k, H] plus the shared expert's output [T, H] scaled by the
-    sigmoid of its gate logit [T, 1], summed in float32 and rounded once."""
+    sigmoid of its gate logit [T, 1], summed in float32 and rounded once. `round_experts` preserves the
+    NVFP4 top-8 sum and its BF16 rounding before adding the shared output."""
     T, H = shared.shape
+    if round_experts:
+        _check_nvfp4_sum(y, shared, k, top)
+        y = y.contiguous()
     out = torch.empty_like(shared)
     if T:
-        _combine_kernel[(T, triton.cdiv(H, 1024))](y, shared.contiguous(), gate.contiguous(), out, H, K=k, BH=1024,
-                                                    num_warps=4)
+        _combine_kernel[(T, triton.cdiv(H, 1024))](y, top, shared.contiguous(), gate.contiguous(), out, H, K=k, BH=1024,
+                                                    num_warps=4, ROUND_EXPERTS=round_experts)
     return out
 
 
 @triton.jit
-def _combine_add_rms_kernel(Y, S, G, R, W, HOUT, OUT, N, sy, ss, sg, sr, sh, so, eps,
-                            K: tl.constexpr, OFFSET: tl.constexpr, BLOCK: tl.constexpr):
+def _combine_add_rms_kernel(Y, TOP, S, G, R, W, HOUT, OUT, N, sy, ss, sg, sr, sh, so, eps,
+                            K: tl.constexpr, OFFSET: tl.constexpr, BLOCK: tl.constexpr, ROUND_EXPERTS: tl.constexpr):
     t = tl.program_id(0).to(tl.int64)
     c = tl.arange(0, BLOCK)
     m = c < N
-    acc = tl.zeros([BLOCK], tl.float32)
-    for j in tl.static_range(K):
-        acc += tl.load(Y + (t * K + j) * sy + c, m, other=0.0).to(tl.float32)
+    if ROUND_EXPERTS:
+        acc = _nvfp4_sum8(Y, TOP, t, c, sy, m)
+        acc = tl.inline_asm_elementwise("add.rn.f32 $0, 0f00000000, $1;",
+                                      constraints="=f,f", args=[acc], dtype=tl.float32, is_pure=True, pack=1)
+    else:
+        acc = tl.zeros([BLOCK], tl.float32)
+        for j in tl.static_range(K):
+            acc += tl.load(Y + (t * K + j) * sy + c, m, other=0.0).to(tl.float32)
     gate = tl.load(G + t * sg).to(tl.float32)
     shared = tl.load(S + t * ss + c, m, other=0.0).to(tl.float32)
     # Make the combine output's rounding explicit before the residual addition.
@@ -315,20 +377,23 @@ def _combine_add_rms_kernel(Y, S, G, R, W, HOUT, OUT, N, sy, ss, sg, sr, sh, so,
 
 def combine_add_rms(y: torch.Tensor, shared: torch.Tensor, gate: torch.Tensor, k: int,
                     residual: torch.Tensor, weight: torch.Tensor, eps: float,
-                    offset: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
+                    offset: bool = True, round_experts: bool = False, top: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Combine experts, round to shared.dtype, then residual-add and RMSNorm.
 
     Preserve both the combine and residual rounding boundaries while avoiding the
-    combined output tensor. Return the updated residual and normalized next input.
+    combined output tensor. `round_experts` also keeps the NVFP4 expert sum rounding.
+    Return the updated residual and normalized next input.
     """
     T, N = residual.shape
+    if round_experts:
+        _check_nvfp4_sum(y, shared, k, top)
     h, out = torch.empty_like(residual), torch.empty_like(residual)
     if T:
         gate = gate.reshape(T)
         _combine_add_rms_kernel[(T,)](
-            y, shared, gate, residual, weight, h, out, N, y.stride(0), shared.stride(0), gate.stride(0),
+            y, top, shared, gate, residual, weight, h, out, N, y.stride(0), shared.stride(0), gate.stride(0),
             residual.stride(0), h.stride(0), out.stride(0), eps, K=k, OFFSET=offset,
-            BLOCK=triton.next_power_of_2(N), num_warps=8 if N > 2048 else 4)
+            BLOCK=triton.next_power_of_2(N), num_warps=8 if N > 2048 else 4, ROUND_EXPERTS=round_experts)
     return h, out
 
 
@@ -391,12 +456,14 @@ def quantize_experts(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return q, s
 
 
-def experts(x: torch.Tensor, w: dict, top: torch.Tensor, ids: torch.Tensor, act,
+def experts(x: torch.Tensor, w: dict, top: torch.Tensor | None, ids: torch.Tensor, act,
             fuse_swiglu: bool = False) -> torch.Tensor:
     """The routed experts' rows for x [T, hidden] on the routing (top, ids) [T, k]: [T * k, hidden], each the expert's
-    output times its weight, in float32 for 16-bit experts and in the activation dtype for float8 ones (kernels/fp8.py
+    output times its weight (unweighted BF16 for NVFP4 when top is None), in float32 for 16-bit experts and in the activation dtype for float8 ones (kernels/fp8.py
     rounds far more). `act(gu, inter)` is the activation of the gate and up halves."""
     T, H = x.shape
+    if "nvfp4" in w:
+        return w["nvfp4"](x, top, ids, act)
     K, I = top.shape[1], w["inter"]
     fp8 = "experts_scale" in w
     t = tile(T * K, fp8, x.device)
@@ -423,22 +490,32 @@ def _moe_parts(x: torch.Tensor, w: dict, mm, swiglu):
         logits, gate = router(x, wr, wg)
     else:   # an adapter on the router or the gate: their own products
         logits, gate = mm(x, wr), mm(x, wg)
+    if "nvfp4" in w:
+        # Match the reference engine's BF16 router output before FP32 top-k.
+        logits = logits.to(x.dtype).float()
     top, ids = route(logits, K)
-    y = experts(x, w, top, ids, swiglu, fuse_swiglu=True)
+    defer_weight = "nvfp4" in w and K == 8 and x.shape[1] >= 4 and x.shape[1] % 4 == 0
+    y = experts(x, w, None if defer_weight else top, ids, swiglu, fuse_swiglu=True)
     shared = mm(swiglu(mm(x, w["shared_gate_up"]), w["shared_inter"]), w["shared_down"])
-    return y, shared, gate, K
+    if "nvfp4" in w and (K != 8 or x.shape[1] < 4 or x.shape[1] % 4):
+        # Other shapes keep the materialized expert sum and BF16 boundary.
+        y = y.reshape(x.shape[0], K, x.shape[1]).sum(dim=1).to(x.dtype)
+        K = 1
+    return y, shared, gate, K, top if defer_weight else None
 
 
 def moe(x: torch.Tensor, w: dict, mm, swiglu) -> torch.Tensor:
     """Routed experts plus the sigmoid-gated shared expert."""
-    return combine(*_moe_parts(x, w, mm, swiglu))
+    y, shared, gate, k, top = _moe_parts(x, w, mm, swiglu)
+    return combine(y, shared, gate, k, round_experts="nvfp4" in w and k == 8, top=top)
 
 
 def moe_add_rms(x: torch.Tensor, w: dict, mm, swiglu, residual: torch.Tensor,
                 norm_weight: torch.Tensor, eps: float) -> tuple[torch.Tensor, torch.Tensor]:
     """MoE feed-forward followed by the next layer's residual and RMSNorm."""
-    y, shared, gate, k = _moe_parts(x, w, mm, swiglu)
-    return combine_add_rms(y, shared, gate, k, residual, norm_weight, eps)
+    y, shared, gate, k, top = _moe_parts(x, w, mm, swiglu)
+    return combine_add_rms(y, shared, gate, k, residual, norm_weight, eps,
+                           round_experts="nvfp4" in w and k == 8, top=top)
 
 
 @triton.jit

@@ -227,6 +227,17 @@ class Qwen35(Backbone):
         (runtime/tp.py; with the "direct" loader each tensor is cut to this rank's part as it is read, then quantized,
         so a rank never holds the whole model; otherwise read in 16 bits, cut, then quantized). `merge_lora`: a LoRA adapter merged into the weights as
         they are read (flide/lora.py)."""
+        from ..load import check_checkpoint_quantization
+
+        if quantize == "fp4":
+            quantize = "nvfp4"
+        native_nvfp4 = quantize == "nvfp4"
+        if native_nvfp4:
+            from .nvfp4 import validate
+
+            validate(model_dir, device, dtype, loader, tp, options)
+        else:
+            check_checkpoint_quantization(model_dir)
         import transformers
 
         config = transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
@@ -234,6 +245,8 @@ class Qwen35(Backbone):
             vision = getattr(config, "vision_config", None) is not None
         archs = getattr(config, "architectures", None) or []
         moe = config.model_type.startswith("qwen3_5_moe")   # a mixture of experts in every layer (kernels/moe.py)
+        if native_nvfp4 and not moe:
+            raise ValueError("NVFP4 is supported only for Qwen3.5 MoE")
         if moe and tp is not None:
             raise ValueError("Qwen3.5 MoE: no tensor parallelism yet")
         pre = "Qwen3_5Moe" if moe else "Qwen3_5"
@@ -258,7 +271,15 @@ class Qwen35(Backbone):
             lean = lambda name: name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
         else:
             lean = _fp8_target if lean_fp8 else None
-        if loader == "none":
+        nvfp4_store, dtype_audit = None, None
+        if native_nvfp4:
+            from ..load import build
+            from .nvfp4 import load
+
+            lean = lambda name: name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
+            model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
+            nvfp4_store, dtype_audit = load(model, model_dir, device, key_map, skip)
+        elif loader == "none":
             from ..load import blank, build
 
             model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
@@ -290,11 +311,12 @@ class Qwen35(Backbone):
         names = {id(m): n for n, m in model.named_modules()}
         if headless:
             model = _Headless(model)
-        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut, **options)
+        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut,
+                   nvfp4_store=(nvfp4_store, names) if nvfp4_store else None, dtype_audit=dtype_audit, **options)
 
     def __init__(self, causal_lm, cuda_graphs: bool = False, quantize: str | None = None, fp8_store=None,
                  tp: tuple[int, int] | None = None, float32_residual: bool = False, tp_cut: list | None = None,
-                 float32_vision: bool = False):
+                 float32_vision: bool = False, nvfp4_store=None, dtype_audit=None):
         """`float32_residual`: the residual stream stays in float32 between the layers; each norm rounds the input of
         the products that read it once, and the final norm's output stays in float32 (off by default). `tp_cut`: the
         parts the loader already cut the weights to (`_read_tp`). `float32_vision`: the vision tower in float32, its
@@ -321,7 +343,16 @@ class Qwen35(Backbone):
         if self.tp is not None:
             self.shard(*self.tp, cuts=tp_cut)
         self._prepare_fused()
-        if fp8_store is not None:
+        self.nvfp4 = nvfp4_store is not None
+        self.dtype_audit = dtype_audit
+        if nvfp4_store is not None:
+            store, names = nvfp4_store
+            for layer, w in zip(self.layers, self._w):
+                packed = store.pop(names[id(layer.mlp.experts)])
+                w.update(nvfp4=packed, experts=packed.w13, experts_down=packed.w2)
+            if store:
+                raise ValueError("Unused NVFP4 expert weights")
+        elif fp8_store is not None:
             self._fp8_from_store(*fp8_store)
         elif quantize == "fp8":
             self.quantize_fp8()

@@ -188,7 +188,8 @@ def run_streamed(args, rows, name, model_dir, format_args, plan_args, out, log) 
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
-                    backbone_options={"quantize": args.quantize}, capture=False, batch_invariant=args.batch_invariant,
+                    backbone_options={"quantize": args.quantize, "cuda_graphs": args.quantize not in ("nvfp4", "fp4")},
+                    capture=False, batch_invariant=args.batch_invariant,
                     attention_backend=args.attention_backend,
                     **format_args)
     t_load = time.perf_counter() - t0
@@ -304,7 +305,7 @@ def run(args) -> None:
     t0 = time.perf_counter()
     engine = Engine(model_dir, format=name, device=args.device, dtype=args.dtype, budget=args.budget,
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
-                    backbone_options={"quantize": args.quantize}, batch_invariant=args.batch_invariant,
+                    backbone_options={"quantize": args.quantize, "cuda_graphs": args.quantize not in ("nvfp4", "fp4")}, batch_invariant=args.batch_invariant,
                     attention_backend=args.attention_backend, **format_args)
     t_load = time.perf_counter() - t0
     log(f"model loaded in {t_load:.1f}s")
@@ -385,8 +386,8 @@ def add_parser(sub) -> None:
                    help="attention backend (default: FLIDE_ATTENTION_BACKEND or triton; unsupported inputs use Triton)")
     p.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits whatever it is batched with")
-    p.add_argument("--quantize", default=None, choices=["fp8"],
-                   help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+)")
+    p.add_argument("--quantize", default=None, choices=["fp8", "nvfp4", "fp4"],
+                   help="fp8: per-row weights; nvfp4/fp4: prequantized routed experts on SM120, CUDA graphs disabled")
     p.add_argument("--warmup", type=int, default=0, help="micro-batches run once before the timed forward")
     p.add_argument("--stream-block", type=int, default=20000,
                    help="rows per GPU block while planning continues (0: plan everything, then forward, then finish)")
