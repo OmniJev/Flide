@@ -169,7 +169,9 @@ class RequestGraphs:
         self.branch_tokens = branch_tokens
         self.cont_ladder = tuple(cont_ladder)
         self.tail_ladder = tuple(tail_ladder)
-        self.mark_ladder = tuple(w for w in self.cont_ladder if w % 256 == 0)
+        # every multiple of the mark stride: a session's save point must be a static boundary of the graph, so the
+        # ladder cannot round the request's own length up past it
+        self.mark_ladder = tuple(range(MARK_STRIDE, self.cont_ladder[-1] + 1, MARK_STRIDE))
         self.bmax = self.batch_ladder[-1]
         dev, dt = bb.device, bb.dtype
         self.device, self.dtype = dev, dt
@@ -204,7 +206,8 @@ class RequestGraphs:
         hd = cfg.head_dim
         self.attn_cfg = attn_kernel.config(dev, dt, hd)
         self.K, self.V, self.conv, self.S = {}, {}, {}, {}
-        self.conv_mark, self.S_mark = {}, {}    # the state at the end of segment A of a two-segment continuation
+        self.conv_mark, self.S_mark = {}, {}    # the state at the end of segment A of a three-segment continuation
+        self.conv_mark2, self.S_mark2 = {}, {}  # and at the end of A1, one stride before it
         for i, layer in enumerate(bb.layers):
             if bb.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
@@ -214,6 +217,8 @@ class RequestGraphs:
                 self.S[i] = torch.zeros(1, m.num_v_heads, m.head_k_dim, m.head_v_dim, device=dev, dtype=torch.float32)
                 self.conv_mark[i] = [torch.zeros_like(c) for c in self.conv[i]]
                 self.S_mark[i] = torch.zeros_like(self.S[i])
+                self.conv_mark2[i] = [torch.zeros_like(c) for c in self.conv[i]]
+                self.S_mark2[i] = torch.zeros_like(self.S[i])
             else:
                 nkv = bb._w[i]["heads"][1]
                 # slot kmax takes the writes of padding tokens
@@ -484,7 +489,7 @@ class RequestGraphs:
         y = gated_rms(o.reshape(T, nv, m.head_v_dim), z, m.norm.weight, m.norm.variance_epsilon)
         return mm(y, w["out"])
 
-    def _continue(self, W: int, Wb: int = 0):
+    def _continue(self, W: int, Wb: int = 0, W1: int | None = None):
         """Continuation graph body. Segment A: `clen` real tokens at the start of `ids_cont[:W]`, after the `P` cached
         ones. With Wb, segment B: `clen2` real tokens at the start of `ids_cont[W:W + Wb]`, next in the sequence after
         A's real tokens; the recurrent state and convolution window at the end of A go to `S_mark` / `conv_mark`.
@@ -522,7 +527,7 @@ class RequestGraphs:
         for i, layer in enumerate(bb.layers):
             w = bb._w[i]
             if bb.layer_types[i] == "linear_attention":
-                d = self._gdn_continue(layer.linear_attn, w, x, i, real, W, Wb)
+                d = self._gdn_continue(layer.linear_attn, w, x, i, real, W, Wb, W1)
             else:
                 m = layer.self_attn
                 if i == top:   # the query of the last real token only
@@ -547,7 +552,7 @@ class RequestGraphs:
         self.P.add_(self.clen + self.clen2 if Wb else self.clen)
         self.pos_start.copy_(self.P)
 
-    def _gdn_continue(self, m, w, x, i, real, W: int, Wb: int = 0):
+    def _gdn_continue(self, m, w, x, i, real, W: int, Wb: int = 0, W1: int | None = None):
         """Gated DeltaNet over one or two right-padded segments from the state in the buffers. Padding rows get gate
         inputs whose decay and update are exactly 0, so the recurrent state after a segment is the state after its
         last real token; the convolution window is the last inputs before the end of the real tokens. With two
@@ -563,7 +568,10 @@ class RequestGraphs:
         keep = real[:, None]
         beta = torch.where(keep, p[:, cd + vd: cd + vd + nv], _OFF).view(1, T, nv)
         a = torch.where(keep, p[:, cd + vd + nv:], _OFF).view(1, T, nv)
-        segments = [(0, W, self.clen)] + ([(W, T, self.clen2)] if Wb else [])
+        if W1:
+            segments = [(0, W1, self.clen - MARK_STRIDE), (W1, W, MARK_STRIDE)] + ([(W, T, self.clen2)] if Wb else [])
+        else:
+            segments = [(0, W, self.clen)] + ([(W, T, self.clen2)] if Wb else [])
         S, conv, outs = self.S[i], self.conv[i], []
         for g, (lo, hi, n) in enumerate(segments):
             parts, window = [], []
@@ -586,7 +594,11 @@ class RequestGraphs:
                                           output_final_state=True, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
                                           A_log=m.A_log, dt_bias=m.dt_bias, use_beta_sigmoid_in_kernel=True)
             conv = window
-            if g == 0 and Wb:
+            if Wb and g == 0 and W1:            # the end of A1: the earlier save point
+                self.S_mark2[i].copy_(S)
+                for c, t in zip(self.conv_mark2[i], window):
+                    c.copy_(t)
+            if Wb and g == (1 if W1 else 0):    # the end of A: the last save point
                 self.S_mark[i].copy_(S)
                 for c, t in zip(self.conv_mark[i], window):
                     c.copy_(t)
@@ -699,6 +711,8 @@ class RequestGraphs:
             return lambda: self._continue(shape[1])
         if shape[0] == "cont2":
             return lambda: self._continue(shape[1], shape[2])
+        if shape[0] == "cont3":
+            return lambda: self._continue(shape[1], shape[2], shape[1] - MARK_STRIDE)
         if shape[0] == "flat":
             return lambda: self._flat(shape[1])
         if shape[0] == "flatw":
@@ -721,10 +735,10 @@ class RequestGraphs:
             return False
         body = self._body(shape)
         try:
-            self.P.fill_(64 if shape[0] in ("branch", "cont", "cont2") else shape[1])
+            self.P.fill_(64 if shape[0] in ("branch", "cont", "cont2", "cont3") else shape[1])
             self.pos_start.fill_(64)
             self.lens.fill_(1)
-            self.clen.fill_(1)
+            self.clen.fill_(shape[1] if shape[0] == "cont3" else 1)   # A1 = clen - one stride must stay positive
             self.clen2.fill_(1)
             if shape[0] in ("flat", "flatw"):   # a valid round: one sequence of every token
                 self._stage_flat([(list(range(shape[1])), [])], shape[1])
@@ -775,7 +789,7 @@ class RequestGraphs:
         if self.bb.midloop is not None:   # midloop: the flat graphs only
             return
         t0 = time.perf_counter()
-        shapes = [("cont2", a, b) for a in self.mark_ladder for b in self.tail_ladder]
+        shapes = [("cont3", a, b) for a in self.mark_ladder for b in self.tail_ladder]
         for s in sorted(shapes, key=lambda s: -(s[1] + s[2])):
             self.capture(s)
         (log_fn or log.info)(f"captured {len(shapes)} session graphs in {time.perf_counter() - t0:.1f}s")
@@ -1394,8 +1408,12 @@ class RequestGraphs:
         return states, kv
 
     def snapshot_mark(self, pos: int):
-        """(states, kv) at the end of segment A of the last two-segment continuation, which ended at `pos`."""
+        """(states, kv) at the end of segment A of the last continuation, which ended at `pos`."""
         return self._saved(pos, self.S_mark, self.conv_mark)
+
+    def snapshot_mark2(self, pos: int):
+        """(states, kv) at the end of segment A1 of the last three-segment continuation, one stride before `pos`."""
+        return self._saved(pos, self.S_mark2, self.conv_mark2)
 
     def _stage_cont(self, a: list[int], W: int, b: list[int] = (), Wb: int = 0) -> None:
         self.staged.synchronize()
@@ -1416,7 +1434,8 @@ class RequestGraphs:
             at += n
 
     @torch.inference_mode()
-    def run_session(self, prefix: list[int], suffixes: list[list[int]], entry, start: int, mark: int | None):
+    def run_session(self, prefix: list[int], suffixes: list[list[int]], entry, start: int, mark: int | None,
+                    mark2: int | None = None):
         """A request whose prefix resumes from `entry` at `start` (entry None: from nothing, start 0) and, with `mark`,
         saves its state there. One pass where the shapes allow: the prefix up to the save point (segment A) and what
         follows it (segment B: the rest of the prefix, and with one branch the branch, whose last token is read) in
@@ -1436,7 +1455,11 @@ class RequestGraphs:
         lead = self._cont_chunks(upto - start)
         if mark:
             *front, (na, _) = lead
-            last = ("cont2", _rung(self.mark_ladder, na), tb)
+            rung = _rung(self.mark_ladder, na)
+            # three segments only when the split lands exactly on the earlier mark: the rung must be the length
+            # of A itself, and one stride must fit inside it
+            split = mark2 if mark2 is not None and rung == na and na > MARK_STRIDE else None
+            last = ("cont3", rung, tb) if split is not None else ("cont2", rung, tb)
         else:
             front, last = lead, ("cont", _rung(self.cont_ladder, len(tail)))
         chunks, shapes = [], []
@@ -1462,7 +1485,13 @@ class RequestGraphs:
         else:
             self._stage_cont(tail, last[1])
         self.graphs[last].replay()
-        snap = self.snapshot_mark(upto) if mark else None
+        snap = None
+        if mark:
+            states, kv = self.snapshot_mark(upto)
+            if split is not None:
+                earlier, _ = self.snapshot_mark2(upto - MARK_STRIDE)   # its keys and values are a prefix of these
+                states = {**earlier, **states}
+            snap = [(upto, (states, kv))]
         hidden = self.out[:1].clone() if one else self._run_branches(chunks, shapes)
         return hidden, snap
 

@@ -29,12 +29,13 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-23** Flide 0.1.20 で Gemma 4 のエージェントセッションに対応しました。
 - 🔥 **2026-11-22** Flide 0.1.19 で [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1)、[turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) に対応し、[d1-2B](https://huggingface.co/LiquidAI/d1-2B) が画像を読めるようになり、[Docker イメージ](https://hub.docker.com/r/omnijev/flide)も公開しました。
 - 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、オプションの session cache を追加しました。
-- 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列の GPU メモリ使用量を減らしました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列の GPU メモリ使用量を減らしました。
 - 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
 - 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
 - 🔥 **2026-11-12** Flide 0.1.14 で [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B)、[GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) に対応し、GLiDE-27B は画像も読めます。

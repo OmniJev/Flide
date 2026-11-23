@@ -1,14 +1,17 @@
-"""Quantized products and the batch-invariant promise are refused together, and verify takes --quantize.
+"""Quantized products and the batch-invariant promise are refused together, verify takes --quantize, and serve
+takes --budget.
 
     python tests/test_engine_flags.py
 """
 import argparse
+import inspect
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flide.runtime.engine import refuse_invariant_quantized
+from flide.api import serve
 from flide.verify import add_parser
 
 
@@ -48,6 +51,14 @@ def main():
     except SystemExit as exc:
         bad = exc.code == 2
     check("verify refuses a quantization it does not know", bad)
+
+    parser = argparse.ArgumentParser()
+    serve.add_parser(parser.add_subparsers())
+    args = parser.parse_args(["serve", "--model", "m", "--budget", "8192"])
+    check("serve takes --budget", args.budget == 8192, args.budget)
+    args = parser.parse_args(["serve", "--model", "m"])
+    check("serve leaves the budget to the card by default", args.budget is None, args.budget)
+    check("serve passes the budget to the engine", "budget=args.budget" in inspect.getsource(serve))
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)

@@ -1,6 +1,7 @@
 """Engine: a checkpoint, its family and its backbone, and the packed forward between them."""
 from __future__ import annotations
 
+import gc
 import logging
 import time
 from pathlib import Path
@@ -156,6 +157,30 @@ def eager_tokens(model_type: str, backbone) -> int | None:
     return 3072 if params >= 20e9 else 4096 if params >= 6e9 else None
 
 
+def session_saves(snaps, mark: int | None) -> list:
+    """The saves of a session run as a list of (position, (states, kv)), the earlier mark first. The continuation graphs
+    give that list, or for a tail too long for them one (states, kv) at `mark`, or None when nothing is saved."""
+    if snaps is None:
+        return []
+    if isinstance(snaps, list):
+        return snaps
+    return [(mark, snaps)] if mark else []
+
+
+def session_floor(backbone) -> int:
+    """The shortest prefix the session cache saves when `session_min_tokens` is not given. A prefix is worth saving when
+    computing it again takes about as long as 2048 tokens on a model with 2B parameters in its layers (the floor the
+    small models are served with), so the floor falls with the size of the layers, in strides of 256 down to one stride
+    from 16B on; 2048 where the layers are not at hand (tensor parallel)."""
+    layers = getattr(backbone, "layers", None)
+    if layers is None:
+        layers = getattr(getattr(backbone, "lm", None), "layers", None)
+    params = sum(p.numel() for p in layers.parameters()) if layers is not None else 0
+    if params <= 0:
+        return 2048
+    return max(256, min(2048, int(2048 * 2e9 / params) // 256 * 256))
+
+
 def _gib() -> tuple[float, float, float]:
     """GPU memory in GiB: allocated by torch, reserved by its caching allocator (graph pools included), used on the
     device by every process."""
@@ -185,7 +210,7 @@ def refuse_invariant_quantized(batch_invariant: bool, backbone_options: dict | N
 class Engine:
     def __init__(self, model: str, format: str | None = None, device: str = "cuda:0", dtype: str = "bfloat16",
                  budget: int | None = None, backbone_options: dict | None = None, capture: bool | int = 4096,
-                 session_cache_gb: float = 0.0, session_min_tokens: int = 2048, batch_invariant: bool = False,
+                 session_cache_gb: float = 0.0, session_min_tokens: int | None = None, batch_invariant: bool = False,
                  **format_options):
         """`batch_invariant`: the batch-invariant products for every engine of the process (`settings`)."""
         refuse_invariant_quantized(batch_invariant, backbone_options)
@@ -241,6 +266,7 @@ class Engine:
         self.eager_tokens = eager_tokens(config.model_type, self.backbone) if tp_size == 1 else None
         mem = _gib()
         self.budget = budget or default_budget(_total_memory(device))
+        self._budget_given = budget is not None
         if budget is None and self.budget != 65536:
             log.info("budget %d tokens per micro-batch on a card of 24 GB or less (--budget sets it)", self.budget)
         self.sessions = None
@@ -251,6 +277,10 @@ class Engine:
         if auto or session_cache_gb > 0:
             from .session import SessionCache
 
+            if session_min_tokens is None:
+                session_min_tokens = session_floor(self.backbone)
+                log.info("session cache saves prefixes of %d tokens or more (--session-min-tokens sets it)",
+                         session_min_tokens)
             self.sessions = SessionCache(0 if auto else int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         tune()
@@ -268,10 +298,14 @@ class Engine:
                 graphs.capture_sflat()
         n_graphs = len(getattr(graphs, "graphs", None) or {}) if graphs is not None else 0
         mem_graphs = _gib()
+        self._capture_on = capture is not False
         if self.sessions is not None and not auto:
             from .session import reserve
 
-            reserve(self.sessions.budget, self.backbone.device)
+            if hasattr(self.backbone, "kv_arena"):
+                self._attach_store(self.sessions.budget)
+            else:
+                reserve(self.sessions.budget, self.backbone.device)
         if capture is not False:
             tune()
             self.warmup()
@@ -299,9 +333,12 @@ class Engine:
         tok = lambda n: [rng.randrange(100, 30000) for _ in range(n)]
         plans = [Plan(tok(300), [tok(40), tok(25), tok(60)], (Read(None),)), Plan(tok(1500), [tok(50)], (Read(None),)),
                  Plan(tok(70), [tok(9)], (Read(None),))]
+        full = self.sessions is not None and hasattr(self.backbone, "kv_arena")
         saved, self.sessions = self.sessions, None
         try:
             self.run_plans(plans)
+            if full:
+                self._warm_budget(tok)
             if saved is not None:   # the level-by-level path that saves and resumes session states
                 from .pack import Job
                 from .session import Entry
@@ -320,6 +357,27 @@ class Engine:
             torch.cuda.synchronize()
         log.info("packed path warmed up in %.1fs", time.perf_counter() - t0)
 
+    def _warm_budget(self, tok) -> None:
+        """A packed micro-batch as large as the budget, run before the session store takes the memory left, so its work
+        space counts. When it does not fit beside the model, its graphs and the store, a budget the caller did not set
+        halves until it does."""
+        import torch
+
+        from ..formats.base import Read
+
+        while True:
+            try:
+                self.run_plans([Plan(tok(1000), [tok(20)] * 4, (Read(None),)) for _ in range(self.budget // 1080)])
+                return
+            except torch.OutOfMemoryError:
+                if self._budget_given or self.budget <= 4096:
+                    raise
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.budget //= 2
+            log.info("budget %d tokens per micro-batch: a larger one does not fit beside the model, its graphs and the "
+                     "session cache (--budget sets it)", self.budget)
+
     def run_plans(self, plans: Sequence[Plan | None], budget: int | None = None,
                   log_fn: Callable[[str], None] | None = None, warmup: int = 0) -> tuple[list, dict]:
         """Head outputs for every plan: out[plan][branch][read] is a list of rows, one per read position."""
@@ -334,6 +392,8 @@ class Engine:
                 p.positions, p.offset = self._media_positions(p)
         outputs: list[Any] = [None if p is None else [None] * len(p.suffixes) for p in plans]
         sessions = self._sessions_for(plans)
+        if sessions and self.sessions.store is not None:   # no save of this call evicts what another of its jobs reads
+            self.sessions.pinned.update(id(s["resume"]) for s in sessions.values() if s["resume"] is not None)
         batches = schedule(plans, budget, sessions)
         tokens = sum(b.tokens for b in batches)
         if log_fn:
@@ -345,13 +405,30 @@ class Engine:
             shape = budget
             while shape < mb.tokens:
                 shape *= 2
-            hidden = self.backbone.forward(batch, pad_to=shape)
+            if self.sessions is not None and self.sessions.store is not None and batch.marks:
+                # the store's rows for every save point, before the forward writes them (a save without room is skipped)
+                keep = [e for _, e, _ in batch.resumes]
+                for j in list(batch.marks):
+                    m = max(batch.marks[j])
+                    rows = self.sessions.reserve(self.backbone.session_rows(m), keep=keep)
+                    if rows is None:
+                        del batch.marks[j]
+                    else:
+                        batch.saved[j] = {"states": {m: {}}, "kv": rows}
+            try:
+                hidden = self.backbone.forward(batch, pad_to=shape)
+            except BaseException:
+                for saved in batch.saved.values():
+                    getattr(saved["kv"], "free", lambda: None)()
+                raise
             if self.sessions is not None and batch.saved:
                 from .session import Entry
 
                 for j, saved in batch.saved.items():
-                    self.sessions.insert(Entry(mb.pieces[j].job.prefix, saved["states"], saved["kv"]),
-                                         parent=mb.pieces[j].job.resume)
+                    pre = mb.pieces[j].job.prefix
+                    if self.sessions.store is not None:   # the tokens it keeps, so an agent's next save replaces it
+                        pre = pre[:max(saved["states"])]
+                    self.sessions.insert(Entry(pre, saved["states"], saved["kv"]), parent=mb.pieces[j].job.resume)
             ys = []
             for g in batch.groups:
                 h = hidden[g.layer][g.start: g.end]
@@ -403,6 +480,8 @@ class Engine:
                 log_fn(f"forward {k + 1}/{len(batches)} micro-batches, {done / max(tokens, 1):.0%} of tokens")
         if pending is not None:
             collect(pending)
+        if self.sessions is not None:
+            self.sessions.pinned.clear()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         stats = {"tokens": tokens, "micro_batches": len(batches), "forward_s": time.perf_counter() - t_start}
@@ -487,6 +566,13 @@ class Engine:
         return all(p < 0 and -p <= shortest for b in range(len(plan.suffixes)) for r in plan.branch_reads(b)
                    for p in r.positions)
 
+    def cost(self, plan: Plan) -> int:
+        """Tokens a plan computes: all of them, less the start of its prefix a saved session state covers."""
+        plan = _rooted(plan)
+        if self.sessions is None or not self._session_ok(plan):
+            return plan.tokens
+        return plan.tokens - self.sessions.peek(plan.prefix)
+
     def _sessions_for(self, plans) -> dict | None:
         """Per plan index: where its prefix resumes from and where to save states."""
         if self.sessions is None:
@@ -514,9 +600,21 @@ class Engine:
         free, total = torch.cuda.mem_get_info(dev)
         n = auto_bytes(free, total, torch.cuda.memory_reserved(dev), torch.cuda.memory_allocated(dev),
                        torch.cuda.max_memory_allocated(dev))
-        reserve(n, dev)
         log.info("session cache %.2f GiB (auto)%s", n / 2 ** 30, "" if n else ": too little memory left, so it saves nothing")
+        if n and hasattr(self.backbone, "kv_arena"):
+            return self._attach_store(n)
+        reserve(n, dev)
         return n
+
+    def _attach_store(self, nbytes: int) -> int:
+        """The session cache's store in `nbytes` (a backbone whose saved state is its keys and values alone: the
+        entries keep rows of it, and its graphs read and write them in place). Returns the budget it gives."""
+        store = self.backbone.kv_arena(nbytes)
+        self.sessions.attach(store)
+        graphs = getattr(self.backbone, "request_graphs", lambda: None)()
+        if graphs is not None and hasattr(graphs, "set_store"):
+            graphs.set_store(store, self.sessions, capture=self._capture_on)
+        return self.sessions.budget
 
     def _graph_hidden(self, plan: Plan, lazy: bool = True):
         """Head outputs at the last token of every branch from CUDA graphs (still on the device): a flat graph (one
@@ -570,22 +668,25 @@ class Engine:
         spots = self._spots(plan)
         if len(read) != 1 or read[0].layer is not FINAL or read[0].positions != (-1,) and spots is None:
             return None
-        if (spots is None and self.sessions is not None and hasattr(graphs, "run_session")
+        if (spots is None and self.sessions is not None
+                and (hasattr(graphs, "run_session") or hasattr(graphs, "run_sflat"))
                 and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan)):
             # long text prefixes resume from and save session states
             entry, start = self.sessions.match(plan.prefix)
-            mark = self.sessions.mark(len(plan.prefix), start)
+            marks = self.sessions.marks(len(plan.prefix), start)
+            mark = marks[-1] if marks else None
+            mark2 = marks[0] if len(marks) > 1 else None
             out = None
             if hasattr(graphs, "run_sflat"):
                 out = graphs.run_sflat([(plan.prefix, plan.suffixes, entry, start, mark)])
                 if out is not None:
                     out = (out[0], out[1][0])   # a list of (position, snapshot), the earlier mark first
-            if out is None:
-                out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark)
+            if out is None and hasattr(graphs, "run_session"):
+                out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark, mark2)
             if out is None:
                 return None
             hidden, snaps = out
-            for pos, snap in snaps:
+            for pos, snap in session_saves(snaps, mark):
                 from .session import Entry
 
                 self.sessions.insert(Entry(plan.prefix[:pos], *snap), parent=entry)
@@ -821,6 +922,8 @@ class Engine:
             entry, start = self.sessions.match(p.prefix)
             mark = n if n is not None and start < n else self.sessions.mark(len(p.prefix), start)
             items[i] = (p.prefix, p.suffixes, entry, start, mark)
+        # a save in one replay must not evict what a later replay of this round resumes from
+        self.sessions.pinned.update(id(it[2]) for it in items.values() if it[2] is not None)
         out, trunks = {}, {}
         self._sflat_rounds(graphs, plans, items, out, trunks)
         if later:
@@ -834,6 +937,7 @@ class Engine:
                 self.sessions.saved_tokens += n
                 items[i] = (p.prefix, p.suffixes, entry, n, self.sessions.mark(len(p.prefix), n))
             self._sflat_rounds(graphs, plans, items, out, trunks)
+        self.sessions.pinned.clear()
         return out
 
     def _sflat_rounds(self, graphs, plans, items, out, trunks) -> None:
@@ -861,9 +965,10 @@ class Engine:
                 out[i] = self.heads[head](h[at: at + n]) if head is not None else h[at: at + n]
                 at += n
                 for pos, snap in snap or ():
-                    entry = Entry(plans[i].prefix, *snap)
+                    entry = Entry(plans[i].prefix[:pos] if self.sessions.store is not None else plans[i].prefix, *snap)
                     self.sessions.insert(entry, parent=items[i][2])
                     trunks[i] = entry
+                    self.sessions.pinned.add(id(entry))   # the other plans of its merge group resume from it
 
     def _graph_outputs(self, plan: Plan):
         y = self._graph_hidden(plan)

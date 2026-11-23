@@ -8,6 +8,12 @@ A round runs as one replay of a flat graph: every prefix and branch of the round
 between them, graphs captured at start; a request alone runs this way too. Rounds that do not fit the flat graphs
 run as a packed eager forward.
 
+With the session cache, a request that resumes a saved state (an agent's next step) computes a small part of its
+tokens. The GPU thread then takes the waiting requests in order of when each would be done if it ran alone from its
+arrival (arrival plus its tokens to compute at the rate the GPU has computed so far), so such a request goes ahead of
+long ones that came shortly before it, and a long one waits at most about its own run time longer than in arrival
+order (`_take_ordered`).
+
 Head outputs go back to the request's thread, which finishes the answer. Planning and finishing of other
 requests overlap the GPU round.
 """
@@ -81,6 +87,7 @@ class _Item:
     plan: Any
     future: cf.Future
     t_in: float = field(default_factory=time.perf_counter)
+    cost: int = 0   # tokens to compute (`Engine.cost`), set when the GPU thread first sees it in an ordered batcher
 
 
 class _Pending:
@@ -124,6 +131,11 @@ class Batcher:
             if max_round_tokens is None:
                 self.max_round_tokens = graphs.flat_max
         self._carry: _Item | None = None   # the request that did not fit the last round: first in the next
+        self.ordered = getattr(engine, "sessions", None) is not None
+        self._waiting: list[_Item] = []   # requests the ordered GPU thread has taken off the queue, with their cost
+        self._computed = 0                # tokens the rounds so far computed, and the GPU time they took
+        self._busy = 0.0
+        self._last = 0.0
         self.q = _Pending()
         self._local = threading.local()
         self._planners = PlannerPool(planners, self._init_planner)
@@ -219,13 +231,57 @@ class Batcher:
             tokens += item.plan.tokens
         return items
 
+    def _pull(self, timeout: float | None = None) -> None:
+        """Move the queued requests to the waiting list with their cost: waits for one up to `timeout` (None: as long
+        as it takes, 0: not at all)."""
+        try:
+            item = self.q.get(timeout=timeout)
+        except queue.Empty:
+            return
+        while True:
+            item.cost = self.engine.cost(item.plan)
+            self._waiting.append(item)
+            try:
+                item = self.q.get(timeout=0)
+            except queue.Empty:
+                return
+
+    def _take_ordered(self, wait: bool) -> list[_Item]:
+        """A round from the waiting requests, the soonest done first (arrival plus cost over the rate computed so far;
+        arrival order until a round has run). A request costing more than twice what the round holds so far waits
+        for the next round, so a long one does not hold back the short ones ahead of it. Requests cancelled while
+        they waited leave the list; without `wait`, nothing waiting gives an empty round."""
+        if not self._waiting:
+            self._pull(None if wait else 0)
+        start = time.perf_counter()
+        while sum(it.plan.tokens for it in self._waiting) < self.max_round_tokens:
+            self._pull(0)
+            waited = time.perf_counter() - start
+            limit = max(self.window, self.gather if self._planning > 0 else 0.0)
+            if waited >= limit:
+                break
+            self._pull(min(limit - waited, 0.0005))
+        self._waiting = [it for it in self._waiting if not it.future.cancelled()]
+        rate = self._computed / self._busy if self._busy > 0 else 0.0
+        self._waiting.sort(key=(lambda it: it.t_in + it.cost / rate) if rate > 0 else (lambda it: it.t_in))
+        n = tokens = cost = 0
+        for it in self._waiting:
+            if n and (tokens + it.plan.tokens > self.max_round_tokens or it.cost > 2 * cost):
+                break
+            n += 1
+            tokens += it.plan.tokens
+            cost += it.cost
+        items, self._waiting = self._waiting[:n], self._waiting[n:]
+        return items
+
     def _loop(self):
         import torch
 
         torch.cuda.set_device(self.engine.backbone.device)
         inflight = None   # (items, launched round, start): queued on the GPU, outputs not yet collected
         while True:
-            items = self._take(wait=inflight is None)
+            wait = inflight is None
+            items = self._take_ordered(wait) if self.ordered else self._take(wait)
             items = [item for item in items if item.future.set_running_or_notify_cancel()]
             if not items:
                 if inflight is not None:
@@ -253,7 +309,12 @@ class Batcher:
             for it in items:
                 it.future.set_exception(exc)
             return
-        dt = time.perf_counter() - t0
+        now = time.perf_counter()
+        dt = now - t0
+        if self.ordered:   # GPU time of this round: from its launch or the previous round's end, whichever is later
+            self._busy += now - max(t0, self._last)
+            self._computed += sum(it.cost for it in items)
+            self._last = now
         self.rounds += 1
         self.requests += len(items)
         self.queue_s += sum(t0 - it.t_in for it in items)

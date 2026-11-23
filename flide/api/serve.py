@@ -84,14 +84,13 @@ def run(args) -> None:
 
         fronts = frontend.start(args.frontends, model_dir, family.name, _family_options(family, options), name,
                                 args.host, args.port, args.planners, args.access_log, admission=admission is not None)
-    engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype, budget=args.max_batch_tokens,
+    engine = Engine(model_dir, format=family.name, device=args.device, dtype=args.dtype, budget=args.budget,
                     backbone_options={"cuda_graphs": not args.no_cuda_graphs, "quantize": args.quantize, "tp": args.tp},
                     session_cache_gb=args.session_cache_gb, session_min_tokens=args.session_min_tokens,
                     batch_invariant=args.batch_invariant, **_family_options(family, options))
     from ..runtime.online import Batcher
 
-    batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms,
-                      max_round_tokens=args.max_batch_tokens)
+    batcher = Batcher(engine, planners=args.planners, window_ms=args.batch_window_ms, gather_ms=args.gather_ms)
     freeze_heap()
     if fronts is not None:
         return frontend.serve(batcher, fronts, admission)
@@ -136,11 +135,14 @@ def add_parser(sub) -> None:
                         "changes the numbers a little")
     s.add_argument("--tp", type=int, default=1,
                    help="tensor parallel over this many GPUs, --device and the ones after it (Qwen3.5 dense models)")
+    s.add_argument("--budget", type=_positive_int, default=None,
+                   help="tokens per micro-batch (default 65536, or 16384 on a card of 24 GB or less)")
     s.add_argument("--max-branch-tokens", type=int, default=None)
     s.add_argument("--max-request-tokens", type=int, default=None)
     s.add_argument("--session-cache-gb", type=_cache_size, default=0.0,
                    help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it; auto: the memory left once the model is up")
-    s.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
+    s.add_argument("--session-min-tokens", type=int, default=None,
+                   help="shortest prefix the session cache saves (default: by model size, 2048 to 256)")
     s.add_argument("--planners", type=int, default=4, help="CPU threads that render and tokenize requests")
     s.add_argument("--frontends", type=int, default=0,
                    help="HTTP front-end processes (each plans and finishes requests with its own planners); 0 serves "
@@ -150,9 +152,6 @@ def add_parser(sub) -> None:
     s.add_argument("--max-queued-requests", type=_nonnegative_int,
                    help="maximum states waiting for a running slot; return HTTP 429 when full; requires "
                         "--max-running-requests (zero disables waiting)")
-    s.add_argument("--max-batch-tokens", type=_positive_int, default=65536,
-                   help="token budget for online GPU rounds and engine micro-batches (default 65536); "
-                        "an oversized plan runs alone")
     s.add_argument("--batch-window-ms", type=float, default=0.0,
                    help="wait this long after the first waiting request for more to join its GPU round")
     s.add_argument("--gather-ms", type=float, default=None,

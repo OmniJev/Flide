@@ -202,11 +202,19 @@ class FusedDecoder:
                                           ac)
             m_ = rmm if last else mm   # the read rows of the last layer: products whose sums ignore the row count
             d = m_(o.reshape(Tq, nh * hd), w["o"])
+            # the attention's tensors go before the MLP and its input once read (shared keys stay in `shared`): the
+            # peak of a long packed batch is the MLP alone, and the session store sized after it keeps the rest
+            q = k = v = k1 = v1 = o = kv = kr = vr = None
             h, x = pw.sandwich(d, h, layer.post_attention_layernorm.weight, eps,
                                w2=layer.pre_feedforward_layernorm.weight, dtype=dt)
+            d = None
             n = w["inter"]
             gu = m_(x, w["gate_up"])
-            d = m_(_geglu(gu[:, :n], gu[:, n:]), w["down"])
+            x = None
+            g = _geglu(gu[:, :n], gu[:, n:])
+            gu = None
+            d = m_(g, w["down"])
+            g = None
             if "moe" in w:
                 d = self._moe(layer, w["moe"], h, d, eps)
             nxt = layers[i + 1].input_layernorm.weight if i + 1 < top else None
