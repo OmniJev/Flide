@@ -1273,9 +1273,9 @@ class RequestGraphs:
                     at += c2.shape[0]
             for i in sb["K"]:
                 K0, V0 = entry.kv[i]
-                for t_, lo, hi in K0.rows():
+                for t_, lo, hi in K0.runs():
                     pairs.append((sb["K"][i][cstart[j] + lo: cstart[j] + hi], t_))
-                for t_, lo, hi in V0.rows():
+                for t_, lo, hi in V0.runs():
                     pairs.append((sb["V"][i][cstart[j] + lo: cstart[j] + hi], t_))
         _grouped_copy(pairs)
         return out
@@ -1382,9 +1382,9 @@ class RequestGraphs:
                 c.copy_(t.view_as(c))
         for i in self.K:
             K0, V0 = entry.kv[i]
-            for t, lo, hi in K0.rows():
+            for t, lo, hi in K0.runs():
                 self.K[i][lo:hi].copy_(t)
-            for t, lo, hi in V0.rows():
+            for t, lo, hi in V0.runs():
                 self.V[i][lo:hi].copy_(t)
         self.P.fill_(pos)
         self.pos_start.fill_(pos)

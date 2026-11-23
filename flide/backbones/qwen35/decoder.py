@@ -788,9 +788,9 @@ class Qwen35(Backbone):
         for j, entry, start in b.resumes:
             c0 = C["start"][j]
             K0, V0 = entry.kv[i]
-            for t, lo, hi in K0.rows():
+            for t, lo, hi in K0.runs():        # a page at a time, not a saved block at a time
                 Kc[c0 + lo: c0 + hi].copy_(t)
-            for t, lo, hi in V0.rows():
+            for t, lo, hi in V0.runs():
                 Vc[c0 + lo: c0 + hi].copy_(t)
         o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr)
         for j in b.marks:

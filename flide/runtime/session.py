@@ -138,11 +138,24 @@ class KVArena:
             return None
         out = {}
         for k, n in need.items():
-            pages = np.array(
-                [self.free_pages[k].pop() for _ in range(want[k])], np.int64
-            )
-            out[k] = (pages[:, None] * PAGE + np.arange(PAGE)).reshape(-1)[:n]
+            # one consecutive run of pages when the pool has it, so the rows are contiguous and a resume copies them
+            # with one copy rather than one per saved block (292 us against 32 us per layer at 2.9k tokens)
+            pages = self._run_of_pages(k, want[k])
+            if pages is None:
+                pages = sorted(self.free_pages[k].pop() for _ in range(want[k]))
+            out[k] = (np.array(pages, np.int64)[:, None] * PAGE + np.arange(PAGE)).reshape(-1)[:n]
         return out
+
+    def _run_of_pages(self, kind: str, count: int):
+        """Take `count` consecutive free pages and return their numbers, or None when the pool has no such run."""
+        free = sorted(self.free_pages[kind])
+        for i in range(len(free) - count + 1):
+            if free[i + count - 1] - free[i] == count - 1:
+                take = free[i: i + count]
+                for page in take:
+                    self.free_pages[kind].remove(page)
+                return take
+        return None
 
     def free(self, rows: dict) -> None:
         for k, r in rows.items():
@@ -182,8 +195,9 @@ class ArenaRows:
 class KV:
     """Keys and values of a prefix as segments `[(tensor, start, end)]`, oldest first.
 
-    A plain tensor is one segment; a node that shares its trunk with a sibling holds two, the trunk's rows and its
-    own. Readers copy each segment to where it belongs (`rows()`), so nothing needs the whole prefix contiguous.
+    A plain tensor is one segment; an entry that shares its trunk with a sibling holds several, the shared blocks and
+    its own. Readers copy the segments where they belong (`runs()` merges adjacent ones into a page), so nothing needs
+    the whole prefix contiguous and a resume does not do one copy per saved block.
     """
 
     __slots__ = ("parts",)
@@ -192,7 +206,7 @@ class KV:
         self.parts = list(parts)
 
     @classmethod
-    def wrap(cls, x) -> KV:
+    def wrap(cls, x) -> "KV":
         """A plain tensor as one segment; an object that only reports its size (a test's stand-in) has no rows."""
         if isinstance(x, cls):
             return x
@@ -200,6 +214,32 @@ class KV:
 
     def rows(self):
         return self.parts
+
+    def runs(self):
+        """The parts with adjacent ones merged where both the source rows and the saved positions are contiguous.
+
+        The arena hands a shared prefix's blocks out in pages, so this turns one copy per 64-token block into one per
+        page. Merged runs are slices of a view over the whole storage, so a run is exactly as long as its positions.
+        """
+        import torch
+
+        parts = self.parts
+        if len(parts) < 2:
+            return parts
+        first = parts[0][0]
+        row = first.stride(0) * first.element_size()
+        n = first.untyped_storage().size() // max(1, row)
+        base = torch.as_strided(first, (n,) + tuple(first.shape[1:]), first.stride(), 0)
+        out = []
+        for t, lo, hi in parts:
+            off = (t.data_ptr() - base.data_ptr()) // max(1, row)
+            if out:
+                plo, phi, poff = out[-1]
+                if lo == phi and poff + (phi - plo) == off:
+                    out[-1] = (plo, phi + (hi - lo), poff)
+                    continue
+            out.append((lo, hi, off))
+        return [(base[off: off + (hi - lo)], lo, hi) for lo, hi, off in out]
 
     @property
     def nbytes(self) -> int:

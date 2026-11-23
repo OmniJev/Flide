@@ -6,6 +6,7 @@ import hashlib
 from collections import OrderedDict
 
 BLOCK = 64
+NODE = 256     # tokens per stored node: bigger nodes mean fewer, larger copies on a resume
 
 
 def key_of(parent: bytes, tokens) -> bytes:
@@ -282,7 +283,7 @@ class Store:
             cursor, leaf = shared, parent
             if cursor < len(tokens):
                 while cursor < len(tokens):
-                    end = min(cursor + BLOCK, len(tokens))
+                    end = min(cursor + NODE, len(tokens))
                     block = tokens[cursor:end]
                     key = self._node_key(leaf, block, staged_by_key)
                     existing = staged_by_key.get(key) or self.nodes.get(key)
