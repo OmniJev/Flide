@@ -164,6 +164,49 @@ class ArenaRows:
             self.rows, self.dev = {}, {}
 
 
+class KV:
+    """Keys and values of a prefix as segments `[(tensor, start, end)]`, oldest first.
+
+    A plain tensor is one segment; a node that shares its trunk with a sibling holds two, the trunk's rows and its
+    own. Readers copy each segment to where it belongs (`rows()`), so nothing needs the whole prefix contiguous.
+    """
+
+    __slots__ = ("parts",)
+
+    def __init__(self, parts):
+        self.parts = list(parts)
+
+    @classmethod
+    def wrap(cls, x) -> "KV":
+        """A plain tensor as one segment; an object that only reports its size (a test's stand-in) has no rows."""
+        if isinstance(x, cls):
+            return x
+        return cls([(x, 0, x.shape[0] if getattr(x, "shape", None) else 0)])
+
+    def rows(self):
+        return self.parts
+
+    @property
+    def nbytes(self) -> int:
+        return sum(t.numel() * t.element_size() for t, _, _ in self.parts)
+
+    def __getitem__(self, item):
+        """`[:p]` for callers that only need a prefix: a segment cut at `p`."""
+        lo, hi = (0, len(self)) if isinstance(item, slice) else (item, item + 1)
+        hi = len(self) if hi is None else min(hi, len(self))
+        out = []
+        for t, a, b in self.parts:
+            if b <= lo:
+                continue
+            out.append((t, max(a, lo) - a, min(b, hi) - a))
+            if b >= hi:
+                break
+        return KV(out)
+
+    def __len__(self) -> int:
+        return self.parts[-1][2] if self.parts else 0
+
+
 class Entry:
     """A prefix and the backbone state at some of its positions: states[pos] holds what the backbone needs to
     continue from pos (for qwen3_5: "S" and "conv" per linear-attention layer); kv[layer] the full-attention keys
@@ -172,8 +215,8 @@ class Entry:
     def __init__(self, tokens, states: dict, kv: dict):
         self.tokens = list(tokens)
         self.states = states
-        self.kv = kv
-        self.bytes = _bytes(states) + _bytes(kv)
+        self.kv = {layer: (KV.wrap(k), KV.wrap(v)) for layer, (k, v) in kv.items()}
+        self.bytes = _bytes(states) + sum(pair[0].nbytes + pair[1].nbytes for pair in self.kv.values())
 
 
 class _Hashes:
