@@ -29,12 +29,13 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-23** Flide 0.1.20 新增 Gemma 4 的 agent 会话。
 - 🔥 **2026-11-22** Flide 0.1.19 新增 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) 和 [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)，[d1-2B](https://huggingface.co/LiquidAI/d1-2B) 能读图片了，并提供 [Docker 镜像](https://hub.docker.com/r/omnijev/flide)。
 - 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，并加了可选的 session cache。
-- 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行更省显存。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行更省显存。
 - 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
 - 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
 - 🔥 **2026-11-12** Flide 0.1.14 新增 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) 和 [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)，GLiDE-27B 还能读图片。

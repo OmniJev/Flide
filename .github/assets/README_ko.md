@@ -29,12 +29,13 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-23** Flide 0.1.20에 Gemma 4 에이전트 세션을 추가했습니다.
 - 🔥 **2026-11-22** Flide 0.1.19에 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1), [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)를 추가하고, [d1-2B](https://huggingface.co/LiquidAI/d1-2B)가 이미지를 읽을 수 있게 되었으며, [Docker 이미지](https://hub.docker.com/r/omnijev/flide)도 제공합니다.
 - 🔥 **2026-11-21** Flide 0.1.18에 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2), [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)를 추가하고, 선택적인 session cache를 넣었습니다.
-- 🔥 **2026-11-20** Flide 0.1.17에 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)를 추가하고, 텐서 병렬의 GPU 메모리 사용량을 줄였습니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-20** Flide 0.1.17에 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)를 추가하고, 텐서 병렬의 GPU 메모리 사용량을 줄였습니다.
 - 🔥 **2026-11-13** Flide 0.1.16에 [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039), [this-that](https://huggingface.co/flock-io/this-that-model-1.0)를 포함한 세 의사결정 모델 계열과, LiquidAI의 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)를 추가했습니다.
 - 🔥 **2026-11-12** Flide 0.1.15에 LiquidAI의 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)를 추가하고, Gemma 4도 `--quantize fp8`로 FP8로 실행되어 Gemma 4 12B가 24 GB 카드 한 장에 들어갑니다.
 - 🔥 **2026-11-12** Flide 0.1.14에 [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B), [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B)를 추가하고, GLiDE-27B는 이미지도 읽습니다.

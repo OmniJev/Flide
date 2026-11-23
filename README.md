@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-23** We added Gemma 4 agent sessions in Flide 0.1.20.
 - 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
 - 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
-- 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
 - 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
 - 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
 - 🔥 **2026-11-12** We added [GLiDE-9B](https://huggingface.co/fastino/GLiDE-9B) and [GLiDE-27B](https://huggingface.co/fastino/GLiDE-27B) in Flide 0.1.14, and GLiDE-27B also reads images.
