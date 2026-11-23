@@ -374,7 +374,8 @@ def add_parser(sub) -> None:
     p.add_argument("--session-cache-gb", type=_cache_size, default=0.0,
                    help="GPU memory for saved prefix states; a row that extends an earlier one resumes from it "
                         "(a block is scheduled whole, so --stream-block decides how often that can happen)")
-    p.add_argument("--session-min-tokens", type=int, default=2048, help="shortest prefix the session cache saves")
+    p.add_argument("--session-min-tokens", type=int, default=None,
+                   help="shortest prefix the session cache saves (default: by model size, 2048 to 256)")
     p.add_argument("--workers", type=int, default=None,
                    help="processes that render and tokenize (default: usable CPUs less two, within free memory)")
     p.add_argument("--dtype", default="bfloat16")
