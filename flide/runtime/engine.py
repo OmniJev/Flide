@@ -574,14 +574,16 @@ class Engine:
                 and len(plan.prefix) >= self.sessions.min_tokens and self._session_ok(plan)):
             # long text prefixes resume from and save session states
             entry, start = self.sessions.match(plan.prefix)
-            mark = self.sessions.mark(len(plan.prefix), start)
+            marks = self.sessions.marks(len(plan.prefix), start)
+            mark = marks[-1] if marks else None
+            mark2 = marks[0] if len(marks) > 1 else None
             out = None
             if hasattr(graphs, "run_sflat"):
                 out = graphs.run_sflat([(plan.prefix, plan.suffixes, entry, start, mark)])
                 if out is not None:
                     out = (out[0], out[1][0])   # a list of (position, snapshot), the earlier mark first
             if out is None:
-                out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark)
+                out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark, mark2)
             if out is None:
                 return None
             hidden, snaps = out
