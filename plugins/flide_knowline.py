@@ -445,9 +445,13 @@ class KnowLine(Format):
     _vision = NextToken._vision
 
     def __init__(self, model_dir: str, tokenizer=None, read_twice: bool = True, twice_max_tokens: int = 3000,
-                 temperature: float = 1.0, header_when_long: int | None = None, temperatures: str | dict | None = None):
+                 temperature: float = 1.0, header_when_long: int | None = None, temperatures: str | dict | None = None,
+                 max_questions: int = MAX_QUESTIONS):
         import transformers
 
+        self.max_questions = int(max_questions)
+        if self.max_questions < 1:
+            raise ValueError("max_questions must be positive")
         self.model_dir = model_dir
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
         self.read_twice = bool(read_twice)
@@ -562,8 +566,8 @@ class KnowLine(Format):
         return state
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
-        if not 1 <= len(request.questions) <= MAX_QUESTIONS:
-            raise ValueError(f"{len(request.questions)} questions, limit is {MAX_QUESTIONS}")
+        if not 1 <= len(request.questions) <= self.max_questions:
+            raise ValueError(f"{len(request.questions)} questions, limit is {self.max_questions}")
         state = self._state(request)
         blocks = {qid: question_block(q, self.labels) for qid, q in request.questions.items()}
         prefix, _, ending, media = self._scaffold(state, False)
