@@ -12,7 +12,7 @@ from flide.formats.template import Template
 
 
 class StubTokenizer:
-    all_special_tokens = ["<END>"]
+    all_special_tokens = ["<S>", "<END>", "<PAD>", "<END>"]
 
     def __init__(self):
         self.calls = []
@@ -36,6 +36,7 @@ def main():
     tokenizer = StubTokenizer()
     family = Template(".", tokenizer, spec={**spec, "attention": "blocks", "shared_prefix": "{{ state.document }}",
                                              "round_noul": False, "count_output_tokens": False})
+    assert family.prompt.globals["special_tokens"] == ("<END>", "<PAD>", "<S>")
     plan = family.plan(request)
     assert tokenizer.calls == [["shared", "relevant<END>", "complete<END>"]]
     assert plan.attention == "blocks" and plan.reads == (Read("labels"),)

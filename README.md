@@ -138,6 +138,9 @@ The last three columns say how much faster Flide answers one request than the en
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
 
+The Qwen2.5 and Qwen3 backbones support full-attention text checkpoints with length-independent RoPE, including
+YaRN. The RoPE frequencies must span each attention head. Dynamic NTK and LongRoPE are rejected at load time.
+
 ### H100 text latency
 
 Flide and vLLM 0.28.0 ran the same BF16 checkpoints on one NVIDIA H100 80 GB with CUDA graphs enabled and

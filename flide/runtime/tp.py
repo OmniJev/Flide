@@ -20,6 +20,8 @@ import traceback
 
 import torch
 
+from .. import settings
+
 log = logging.getLogger("flide.tp")
 
 MIRRORED_GRAPH_CALLS = {"run", "run_flat", "run_sflat", "run_media", "run_session", "capture", "capture_all",
@@ -153,12 +155,13 @@ def _init(rank: int, size: int, port: int, device: torch.device) -> None:
                             device_id=device)
 
 
-def _worker(rank, size, port, model_type, model_dir, device, dtype, options, conn):
+def _worker(rank, size, port, model_type, model_dir, device, dtype, options, batch_invariant, conn):
     from .. import backbones
     from ..kernels import launcher
     from .kcache import seed, tune
     from .pack import pack
 
+    settings.batch_invariant = batch_invariant
     logging.basicConfig(level=logging.INFO, format=f"%(asctime)s tp{rank} %(name)s %(message)s")
     launcher.install()
     seed()
@@ -206,7 +209,7 @@ def launch(model_type: str, model_dir: str, device: str, dtype: str, size: int, 
     for r in range(1, size):
         a, b = ctx.Pipe()
         p = ctx.Process(target=_worker, args=(r, size, port, model_type, model_dir, f"cuda:{first + r}", dtype, options,
-                                             b), daemon=True)
+                                             settings.batch_invariant, b), daemon=True)
         p.start()
         conns.append(a)
         procs.append(p)

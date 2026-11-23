@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import torch
 from torch.nn import functional as F
@@ -143,6 +144,10 @@ class Qwen2(Backbone):
             raise NotImplementedError(f"{name}: quantized checkpoints are not supported")
         if getattr(config, "dual_chunk_attention_config", None) is not None:
             raise NotImplementedError(f"{name}: dual-chunk attention is not supported")
+        rope_type = config.rope_parameters["rope_type"]
+        # Packed requests share one frequency table, so it must be independent of sequence length.
+        if "dynamic" in rope_type or rope_type == "longrope":
+            raise NotImplementedError(f"{name}: length-dependent RoPE ({rope_type}) is not supported")
         layers = getattr(config, "layer_types", None)
         full_attention = config.sliding_window is None if layers is None else set(layers) == {"full_attention"}
         if not full_attention or config.hidden_act != "silu":
@@ -166,12 +171,18 @@ class Qwen2(Backbone):
             try:
                 model = build(arch, config, device, dtype)
                 load_into(model, model_dir, device, merge=merge_lora)
-            except (ValueError, FileNotFoundError) as exc:
+            except FileNotFoundError as exc:
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
                 model = None
         if model is None:
-            model = arch.from_pretrained(model_dir, config=config, dtype=dtype, device_map={"": str(device)},
-                                         local_files_only=True).eval()
+            if (Path(model_dir) / lora.SUB / lora.CONFIG).is_file():
+                raise ValueError(f"{model_dir}: loading a LoRA adapter requires the direct safetensors loader")
+            model, info = arch.from_pretrained(model_dir, config=config, dtype=dtype, device_map={"": str(device)},
+                                               local_files_only=True, output_loading_info=True)
+            missing = info["missing_keys"]
+            if missing:
+                raise ValueError(f"{model_dir}: missing checkpoint weights, e.g. {sorted(missing)[:5]}")
+            model.eval()
         return cls(model, cuda_graphs=cuda_graphs)
 
     def __init__(self, model, cuda_graphs: bool = False, tensor_parallel: bool = False):
@@ -188,6 +199,8 @@ class Qwen2(Backbone):
         self._graphs = None
         first = self.lm.layers[0].self_attn
         self.head_dim = first.head_dim
+        if 2 * self.lm.rotary_emb.inv_freq.numel() != self.head_dim:
+            raise NotImplementedError(f"{self.config.model_type}: RoPE frequencies must cover the full attention head")
         self.qkv_widths = first.q_proj.out_features, first.k_proj.out_features, first.v_proj.out_features
         self.attn_cfg = attention.config(self.device, self.dtype, self.head_dim)
         if torch.cuda.get_device_capability(self.device) == (8, 0) and self.dtype != torch.float32 and self.head_dim <= 128:

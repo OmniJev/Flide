@@ -47,7 +47,7 @@ a directory of another name) is served with --format template --format-arg spec=
 
 Template variables: state, state_text, question (key, type, instructions, criteria, given: the fields the request
 wrote), options (label, key, description, index) in the prompt's order, questions (every question of the request, in
-its order, as question is), special_tokens (the tokenizer's special tokens, longest first). Filters: describe (a string
+its order, as question is), special_tokens (longest first, ties in tokenizer order). Filters: describe (a string
 as it is, anything else JSON), text (the same with compact separators) and json (indent, compact); test:
 matching(pattern); functions: refuse(message), which turns the request down, boundary(), where the text before and
 after is tokenized apart, and labels_for(type, n), the labels a question of that type and n options reads. The answer
@@ -183,8 +183,8 @@ class Template(Format):
         env.filters["text"] = _text
         env.globals["refuse"] = _refuse
         env.globals["labels_for"] = lambda kind, n: self._labels(kind, n)
-        env.globals["special_tokens"] = tuple(sorted(set(getattr(self.tokenizer, "all_special_tokens", ())),
-                                                    key=len, reverse=True))
+        tokens = dict.fromkeys(getattr(self.tokenizer, "all_special_tokens", ()))
+        env.globals["special_tokens"] = tuple(sorted(tokens, key=len, reverse=True))
         self.boundary = f"\x00{uuid.uuid4().hex}\x00"
         env.globals["boundary"] = lambda: self.boundary
         env.tests["matching"] = lambda s, pattern: isinstance(s, str) and re.search(pattern, s) is not None

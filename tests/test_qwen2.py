@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import TestCase
 
 os.environ.setdefault("TRITON_F32_DEFAULT", "ieee")
 
 import torch
-from transformers import Qwen2Config, Qwen2ForCausalLM
+from safetensors.torch import load_file, save_file
+from transformers import Qwen2Config, Qwen2ForCausalLM, Qwen3Config, Qwen3MoeConfig
 
 from flide import settings
 from flide.backbones import get
@@ -17,6 +20,63 @@ from flide.formats.base import FINAL, Plan, Read
 from flide.runtime.engine import Engine
 from flide.runtime.pack import Job, pack
 from flide.runtime.session import Entry, SessionCache
+
+
+def check_rope_validation():
+    modes = {
+        "dynamic": {"factor": 2.0},
+        "longrope": {"factor": 2.0, "original_max_position_embeddings": 64,
+                     "short_factor": [1.0] * 16, "long_factor": [2.0] * 16},
+    }
+    for config_class in (Qwen2Config, Qwen3Config, Qwen3MoeConfig):
+        for rope_type, options in modes.items():
+            config = config_class(hidden_size=128, num_attention_heads=4, head_dim=32,
+                                  max_position_embeddings=128, rope_parameters={"rope_type": rope_type, **options})
+            with TemporaryDirectory() as path:
+                config.save_pretrained(path)
+                with TestCase().assertRaisesRegex(NotImplementedError, rf"length-dependent RoPE \({rope_type}\)"):
+                    get(config.model_type).load(path)
+
+    config = Qwen3Config(vocab_size=128, hidden_size=128, intermediate_size=256, num_hidden_layers=1,
+                         num_attention_heads=4, num_key_value_heads=2, head_dim=32,
+                         rope_parameters={"rope_type": "linear", "factor": 2.0, "partial_rotary_factor": 0.5})
+    with TemporaryDirectory() as path:
+        config.save_pretrained(path)
+        with TestCase().assertRaisesRegex(NotImplementedError, "RoPE frequencies must cover the full attention head"):
+            get(config.model_type).load(path, loader="none")
+
+
+def check_checkpoint_validation(reference):
+    with TemporaryDirectory() as path:
+        reference.save_pretrained(path)
+        loader = get("qwen2")
+        loaded = loader.load(path, dtype="float32", loader="hf")
+        torch.testing.assert_close(loaded.output_head()[0], reference.lm_head.weight, atol=0, rtol=0)
+
+        shard = Path(path, "model.safetensors")
+        tensors = load_file(shard)
+        missing = "model.layers.0.self_attn.q_proj.weight"
+        weight = tensors.pop(missing)
+        save_file(tensors, shard)
+        for mode in ("direct", "hf"):
+            with TestCase().assertRaisesRegex(ValueError, missing):
+                loader.load(path, dtype="float32", loader=mode)
+
+        # The default loader may fall back for legacy PyTorch checkpoints, which still require every weight.
+        shard.unlink()
+        legacy = Path(path, "pytorch_model.bin")
+        torch.save(tensors, legacy)
+        with TestCase().assertRaisesRegex(ValueError, missing):
+            loader.load(path, dtype="float32")
+        torch.save({**tensors, missing: weight}, legacy)
+        loaded = loader.load(path, dtype="float32")
+        torch.testing.assert_close(loaded.lm.layers[0].self_attn.q_proj.weight, weight.cuda(), atol=0, rtol=0)
+
+        adapter = Path(path, "lora")
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text("{}")
+        with TestCase().assertRaisesRegex(ValueError, "LoRA adapter requires the direct"):
+            loader.load(path, dtype="float32", loader="hf")
 
 
 def check_graphs(backbone, device):
@@ -106,6 +166,7 @@ def main():
     torch.set_float32_matmul_precision("highest")
     torch.manual_seed(23)
     device = torch.device("cuda:0")
+    check_rope_validation()
     check_bfloat16_pointwise(device)
     positions = (-1, 0, -2, -1)
     reads = (Read(None, FINAL, positions), Read(None, 1, positions), Read(None, 0, positions))
@@ -128,6 +189,8 @@ def main():
             reference.save_pretrained(path, max_shard_size="1MB")
             backbone = get("qwen2").load(path, dtype="float32")
         reference.to(device)
+        if tied:
+            check_checkpoint_validation(reference)
         weight, bias = backbone.output_head()
         assert bias is None
         assert (weight.data_ptr() == backbone.lm.embed_tokens.weight.data_ptr()) == tied
@@ -166,7 +229,7 @@ def main():
     finally:
         settings.batch_invariant = previous
     check_graphs(backbone, device)
-    print("PASS native Qwen2 loading, packed reads, CUDA graphs, and cached KV")
+    print("PASS native Qwen2 loading, checkpoint validation, packed reads, CUDA graphs, and cached KV")
 
 
 if __name__ == "__main__":
