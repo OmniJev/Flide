@@ -34,6 +34,59 @@ log = logging.getLogger("flide.server")
 MAX_BATCH = 1024   # requests in one {"requests": [...]} body, as Nace's drex serve.py takes them
 
 
+class _Overloaded(Exception):
+    pass
+
+
+def _overloaded() -> JSONResponse:
+    return JSONResponse(status_code=429, content={"detail": "request queue is full"})
+
+
+async def _until_disconnect(request: Request, work):
+    """Race inference against the ASGI disconnect after the request body has been read."""
+    async def disconnect():
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    worker = asyncio.create_task(work)
+    listener = asyncio.create_task(disconnect())
+    try:
+        done, _ = await asyncio.wait((worker, listener), return_when=asyncio.FIRST_COMPLETED)
+        if worker in done:
+            return worker.result()
+        listener.result()
+        return None
+    finally:
+        for task in (worker, listener):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(worker, listener, return_exceptions=True)
+
+
+async def _stage(future: cf.Future | asyncio.Future, cancel=None, discard=None):
+    """Cancel pending work, or drain a stage that has already started before releasing its slot."""
+    pending = asyncio.wrap_future(future)
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        if cancel is None:
+            future.cancel()
+        else:
+            cancel(future)
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not pending.cancelled() and pending.exception() is None:
+            result = pending.result()
+            if discard is not None and result is not None:
+                discard(result)
+        raise
+
+
 def _validation_error(exc: ValidationError, loc: tuple = ("body",)) -> JSONResponse:
     detail = [{"loc": [*loc, *[str(x) for x in e["loc"]]], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
     return JSONResponse(status_code=422, content={"detail": detail})
@@ -81,7 +134,7 @@ def _query_options(params, debias: int) -> dict:
 
 
 def create_app(engine, model_name: str, description: str = "", release_date: str = "", batcher=None,
-               ready=None, api_key: str | None = None, with_meta: bool | None = None) -> FastAPI:
+               ready=None, api_key: str | None = None, with_meta: bool | None = None, admission=None) -> FastAPI:
     """`ready`, when given, is asked by /health (503 "loading" until it says yes): front ends start before the model
     has loaded. `api_key`: every route but /health takes `Authorization: Bearer <key>` (auth.py). `with_meta` False:
     answers leave out the family's metadata and timings. Both default to the environment (FLIDE_API_KEY,
@@ -106,18 +159,21 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
 
     async def answer(req, **options):
         if batcher is None:
-            return await asyncio.to_thread(decide, req, **options)
+            # Cancelling to_thread does not stop its thread; keep the slot until it returns.
+            work = asyncio.create_task(asyncio.to_thread(decide, req, **options))
+            return await _stage(work, cancel=lambda future: None)
         t0 = time.perf_counter()
-        plan = await asyncio.wrap_future(batcher.plan(req, **options))
+        plan = await _stage(batcher.plan(req, **options), discard=batcher.discard_plan)
         t1 = time.perf_counter()
-        branches, info = await asyncio.wrap_future(batcher.forward(plan))
+        branches, info = await _stage(batcher.forward(plan), cancel=batcher.cancel_forward)
         queue_s, forward_s = info["queue_s"], info["forward_s"]
-        while (nxt := await asyncio.wrap_future(batcher.follow_up(req, plan, branches, **options))) is not None:
+        while (nxt := await _stage(batcher.follow_up(req, plan, branches, **options),
+                                  discard=batcher.discard_plan)) is not None:
             plan = nxt
-            branches, info = await asyncio.wrap_future(batcher.forward(plan))
+            branches, info = await _stage(batcher.forward(plan), cancel=batcher.cancel_forward)
             queue_s, forward_s = queue_s + info["queue_s"], forward_s + info["forward_s"]
         t2 = time.perf_counter()
-        response, meta = await asyncio.wrap_future(batcher.finish(req, plan, branches, **options))
+        response, meta = await _stage(batcher.finish(req, plan, branches, **options))
         meta["timing"] = {"plan_s": t1 - t0, "queue_s": queue_s, "forward_s": forward_s,
                           "gpu_wait_s": t2 - t1, "total_s": time.perf_counter() - t0}
         meta["path"] = info["path"]
@@ -125,6 +181,26 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         if "replica" in info:
             meta["replica"] = info["replica"]
         return response, meta
+
+    async def answer_many(reqs, options):
+        if admission is None:
+            return await asyncio.gather(*(answer(req, **options) for req in reqs), return_exceptions=True)
+        tickets = admission.reserve(len(reqs))
+
+        async def answer_reserved(req, ticket):
+            try:
+                if not await asyncio.shield(asyncio.wrap_future(ticket)):
+                    raise _Overloaded
+                return await answer(req, **options)
+            finally:
+                admission.release(ticket)
+
+        try:
+            return await asyncio.gather(*(answer_reserved(req, ticket) for req, ticket in zip(reqs, tickets)),
+                                        return_exceptions=True)
+        finally:
+            for ticket in tickets:
+                admission.release(ticket)
 
     def served(requested) -> bool:
         return isinstance(requested, str) and (requested in aliases or requested == model_name)
@@ -173,8 +249,12 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
             except ValueError as exc:
                 return _value_error(loc, str(exc))
             reqs.append(req)
-        outs = await asyncio.gather(*(answer(r, **options) for r in reqs), return_exceptions=True)
+        outs = await _until_disconnect(request, answer_many(reqs, options))
+        if outs is None:
+            return JSONResponse(status_code=499, content={"detail": "client disconnected"})
         for i, out in enumerate(outs):
+            if isinstance(out, _Overloaded):
+                return _overloaded()
             if isinstance(out, ValueError):
                 return _value_error(["body", "requests", i], str(out))
             if isinstance(out, ImportError):
@@ -211,6 +291,8 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
 
     @app.post("/v1/systemone")
     async def systemone(request: Request):
+        if admission is not None and ready is not None and not ready():
+            return JSONResponse(status_code=503, content={"detail": "model is loading"})
         try:
             body = await request.json()
         except Exception:
@@ -233,7 +315,14 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
                                 content={"detail": [{"loc": ["query"], "msg": str(exc), "type": "value_error"}]})
         try:
             check_limits(family, req)
-            response, info = await answer(req, **options)
+            outs = await _until_disconnect(request, answer_many([req], options))
+            if outs is None:
+                return JSONResponse(status_code=499, content={"detail": "client disconnected"})
+            if isinstance(outs[0], BaseException):
+                raise outs[0]
+            response, info = outs[0]
+        except _Overloaded:
+            return _overloaded()
         except ValueError as exc:
             return JSONResponse(status_code=422,
                                 content={"detail": [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]})
@@ -262,6 +351,8 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         if isinstance(payload, cf.Future):
             payload = await asyncio.wrap_future(payload)
         payload = dict(payload)
+        if admission is not None and admission is not batcher:
+            payload.update(admission.stats())
         if "sessions" not in payload:
             sessions = getattr(engine, "sessions", None)
             payload["sessions"] = sessions.stats() if sessions is not None else None

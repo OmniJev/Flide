@@ -4,13 +4,13 @@ not overtaken by short ones that come after it would be done.
 
     python tests/test_online_order.py
 """
-import queue
+import concurrent.futures as cf
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flide.runtime.online import Batcher, _Item  # noqa: E402
+from flide.runtime.online import Batcher, _Item, _Pending  # noqa: E402
 
 
 class Plan:
@@ -32,7 +32,7 @@ def batcher(sessions, rate=0.0, max_tokens=8192):
     b.window, b.gather, b._planning = 0.0, 0.002, 0
     b.max_round_tokens = max_tokens
     b._carry = None
-    b.q = queue.Queue()
+    b.q = _Pending()
     b.ordered = sessions is not None
     b._waiting = []
     b._computed, b._busy, b._last = (int(rate), 1.0, 0.0) if rate else (0, 0.0, 0.0)
@@ -40,14 +40,18 @@ def batcher(sessions, rate=0.0, max_tokens=8192):
 
 
 def put(b, name, t_in, tokens, cost):
-    b.q.put(_Item(Plan(name, tokens, cost), None, t_in=t_in))
+    item = _Item(Plan(name, tokens, cost), cf.Future(), t_in=t_in)
+    b.q.put(item)
+    return item
 
 
 def rounds(b):
     out = []
-    while not b.q.empty() or b._waiting or b._carry is not None:
-        out.append([it.plan.name for it in (b._take_ordered() if b.ordered else b._take())])
-    return out
+    while True:
+        items = b._take_ordered(False) if b.ordered else b._take(False)
+        if not items:
+            return out
+        out.append([it.plan.name for it in items])
 
 
 def main():
@@ -97,6 +101,15 @@ def main():
     put(b, "one1", 0.00, 2000, 2000)
     put(b, "one2", 0.01, 3000, 3000)
     check("similar requests share a round", rounds(b), [["one1", "one2"]])
+
+    # a request cancelled while it waits for its round leaves it (the client went away)
+    b = batcher(object(), rate=10_000)
+    put(b, "long", 0.00, 4000, 4000)
+    gone = put(b, "agent1", 0.10, 3000, 300)
+    put(b, "agent2", 0.12, 3500, 400)
+    b._pull(0)
+    gone.future.cancel()
+    check("a cancelled request leaves the waiting list", rounds(b), [["agent2"], ["long"]])
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     sys.exit(1 if fails else 0)

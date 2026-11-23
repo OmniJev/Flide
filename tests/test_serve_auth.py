@@ -48,16 +48,20 @@ def call(app, method: str, path: str, body=None, headers=()):
     scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http",
              "path": path, "raw_path": path.encode(), "query_string": b"", "root_path": "", "headers": hs,
              "client": ("127.0.0.1", 1), "server": ("127.0.0.1", 8000)}
-    sent, got = [], {"done": False}
+    sent, got, complete = [], {"done": False}, asyncio.Event()
 
     async def receive():
         if got["done"]:
+            # A normal client stays connected while the inference worker runs.
+            await complete.wait()
             return {"type": "http.disconnect"}
         got["done"] = True
         return {"type": "http.request", "body": raw, "more_body": False}
 
     async def send(message):
         sent.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            complete.set()
 
     asyncio.run(app(scope, receive, send))
     start = next(m for m in sent if m["type"] == "http.response.start")
