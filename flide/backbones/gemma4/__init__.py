@@ -113,7 +113,10 @@ class _Ctx:
             c0 = C["start"][j]
             lo = max(0, m - self.window) if module.is_sliding else 0
             rec = b.saved.setdefault(j, {"states": {m: {}}, "kv": {}})
-            rec["kv"][i] = (Kc[c0 + lo: c0 + m].clone(), Vc[c0 + lo: c0 + m].clone())
+            if isinstance(rec["kv"], dict):
+                rec["kv"][i] = (Kc[c0 + lo: c0 + m].clone(), Vc[c0 + lo: c0 + m].clone())
+            else:   # rows of the session store, reserved before the forward (runtime.session.ArenaRows)
+                rec["kv"].write(i, Kc[c0 + lo: c0 + m], Vc[c0 + lo: c0 + m])
         if module.store_full_length_kv:
             self.shared[module.layer_type] = (Kc, Vc)
         return Kc, Vc
@@ -419,6 +422,33 @@ class Gemma4(Backbone):
         return {"full_attention": _Meta(tuple(tok) + (blk,), ranges, None, None, groups),
                 "sliding_attention": _Meta(tok, window_ranges(causal, qpos, self.config.sliding_window or 0), None, None,
                                            groups, tiles=causal)}
+
+    def session_rows(self, mark: int) -> dict:
+        """Rows of the session store a state saved at `mark` takes, per layer kind: a full layer keeps every position
+        before it, a sliding layer the last `sliding_window` (as _Ctx saves them)."""
+        w = int(self.config.sliding_window or 0)
+        return {"full": mark, "sliding": mark - max(0, mark - w)}
+
+    def kv_arena(self, nbytes: int):
+        """The session cache's store (runtime.session.KVArena) in `nbytes`: every layer that keeps keys and values of
+        its own, as a row of its kind, the bytes split so a state saved at twice the window fills both pools alike."""
+        from ...runtime.session import KVArena
+
+        layers = {}
+        for i, layer in enumerate(self.lm.layers):
+            a = layer.self_attn
+            if a.is_kv_shared_layer:
+                continue
+            shape = (self.config.num_attention_heads // a.num_key_value_groups, a.head_dim)
+            layers[i] = ("sliding" if a.is_sliding else "full", shape, shape)
+        elem = torch.empty(0, dtype=self.dtype).element_size()
+        row = {}
+        for kind, ks, vs in layers.values():
+            row[kind] = row.get(kind, 0) + 2 * ks[0] * ks[1] * elem
+        need = self.session_rows(2 * max(1, int(self.config.sliding_window or 0)))
+        size = {k: need[k] * row[k] for k in row}
+        total = sum(size.values())
+        return KVArena(layers, nbytes, self.device, self.dtype, {k: s / total for k, s in size.items()})
 
     def request_graphs(self):
         """CUDA graphs for one request at a time (graphs.py), built on first use; None without CUDA graphs."""
