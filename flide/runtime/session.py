@@ -18,6 +18,13 @@ The cache has two segments. A new entry goes to *probation*, a share of the budg
 takes probation first. A request seen once therefore sits in probation and cannot push out a prefix that keeps
 coming back, while a prefix seen twice hits while still in probation -- unlike admitting only a second sighting,
 which would compute it twice.
+
+An evicted entry leaves its save points behind for a while (ghosts). A request that misses but extends one of them
+is a session the full cache cut off, an agent whose next step came after one-off requests had filled probation, so
+its new entry goes to protected while protected has room, or in place of a protected entry left unused for over
+STALE times as long as the session took to come back (a session that ended). Protected entries that keep coming
+back are never displaced that way, so a cache too small for every session keeps most of them instead of cycling
+through all of them.
 """
 from __future__ import annotations
 
@@ -27,9 +34,13 @@ from collections import OrderedDict
 
 BLOCK = 64
 PROTECTED = 0.75   # of the budget that entries a request has hit may hold; the rest is probation
+GHOSTS = 4096      # save points of evicted entries remembered
+STALE = 2          # a protected entry gives way to a returning session left unused this many times its return time
 
 
 def _bytes(x) -> int:
+    if hasattr(x, "arena_bytes"):
+        return x.arena_bytes
     if isinstance(x, dict):
         return sum(_bytes(v) for v in x.values())
     if isinstance(x, (list, tuple)):
@@ -70,6 +81,89 @@ def auto_bytes(free: int, total: int, reserved: int, allocated: int, peak: int, 
     return room if room >= 2 ** 29 else 0
 
 
+PAGE = 64   # rows a KVArena hands out at a time
+
+
+class KVArena:
+    """Saved keys and values of a backbone whose state is its attention keys alone (gemma4), in one block of device
+    memory the session cache holds whole. Per layer kind ("full", "sliding") a pool of rows, one row holding one
+    position's keys and values in every layer of that kind, handed out in pages of PAGE rows. An entry keeps row
+    indices, so the CUDA graphs read and write saved positions in place, and nothing is allocated per request. One more
+    page per pool takes the writes of padding."""
+
+    def __init__(self, layers: dict, nbytes: int, device, dtype, shares: dict):
+        """`layers`: layer index -> (kind, key row shape, value row shape); `shares`: kind -> fraction of `nbytes`."""
+        import math
+
+        import torch
+
+        self.device = torch.device(device)
+        self.kind = {i: k for i, (k, _, _) in layers.items()}
+        elem = torch.empty(0, dtype=dtype).element_size()
+        self.row_bytes: dict[str, int] = {}
+        for k, ks, vs in layers.values():
+            self.row_bytes[k] = self.row_bytes.get(k, 0) + (math.prod(ks) + math.prod(vs)) * elem
+        self.pages = {k: max(0, int(nbytes * shares.get(k, 0.0)) // (b * PAGE)) for k, b in self.row_bytes.items()}
+        self.K, self.V = {}, {}
+        for i, (k, ks, vs) in layers.items():
+            n = (self.pages[k] + 1) * PAGE
+            self.K[i] = torch.zeros((n,) + tuple(ks), device=self.device, dtype=dtype)
+            self.V[i] = torch.zeros((n,) + tuple(vs), device=self.device, dtype=dtype)
+        self.free_pages = {k: list(range(n - 1, -1, -1)) for k, n in self.pages.items()}
+        self.capacity = sum(n * PAGE * self.row_bytes[k] for k, n in self.pages.items())
+
+    def dump(self, kind: str) -> int:
+        """The first row of the pool's padding page."""
+        return self.pages[kind] * PAGE
+
+    def alloc(self, need: dict):
+        """Rows for `need` (kind -> count) in position order, or None when a pool has too few free pages."""
+        import numpy as np
+
+        want = {k: -(-n // PAGE) for k, n in need.items()}
+        if any(len(self.free_pages[k]) < p for k, p in want.items()):
+            return None
+        out = {}
+        for k, n in need.items():
+            pages = np.array([self.free_pages[k].pop() for _ in range(want[k])], np.int64)
+            out[k] = (pages[:, None] * PAGE + np.arange(PAGE)).reshape(-1)[:n]
+        return out
+
+    def free(self, rows: dict) -> None:
+        for k, r in rows.items():
+            self.free_pages[k].extend(sorted(set((r // PAGE).tolist()), reverse=True))
+
+
+class ArenaRows:
+    """The rows of a KVArena an entry holds: per kind, row indices in the order of the positions they keep (a full
+    layer's from position 0 to the save point, a sliding layer's the last `window` before it). Indexing by layer gives
+    that layer's (K, V), as an entry's `kv` dict does."""
+
+    def __init__(self, arena: KVArena, rows: dict):
+        import torch
+
+        self.arena = arena
+        self.rows = rows
+        self.dev = {k: torch.from_numpy(r).to(arena.device) for k, r in rows.items()}
+        self.arena_bytes = sum(len(r) * arena.row_bytes[k] for k, r in rows.items())
+
+    def __getitem__(self, layer: int):
+        a = self.arena
+        idx = self.dev[a.kind[layer]]
+        return a.K[layer].index_select(0, idx), a.V[layer].index_select(0, idx)
+
+    def write(self, layer: int, K, V) -> None:
+        a = self.arena
+        idx = self.dev[a.kind[layer]]
+        a.K[layer].index_copy_(0, idx, K)
+        a.V[layer].index_copy_(0, idx, V)
+
+    def free(self) -> None:
+        if self.rows:
+            self.arena.free(self.rows)
+            self.rows, self.dev = {}, {}
+
+
 class Entry:
     """A prefix and the backbone state at some of its positions: states[pos] holds what the backbone needs to
     continue from pos (for qwen3_5: "S" and "conv" per linear-attention layer); kv[layer] the full-attention keys
@@ -98,6 +192,14 @@ class _Hashes:
         return pos, hash((self.blocks[k], tuple(self.tokens[k * BLOCK: pos])))
 
 
+
+def _free(entry) -> None:
+    """Give an entry's rows back to its store (entries that hold their own tensors have nothing to give)."""
+    free = getattr(entry.kv, "free", None)
+    if free is not None:
+        free()
+
+
 class SessionCache:
     def __init__(self, budget_bytes: int, min_tokens: int = 2048, stride: int = 256, margin: int = 32):
         self.budget = budget_bytes
@@ -113,6 +215,33 @@ class SessionCache:
         self.evictions = self.replaced = 0
         self.probation: set[int] = set()   # entries no request has hit yet
         self.pbytes = 0                    # bytes the probation entries hold
+        self.store = None                  # a KVArena the entries keep their keys and values in (`attach`)
+        self.pinned: set[int] = set()      # ids of entries a forward being set up reads: `reserve` leaves them
+        self.clock = 0                     # lookups so far
+        self.seen: dict[int, int] = {}     # entry id -> the lookup that last used it
+        self.ghosts: OrderedDict[tuple, int] = OrderedDict()   # save point of an evicted entry -> when it was used
+        self.gpos: dict[int, int] = {}     # positions of the ghosts, with counts
+        self.returning = 0                 # misses that extended a ghost
+
+    def attach(self, store) -> None:
+        """Keep the saved keys and values in `store` (a KVArena): the budget becomes its capacity, and a save
+        reserves its rows before the forward that writes them."""
+        self.store = store
+        self.budget = store.capacity
+
+    def reserve(self, need: dict, keep=()):
+        """Rows of the store for a state about to be saved (kind -> count), as ArenaRows, evicting what it needs room
+        from (probation first, least recently used first) but no entry in `keep` or `pinned`; None when it does not
+        fit even then."""
+        skip = self.pinned | {id(e) for e in keep if e is not None}
+        while True:
+            rows = self.store.alloc(need)
+            if rows is not None:
+                return ArenaRows(self.store, rows)
+            eid = self._victim(skip=skip)
+            if eid is None:
+                return None
+            self._evict(eid)
 
     @property
     def hbudget(self) -> int:
@@ -148,22 +277,30 @@ class SessionCache:
     def match(self, tokens) -> tuple[Entry | None, int]:
         """The entry and position to resume `tokens` (a prefix) from: the furthest saved position, at most one
         token before the end, whose tokens all match."""
-        if len(tokens) < self.min_tokens or not self.entries:
+        self.clock += 1
+        eid, pos = self._find(tokens)
+        if eid is None:
             self.misses += 1
+            return None, 0
+        self.entries.move_to_end(eid)
+        self.seen[eid] = self.clock
+        self._promote(eid)
+        self.hits += 1
+        self.saved_tokens += pos
+        return self.entries[eid], pos
+
+    def peek(self, tokens) -> int:
+        """The position `match` would resume `tokens` from (0 for none), without counting a lookup or using an entry."""
+        return self._find(tokens)[1]
+
+    def _find(self, tokens) -> tuple[int | None, int]:
+        if len(tokens) < self.min_tokens or not self.entries:
             return None, 0
         hashes = _Hashes(tokens)
         for pos in sorted((p for p in self.positions if p < len(tokens)), reverse=True):
             eid = self.index.get(hashes.key(pos))
-            if eid is None:
-                continue
-            entry = self.entries[eid]
-            if entry.tokens[:pos] == tokens[:pos]:
-                self.entries.move_to_end(eid)
-                self._promote(eid)
-                self.hits += 1
-                self.saved_tokens += pos
-                return entry, pos
-        self.misses += 1
+            if eid is not None and self.entries[eid].tokens[:pos] == tokens[:pos]:
+                return eid, pos
         return None, 0
 
     def insert(self, entry: Entry, parent: Entry | None = None) -> None:
@@ -171,10 +308,11 @@ class SessionCache:
         that saved it resumed from, goes first when `entry` covers its tokens.
 
         A new entry enters probation unless the request resumed from a cached entry: that prefix has already been
-        reused once, so it goes to protected and one-off requests cannot push it out. Protected is capped at
-        `PROTECTED` of the budget, and the least recently used of it falls back to probation when it is over.
-        Eviction takes probation first."""
+        reused once, so it goes to protected and one-off requests cannot push it out. A new entry that extends a
+        ghost goes to protected too when `_admit` says so. Protected is capped at `PROTECTED` of the budget, and the
+        least recently used of it falls back to probation when it is over. Eviction takes probation first."""
         if entry.bytes > self.budget or not entry.states:
+            _free(entry)
             return
         if parent is not None and len(parent.tokens) <= len(entry.tokens) \
                 and entry.tokens[:len(parent.tokens)] == parent.tokens:
@@ -182,14 +320,17 @@ class SessionCache:
             if eid is not None:
                 self._remove(eid)
                 self.replaced += 1
+        back = self._came_back(entry.tokens) if parent is None else None
         while self.used + entry.bytes > self.budget and self.entries:
-            self._remove(self._victim())
-            self.evictions += 1
+            self._evict(self._victim())
         eid = self._next
         self._next += 1
         self.entries[eid] = entry
         self.used += entry.bytes
-        if parent is None:
+        self.seen[eid] = self.clock
+        if back is not None:
+            self.returning += 1
+        if parent is None and (back is None or not self._admit(eid, self.clock - back)):
             self.probation.add(eid)
             self.pbytes += entry.bytes
         else:
@@ -198,6 +339,53 @@ class SessionCache:
         for pos in entry.states:
             self.index[hashes.key(pos)] = eid
             self.positions[pos] = self.positions.get(pos, 0) + 1
+
+    def _admit(self, eid: int, interval: int) -> bool:
+        """Whether entry `eid`, of a session that came back after `interval` lookups, goes to protected: when it fits
+        protected's share, or when the least recently used protected entry has gone unused for over STALE times
+        that long."""
+        if self.used - self.pbytes <= self.hbudget:
+            return True
+        oldest = next((k for k in self.entries if k not in self.probation and k != eid), None)
+        return oldest is not None and self.clock - self.seen.get(oldest, 0) > STALE * max(1, interval)
+
+    def _evict(self, eid: int) -> None:
+        """Remove an entry the budget needs room from, its save points kept as ghosts."""
+        entry = self.entries[eid]
+        hashes = _Hashes(entry.tokens)
+        when = self.seen.get(eid, self.clock)
+        for pos in entry.states:
+            key = hashes.key(pos)
+            if key not in self.ghosts:
+                self.gpos[pos] = self.gpos.get(pos, 0) + 1
+            self.ghosts[key] = when
+            self.ghosts.move_to_end(key)
+        while len(self.ghosts) > GHOSTS:
+            key, _ = self.ghosts.popitem(last=False)
+            self._forget(key[0])
+        self._remove(eid)
+        self.evictions += 1
+
+    def _came_back(self, tokens) -> int | None:
+        """When an evicted entry whose save point `tokens` extends was last used (the latest of several), its ghosts
+        dropped; None when there is none."""
+        if not self.ghosts:
+            return None
+        hashes = _Hashes(tokens)
+        back = None
+        for pos in [p for p in self.gpos if p <= len(tokens)]:
+            when = self.ghosts.pop(hashes.key(pos), None)
+            if when is not None:
+                self._forget(pos)
+                back = when if back is None else max(back, when)
+        return back
+
+    def _forget(self, pos: int) -> None:
+        n = self.gpos.get(pos, 0) - 1
+        if n > 0:
+            self.gpos[pos] = n
+        else:
+            self.gpos.pop(pos, None)
 
     def _demote_over_share(self, keep: int | None = None) -> None:
         """While protected holds more than its share of the budget, its least recently used entry falls back to
@@ -209,14 +397,15 @@ class SessionCache:
             self.probation.add(oldest)
             self.pbytes += self.entries[oldest].bytes
 
-    def _victim(self, probation_only: bool = False) -> int:
-        """The entry to evict: the least recently used one in probation, else the least recently used overall."""
-        for eid in self.entries:
-            if eid in self.probation:
+    def _victim(self, probation_only: bool = False, skip=frozenset()) -> int:
+        """The entry to evict: the least recently used one in probation, else the least recently used overall;
+        entries whose id is in `skip` stay."""
+        for eid, e in self.entries.items():
+            if eid in self.probation and id(e) not in skip:
                 return eid
         if probation_only:
             return None
-        return next(iter(self.entries))
+        return next((eid for eid, e in self.entries.items() if id(e) not in skip), None)
 
     def _promote(self, eid: int) -> None:
         """A hit moves an entry from probation to protected, and protected gives back what it holds over its share."""
@@ -229,6 +418,8 @@ class SessionCache:
 
     def _remove(self, eid: int) -> None:
         entry = self.entries.pop(eid)
+        self.seen.pop(eid, None)
+        _free(entry)
         self.used -= entry.bytes
         if eid in self.probation:
             self.probation.discard(eid)
@@ -245,15 +436,22 @@ class SessionCache:
                 self.positions.pop(pos, None)
 
     def clear(self) -> None:
-        """Drop every entry (requests that already matched one keep their reference)."""
+        """Drop every entry (requests that already matched one keep their reference; with a store its rows go back to
+        it, so nothing may be reading them)."""
+        for e in self.entries.values():
+            _free(e)
         self.entries.clear()
         self.index.clear()
         self.positions.clear()
         self.probation.clear()
+        self.seen.clear()
+        self.ghosts.clear()
+        self.gpos.clear()
         self.used = 0
         self.pbytes = 0
 
     def stats(self) -> dict:
         return {"entries": len(self.entries), "bytes": self.used, "probation": len(self.probation),
                 "protected": len(self.entries) - len(self.probation), "hits": self.hits, "misses": self.misses,
-                "saved_tokens": self.saved_tokens, "evictions": self.evictions, "replaced": self.replaced}
+                "saved_tokens": self.saved_tokens, "evictions": self.evictions, "replaced": self.replaced,
+                "returning": self.returning}
