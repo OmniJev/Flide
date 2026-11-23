@@ -143,6 +143,34 @@ class Store:
             return
         self._drop(node)
 
+    # -- keys and values ---------------------------------------------------
+    def attach(self, node: Node, kv: dict) -> int:
+        """Keep only the rows `node` adds, and return the bytes the store now holds for it.
+
+        `kv` is an entry's `{layer: (K, V)}` over the whole path, so `[span:end)` is copied once per node while
+        `[0:span)` stays with the ancestors, by reference. Restoring a prefix reads the segments from `segments()`.
+        """
+        kept = 0
+        for layer, (k, v) in kv.items():
+            kt = k[node.span: node.end].contiguous()
+            vt = v[node.span: node.end].contiguous()
+            node.kv[layer] = (kt, vt)
+            kept += kt.numel() * kt.element_size() + vt.numel() * vt.element_size()
+        return kept
+
+    def segments(self, node: Node, layer) -> list:
+        """`(K, V, start, end)` per node from the root to `node`: the trunk's rows first, then the tail's."""
+        chain, n = [], node
+        while n is not None:
+            chain.append(n)
+            n = n.parent
+        out = []
+        for n in reversed(chain):
+            if layer in n.kv:
+                k, v = n.kv[layer]
+                out.append((k, v, n.span, n.end))
+        return out
+
     def clear(self) -> None:
         self.nodes.clear()
         self.by_position.clear()
