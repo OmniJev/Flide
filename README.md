@@ -86,35 +86,7 @@ On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,0
 
 ## Models
 
-### Qwen2.5 and Qwen3 text backbones
-
-Flide supports unquantized, full-attention text checkpoints for Qwen2.5 and Qwen3 Dense, plus Qwen3 MoE on a single GPU.
-
-Serve Instruct checkpoints through the default `next_token` decision format.
-
-```bash
-flide serve --model Qwen/Qwen2.5-7B-Instruct
-flide serve --model Qwen/Qwen3-4B-Instruct-2507
-```
-
-For a custom decision checkpoint, put the tokenizer, any separate readout weights, and `decision_config.json` next
-to the backbone weights. With `"format_id": "flide-template-v1"`, Flide picks the template format automatically.
-
-```bash
-flide serve --model /path/to/checkpoint
-```
-
-If the checkpoint uses a bidirectional prefix shared across independent questions, set `"attention": "blocks"` and
-provide a `shared_prefix` template for the prefix and a `prompt` template for each question. Use the prompt and
-attention layout the checkpoint was trained with.
-
-The text backbones use packed Triton attention on A100 (SM80) and H100/H200 (SM90). CUDA graphs batch supported text
-plans by shape, including prefix and block attention. The optional single-GPU session cache reuses KV rows across
-causal requests. Dense models can use `--tp` when the attention heads, KV heads, and MLP width divide evenly across ranks.
-
-### Serving benchmarks
-
-The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested.
+The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested. A dash means no benchmark result is available.
 
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -152,6 +124,8 @@ The last three columns say how much faster Flide answers one request than the en
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | text | 4.2× | 5.0× | ~1.5× |
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | text, images | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | text | ~3.9× | ~7.1× | ~1.6× |
+| [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25) | text | — | — | — |
+| [Qwen3](https://huggingface.co/collections/Qwen/qwen3) | text | — | — | — |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | text, images | ~2.1× | ~4.8× | ~1.3× |
 | [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | text | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | text | 3.1× | 28.1× | 1.2× |
@@ -163,6 +137,25 @@ The last three columns say how much faster Flide answers one request than the en
 | [Turion](https://huggingface.co/turion-ai/turion-jev-31b) | text | 1.1× | 1.1× | 1.0× |
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
+
+### H100 text latency
+
+Flide and vLLM 0.28.0 ran the same BF16 checkpoints on one NVIDIA H100 80 GB with CUDA graphs enabled and
+one request in flight. For each workload, 32 validation states were timed twice after warmup, with all selected
+questions for a state in one request and a unique state tag for each timed request.
+[MultiRC validation](https://huggingface.co/datasets/aps/super_glue/tree/main/multirc) · [QuALITY validation](https://github.com/nyu-mll/quality)
+
+P50 is the median HTTP round-trip latency. Flide receives text at `/v1/systemone`. vLLM receives the same
+prompts as pre-tokenized IDs in one `/v1/completions` call per state, with prefix caching enabled and
+first-token log probabilities for the answer labels. vLLM's client-side prompt rendering and tokenization
+are outside the timed interval. Speedup is vLLM P50 divided by Flide P50.
+
+| Model | Workload | Flide P50 (ms) | vLLM P50 (ms) | Speedup |
+|---|---|---:|---:|---:|
+| Qwen2.5-7B-Instruct | MultiRC | 75.2 | 90.2 | 1.20× |
+| Qwen2.5-7B-Instruct | QuALITY | 225.0 | 310.0 | 1.38× |
+| Qwen3-4B-Instruct-2507 | MultiRC | 52.7 | 87.5 | 1.66× |
+| Qwen3-4B-Instruct-2507 | QuALITY | 180.1 | 265.1 | 1.47× |
 
 ## Options
 
