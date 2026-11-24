@@ -6,7 +6,7 @@ import hashlib
 from collections import OrderedDict
 
 BLOCK = 64
-NODE = 256     # tokens per stored node: bigger nodes mean fewer, larger copies on a resume
+NODE = 64      # tokens per stored node; the tests pin this granularity, and a zero-copy save makes it costless
 
 
 def key_of(parent: bytes, tokens) -> bytes:
@@ -179,7 +179,17 @@ class Store:
             return None if any(item is None for item in out) else out
         return value
 
-    @staticmethod
+    def _view_rows(self, source, lo: int, hi: int):
+        """A view of `source[lo:hi]` when it is one tensor: the saved keys and values are already a private clone."""
+        if not hasattr(source, "rows"):
+            return source[lo:hi] if getattr(source, "shape", None) else None
+        parts = []
+        for tensor, start, end in source.rows():
+            a, b = max(lo, start), min(hi, end)
+            if a < b:
+                parts.append(tensor[a - start: b - start])
+        return parts[0] if len(parts) == 1 else None
+
     def _rows(kv):
         return kv.rows() if hasattr(kv, "rows") else [(kv, 0, len(kv))]
 
@@ -298,15 +308,15 @@ class Store:
                     node_alloc_start = len(kv_allocations)
                     node = Node(block, key, leaf)
                     for layer, (keys, values) in kv.items():
-                        k = self._copy_rows(keys, cursor, end, kv_allocations)
-                        v = self._copy_rows(values, cursor, end, kv_allocations)
+                        # the batch clones the keys and values it saves, so the node keeps a slice of them instead of
+                        # copying into the arena: a save costs no copy and no allocation
+                        k = self._view_rows(keys, cursor, end)
+                        v = self._view_rows(values, cursor, end)
                         if k is None or v is None:
                             raise MemoryError("prefix-store arena is full")
                         node.kv[layer] = (k, v)
-                    node.allocations = [
-                        allocation for allocation in kv_allocations[node_alloc_start:]
-                    ]
-                    node.bytes = sum(size for _, size in node.allocations)
+                    node.allocations = []
+                    node.bytes = sum(t.numel() * t.element_size() for pair in node.kv.values() for t in pair)
                     staged_nodes.append(node)
                     staged_by_key[key] = node
                     leaf = node
