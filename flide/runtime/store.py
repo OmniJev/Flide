@@ -179,6 +179,20 @@ class Store:
             return None if any(item is None for item in out) else out
         return value
 
+    def _gather_rows(self, source, lo: int, hi: int):
+        """Rows `[lo, hi)` of `source` as one tensor: a view when it is one tensor, a concatenation otherwise."""
+        one = self._view_rows(source, lo, hi)
+        if one is not None:
+            return one
+        import torch
+
+        parts = []
+        for tensor, start, end in self._rows(source):
+            a, b = max(lo, start), min(hi, end)
+            if a < b:
+                parts.append(tensor[a - start: b - start])
+        return torch.cat(parts)
+
     def _view_rows(self, source, lo: int, hi: int):
         """A view of `source[lo:hi]` when it is one tensor: the saved keys and values are already a private clone."""
         if not hasattr(source, "rows"):
@@ -190,6 +204,7 @@ class Store:
                 parts.append(tensor[a - start: b - start])
         return parts[0] if len(parts) == 1 else None
 
+    @staticmethod
     def _rows(kv):
         return kv.rows() if hasattr(kv, "rows") else [(kv, 0, len(kv))]
 
@@ -291,6 +306,23 @@ class Store:
             # K/V storage is chunked independently of the input's original
             # allocation boundaries.
             cursor, leaf = shared, parent
+            tail = len(tokens) - cursor
+            blocks: dict = {}
+            block_allocations: list[tuple[int, int]] = []
+            if tail > 0:
+                # one arena block a layer for the whole tail, copied once, then sliced per node: the keys and values
+                # stay in the arena (their rows are contiguous, which also makes a resume one copy a layer) while the
+                # save costs one copy a layer instead of one per node
+                for layer, (keys, values) in kv.items():
+                    k0 = self._rows(keys)[0][0]
+                    v0 = self._rows(values)[0][0]
+                    kt = self._allocate_tensor((tail, *k0.shape[1:]), k0.dtype, k0.device, block_allocations)
+                    vt = self._allocate_tensor((tail, *v0.shape[1:]), v0.dtype, v0.device, block_allocations)
+                    if kt is None or vt is None:
+                        raise MemoryError("prefix-store arena is full")
+                    kt.copy_(self._gather_rows(keys, cursor, len(tokens)))
+                    vt.copy_(self._gather_rows(values, cursor, len(tokens)))
+                    blocks[layer] = (kt, vt)
             if cursor < len(tokens):
                 while cursor < len(tokens):
                     end = min(cursor + NODE, len(tokens))
@@ -305,17 +337,11 @@ class Store:
                         leaf = existing
                         cursor = end
                         continue
-                    node_alloc_start = len(kv_allocations)
                     node = Node(block, key, leaf)
-                    for layer, (keys, values) in kv.items():
-                        # the batch clones the keys and values it saves, so the node keeps a slice of them instead of
-                        # copying into the arena: a save costs no copy and no allocation
-                        k = self._view_rows(keys, cursor, end)
-                        v = self._view_rows(values, cursor, end)
-                        if k is None or v is None:
-                            raise MemoryError("prefix-store arena is full")
-                        node.kv[layer] = (k, v)
-                    node.allocations = []
+                    for layer in kv:
+                        kt, vt = blocks[layer]
+                        node.kv[layer] = (kt[cursor - shared: end - shared], vt[cursor - shared: end - shared])
+                    node.allocations = list(block_allocations) if not staged_nodes else []
                     node.bytes = sum(t.numel() * t.element_size() for pair in node.kv.values() for t in pair)
                     staged_nodes.append(node)
                     staged_by_key[key] = node
