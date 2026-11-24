@@ -795,5 +795,9 @@ class Qwen35(Backbone):
         o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr)
         for j in b.marks:
             c0, P = C["start"][j], C["P"][j]
-            b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"][i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())
+            slot = b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"]
+            if hasattr(slot, "write"):
+                slot.write(i, Kc[c0: c0 + P], Vc[c0: c0 + P])   # straight into the arena rows reserved before the forward
+            else:
+                slot[i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())
         return mm(gate_out(o, gate), w["o"])

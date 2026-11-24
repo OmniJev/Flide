@@ -347,6 +347,9 @@ class Store:
         Returns ``(leaf, stored_states, state_keys, added_bytes)`` or ``None``
         without changing the store if its arena cannot fit the insertion.
         """
+        slots = kv if hasattr(kv, "tensors") else None      # rows already reserved for this save, before the forward
+        if slots is not None:
+            kv = slots.kv()
         parent, shared = self._parent(tokens)
         staged_nodes: list[Node] = []
         staged_by_key: dict[bytes, Node] = {}
@@ -363,7 +366,10 @@ class Store:
             tail = len(tokens) - cursor
             blocks: dict = {}
             block_allocations: list[tuple[int, int]] = []
-            if tail > 0:
+            if tail > 0 and slots is not None:
+                blocks = dict(slots.tensors)
+                block_allocations = list(slots.allocations)
+            elif tail > 0:
                 # one arena block a layer for the whole tail, copied once, then sliced per node: the keys and values
                 # stay in the arena (their rows are contiguous, which also makes a resume one copy a layer) while the
                 # save costs one copy a layer instead of one per node
@@ -448,7 +454,7 @@ class Store:
             record = new_states.get(key) or self.state_records[key]
             record.refs += 1
 
-        added_bytes = sum(node.bytes for node in staged_nodes) + sum(
+        added_bytes = (0 if slots is not None else sum(node.bytes for node in staged_nodes)) + sum(
             record.bytes for record in new_states.values()
         )
         self.used += added_bytes

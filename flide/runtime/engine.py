@@ -403,12 +403,16 @@ class Engine:
             shape = budget
             while shape < mb.tokens:
                 shape *= 2
-            if self.sessions is not None and self.sessions.store is not None and batch.marks:
+            store = getattr(self.sessions, "store", None) or getattr(self.sessions, "pstore", None) \
+                if self.sessions is not None else None
+            if store is not None and batch.marks:
                 # the store's rows for every save point, before the forward writes them (a save without room is skipped)
                 keep = [e for _, e, _ in batch.resumes]
                 for j in list(batch.marks):
                     m = max(batch.marks[j])
-                    rows = self.sessions.reserve(self.backbone.session_rows(m), keep=keep)
+                    need = self.backbone.session_rows(m)
+                    rows = (self.sessions.reserve(need, keep=keep) if getattr(self.sessions, "store", None) is not None
+                            else self.sessions.reserve_prefix(need))
                     if rows is None:
                         del batch.marks[j]
                     else:
