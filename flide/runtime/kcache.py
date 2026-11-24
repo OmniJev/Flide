@@ -441,14 +441,16 @@ def warm_blocks(eng) -> None:
 def warm_requests(eng) -> None:
     """A few requests through the checkpoint's own family (its plans: forks, whole blocks, sets), whole and in rounds on
     every path a served round takes, at token counts of both parities, so a family's own attention layouts and the
-    lengths its plans reach go into the bundle as well as the engine's causal warm-up. Requests the family turns down
-    are skipped."""
+    lengths its plans reach go into the bundle as well as the engine's causal warm-up; each one-question request also runs
+    alone on the packed path, a micro-batch of one read (the last of an offline run often is), where backbones that
+    compute their last layers only at the read rows run them on a single row. Requests the family turns down are
+    skipped."""
     from ..api.schema import SystemOneRequest
 
     choice = {"type": "choice", "instructions": "Pick one.", "criteria": {"a": "first", "b": "second", "c": "third"}}
     asks = [{"q": choice}, {"q": choice, "n": {"type": "noul", "instructions": "Is it so?"},
                             "s": {"type": "score", "instructions": "How much?", "criteria": ["none", "some", "much"]}}]
-    plans = []
+    plans, alone = [], []
     for words in (61, 250, 1200):
         for questions in asks:
             try:
@@ -457,9 +459,13 @@ def warm_requests(eng) -> None:
                 plans.append(eng.format.plan(req))
             except ValueError:
                 continue
+            if questions is asks[0]:
+                alone.append(plans[-1])
     if plans:
         for mode in ("batch", "graphs", "packed"):
             eng.forward(plans, mode=mode)
+    for p in alone:
+        eng.forward([p], mode="packed")
 
 
 def export(args) -> None:
