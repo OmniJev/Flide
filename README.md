@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-24** We added [kudhab](https://huggingface.co/plantwaterer/kudhab), [joey-1](https://huggingface.co/baselabs/joey-1), [KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5) and the small [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) models, and request limits for `flide serve` in Flide 0.1.21.
 - 🔥 **2026-11-23** We added Gemma 4 agent sessions in Flide 0.1.20.
 - 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
-- 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
 - 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
 - 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
 - 🔥 **2026-11-12** We added [d1-3B](https://huggingface.co/LiquidAI/d1-3B) from LiquidAI in Flide 0.1.15, and Gemma 4 now runs in FP8 with `--quantize fp8`, so Gemma 4 12B fits one 24 GB card.
@@ -86,7 +87,7 @@ On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,0
 
 ## Models
 
-The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested. A dash means no benchmark result is available.
+The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 4B, KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested. A dash means no benchmark result is available.
 
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -98,7 +99,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | ~1.7× | ~1.1× | ~1.0× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | text | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | ~1.6× | ~1.3× | ~1.1× |
-| [d3](https://huggingface.co/vllm-sr/d3-turbo) | text, images | ~5.0× | ~1.5× | ~1.8× |
+| [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | text, images | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | text | 1.1× | 2.0× | 2.8× |
@@ -112,13 +113,14 @@ The last three columns say how much faster Flide answers one request than the en
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | text | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | text | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.4× | ~4.3× | ~1.5× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.5× | ~4.9× | ~1.4× |
+| [kudhab](https://huggingface.co/plantwaterer/kudhab) | text | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
 | [liquamen](https://huggingface.co/plantwaterer/liquamen) | text | 1.7× | 1.9× | 1.7× |
 | [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | text | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | text, images | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | text | 1.4× | 1.5× | 1.4× |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | text, images | ~4.3× | ~2.8× | ~1.8× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | text, images | ~6.4× | ~4.5× | ~2.6× |
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | text | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | text, images, video | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | text | 4.2× | 5.0× | ~1.5× |

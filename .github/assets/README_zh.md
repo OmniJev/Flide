@@ -29,12 +29,13 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-24** Flide 0.1.21 新增 [kudhab](https://huggingface.co/plantwaterer/kudhab)、[joey-1](https://huggingface.co/baselabs/joey-1)、[KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5) 和小尺寸的 [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) 模型，以及 `flide serve` 的请求上限。
 - 🔥 **2026-11-23** Flide 0.1.20 新增 Gemma 4 的 agent 会话。
 - 🔥 **2026-11-22** Flide 0.1.19 新增 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) 和 [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)，[d1-2B](https://huggingface.co/LiquidAI/d1-2B) 能读图片了，并提供 [Docker 镜像](https://hub.docker.com/r/omnijev/flide)。
-- 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，并加了可选的 session cache。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，并加了可选的 session cache。
 - 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行更省显存。
 - 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
 - 🔥 **2026-11-12** Flide 0.1.15 新增 LiquidAI 的 [d1-3B](https://huggingface.co/LiquidAI/d1-3B)，Gemma 4 也能用 `--quantize fp8` 跑 FP8 了，Gemma 4 12B 一张 24 GB 的卡就放得下。
@@ -86,7 +87,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 
 ## 模型
 
-后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 35B 与 Turion 和各自的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 4B、KnowLine 35B 与 Turion 和各自的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
 
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -98,7 +99,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.7× | ~1.1× | ~1.0× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | 文本 | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | ~1.6× | ~1.3× | ~1.1× |
-| [d3](https://huggingface.co/vllm-sr/d3-turbo) | 文本、图片 | ~5.0× | ~1.5× | ~1.8× |
+| [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | 文本、图片 | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 文本 | 1.1× | 2.0× | 2.8× |
@@ -112,13 +113,14 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | 文本 | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.4× | ~4.3× | ~1.5× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.5× | ~4.9× | ~1.4× |
+| [kudhab](https://huggingface.co/plantwaterer/kudhab) | 文本 | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
 | [liquamen](https://huggingface.co/plantwaterer/liquamen) | 文本 | 1.7× | 1.9× | 1.7× |
 | [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | 文本 | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | 文本、图片 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | 文本 | 1.4× | 1.5× | 1.4× |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | 文本、图片 | ~4.3× | ~2.8× | ~1.8× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | 文本、图片 | ~6.4× | ~4.5× | ~2.6× |
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | 文本 | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | 文本、图片、视频 | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | 文本 | 4.2× | 5.0× | ~1.5× |

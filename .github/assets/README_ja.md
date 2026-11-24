@@ -29,12 +29,13 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-24** Flide 0.1.21 で [kudhab](https://huggingface.co/plantwaterer/kudhab)、[joey-1](https://huggingface.co/baselabs/joey-1)、[KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5)、小さいサイズの [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) モデルと `flide serve` のリクエスト上限に対応しました。
 - 🔥 **2026-11-23** Flide 0.1.20 で Gemma 4 のエージェントセッションに対応しました。
 - 🔥 **2026-11-22** Flide 0.1.19 で [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1)、[turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) に対応し、[d1-2B](https://huggingface.co/LiquidAI/d1-2B) が画像を読めるようになり、[Docker イメージ](https://hub.docker.com/r/omnijev/flide)も公開しました。
-- 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、オプションの session cache を追加しました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、オプションの session cache を追加しました。
 - 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列の GPU メモリ使用量を減らしました。
 - 🔥 **2026-11-13** Flide 0.1.16 で [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039)、[this-that](https://huggingface.co/flock-io/this-that-model-1.0) の 3 つの意思決定モデルファミリーを追加し、LiquidAI の [d1-2B](https://huggingface.co/LiquidAI/d1-2B) に対応しました。
 - 🔥 **2026-11-12** Flide 0.1.15 で LiquidAI の [d1-3B](https://huggingface.co/LiquidAI/d1-3B) に対応し、Gemma 4 も `--quantize fp8` で FP8 で動くようになり、Gemma 4 12B が 24 GB のカード 1 枚に収まります。
@@ -86,7 +87,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 
 ## モデル
 
-最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine 35B と Turion はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
+最後の 3 列は、1 リクエストに答えるのに Flide がリリース付属のエンジンより何倍速いかを示し、各データセットのリクエストの中央値レイテンシを H200 1 枚で測っています。DI は Decision Index です。チャットモデルは vLLM と SGLang の速いほう、OneJev は Flide の前に使っていた qev と比べ、KnowLine 4B、KnowLine 35B と Turion はリリース版と同じく FP8（`--quantize fp8`）で動かしており、~ の付いた値は試したサイズの平均です。
 
 | モデル | 入力 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -98,7 +99,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | テキスト、画像 | ~1.7× | ~1.1× | ~1.0× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | テキスト | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | テキスト、画像 | ~1.6× | ~1.3× | ~1.1× |
-| [d3](https://huggingface.co/vllm-sr/d3-turbo) | テキスト、画像 | ~5.0× | ~1.5× | ~1.8× |
+| [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | テキスト、画像 | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | テキスト | ~1.4× | ~4.2× | ~1.2× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | テキスト、画像 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | テキスト | 1.1× | 2.0× | 2.8× |
@@ -112,13 +113,14 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | テキスト | 1.0× | 1.2× | 1.1× |
 | [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~7.9× | ~1.5× | ~1.7× |
-| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト、画像 | ~1.4× | ~4.3× | ~1.5× |
+| [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト、画像 | ~1.5× | ~4.9× | ~1.4× |
+| [kudhab](https://huggingface.co/plantwaterer/kudhab) | テキスト | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
 | [liquamen](https://huggingface.co/plantwaterer/liquamen) | テキスト | 1.7× | 1.9× | 1.7× |
 | [Logits Sigma](https://huggingface.co/logitshq/Logits-Sigma-1) | テキスト | 1.1× | 1.4× | 1.0× |
 | [Lumma](https://huggingface.co/collections/FrontiersMind/lumma-decision-models-6ab6356434b3db6856ec7ae6) | テキスト、画像 | 1.7× | 7.1× | 1.2× |
 | [Lychee](https://huggingface.co/LycheeAI/Lychee-27B) | テキスト | 1.4× | 1.5× | 1.4× |
-| [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | ~4.3× | ~2.8× | ~1.8× |
+| [mammoth](https://huggingface.co/baselabs/mammoth-1) | テキスト、画像 | ~6.4× | ~4.5× | ~2.6× |
 | [mogan](https://huggingface.co/moganai/mogan-decision-31B-it) | テキスト | 1.6× | 8.5× | 1.8× |
 | [OneJev](https://huggingface.co/collections/OmniJev/onejev16-6ad27669cb868abe0516486d) | テキスト、画像、動画 | ~6.8× | 7.3× | 4.7× |
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | テキスト | 4.2× | 5.0× | ~1.5× |
