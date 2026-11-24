@@ -64,6 +64,14 @@ def readout_config(model_dir: str) -> dict | None:
     return fields
 
 
+def _deferrable(ip) -> bool:
+    """Whether this transformers' image processor resizes and reshuffles the patches in methods of its own (the two
+    `_DeferredResize` stands in for); older releases (5.12 and before) go through the processor whole."""
+    import sys
+
+    return hasattr(type(ip), "patchify") and hasattr(sys.modules[type(ip).resize.__module__], "smart_resize")
+
+
 class _DeferredResize:
     """Stands in for the image processor's resize and patch reshuffle: the images it would resize as they are, with the
     size its own `smart_resize` gives them (in `sizes`) and the grid of that size; the device resizes them bit for bit
@@ -322,7 +330,7 @@ class OneJev(Format):
 
         proc = self.processor
         qwen_images = (all(m["type"] == "image" for m in items)
-                       and type(proc.image_processor).__name__.startswith("Qwen2VL"))
+                       and type(proc.image_processor).__name__.startswith("Qwen2VL") and _deferrable(proc.image_processor))
         if qwen_images:   # decoded here, resized and reshuffled into patches on the GPU
             imgs, sizes, grid, images = self._qwen_images(items, self._raw_image_processor())
             vision = {"image_grid_thw": grid}
