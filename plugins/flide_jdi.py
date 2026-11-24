@@ -12,6 +12,10 @@ in the same environment (the model's page in the docs links the release's instru
 libraries never meet torch's. Its two models come from the checkpoint's ocr_models/ when there, else they are fetched
 once from the addresses in the checkpoint's ocr_inference/ocr_sources.json, checked against the SHA-256 given there.
 Without PaddleOCR a request with images is turned down; text requests do not need it.
+
+The same d3 layout read both ways also comes without the OCR step (vllm-sr's d3-flash, d3-mini, d3-nano, d3-lite and
+d3-edge, whose d3_runtime reads images as they are): a checkpoint with neither ocr_inference/ nor ocr_models/ hands its
+images to the processor unchanged, ahead of the text of the user turn, as its d3_runtime does.
 """
 from __future__ import annotations
 
@@ -143,6 +147,8 @@ class JDI(Template):
         super().__init__(model_dir, tokenizer=tokenizer, spec=json.loads(SPEC.read_text()))
         self.ocr_device, self.ocr_root = ocr_device, ocr_root
         self._ocr = None
+        d = Path(model_dir)
+        self.reads_ocr = ocr_root is not None or (d / "ocr_inference").is_dir() or (d / "ocr_models").is_dir()
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
@@ -211,7 +217,7 @@ class JDI(Template):
 
     def plan(self, request: SystemOneRequest, **kw) -> Plan:
         refs = getattr(request, "images", None) or []
-        if not refs:
+        if not refs or not self.reads_ocr:   # images without the OCR step: to the processor as they are
             return super().plan(request, **kw)
         raw = [capped(_bytes(r)) for r in refs]
         state = augmented_state(request.state, self._texts(raw))
