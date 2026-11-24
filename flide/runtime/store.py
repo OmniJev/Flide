@@ -65,6 +65,35 @@ class StateSnapshot:
         self.bytes = sum(size for _, size in allocations)
 
 
+class KVSlots:
+    """Arena rows reserved for a save, before the forward writes them.
+
+    The engine reserves a save point's rows ahead of the forward and hands these to the batch; the decoder then
+    copies its keys and values straight into arena memory instead of making a clone the store would copy again.
+    """
+
+    def __init__(self, store: "Store", tensors: dict, allocations: list):
+        self.store = store
+        self.tensors = tensors          # layer -> (K, V), each the whole save point
+        self.allocations = allocations
+
+    def write(self, layer: int, k, v) -> None:
+        kt, vt = self.tensors[layer]
+        kt.copy_(k)
+        vt.copy_(v)
+
+    def kv(self) -> dict:
+        return self.tensors
+
+    def free(self) -> None:
+        """Give the rows back when the save does not happen (a forward that raised, or an entry dropped)."""
+        if self.allocations:
+            for offset, size in self.allocations:
+                self.store._free(offset, size)
+            self.store.used -= sum(size for _, size in self.allocations)
+            self.allocations = []
+
+
 class Store:
     """A trie over prefix extensions with leaf-first release and a fixed byte arena.
 
@@ -284,6 +313,31 @@ class Store:
             key = hashlib.blake2b(
                 base + nonce.to_bytes(8, "little"), digest_size=16
             ).digest()
+
+    def reserve_rows(self, shapes: dict):
+        """Arena rows for a save point before it is written: `shapes` is layer -> (K shape, V shape), the rows
+        including the length. Returns a `KVSlots`, or None when the store has no room."""
+        allocations: list = []
+        tensors: dict = {}
+        try:
+            for layer, (ks, vs) in shapes.items():
+                import torch
+
+                dtype = torch.bfloat16
+                device = self.device or "cuda:0"
+                kt = self._allocate_tensor(tuple(ks), dtype, device, allocations)
+                vt = self._allocate_tensor(tuple(vs), dtype, device, allocations)
+                if kt is None or vt is None:
+                    for offset, size in allocations:
+                        self._free(offset, size)
+                    return None
+                tensors[layer] = (kt, vt)
+        except Exception:
+            for offset, size in allocations:
+                self._free(offset, size)
+            return None
+        self.used += sum(size for _, size in allocations)
+        return KVSlots(self, tensors, allocations)
 
     def insert(self, tokens, states: dict, kv: dict, session=None):
         """Insert token blocks, K/V tails, and independently referenced save points.
