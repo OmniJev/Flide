@@ -594,6 +594,10 @@ class Engine:
                     out = (out[0], out[1][0])   # a list of (position, snapshot), the earlier mark first
             if out is None:
                 out = graphs.run_session(plan.prefix, plan.suffixes, entry, start, mark)
+                if out is not None:
+                    hidden, snap = out
+                    # The single-request graphs return one snapshot, not the flat graphs' list of save points.
+                    out = (hidden, [(mark, snap)] if snap is not None else [])
             if out is None:
                 return None
             hidden, snaps = out
