@@ -314,7 +314,7 @@ class Store:
                 base + nonce.to_bytes(8, "little"), digest_size=16
             ).digest()
 
-    def reserve_rows(self, shapes: dict):
+    def reserve_rows(self, shapes: dict, dtype=None):
         """Arena rows for a save point before it is written: `shapes` is layer -> (K shape, V shape), the rows
         including the length. Returns a `KVSlots`, or None when the store has no room."""
         allocations: list = []
@@ -323,10 +323,10 @@ class Store:
             for layer, (ks, vs) in shapes.items():
                 import torch
 
-                dtype = torch.bfloat16
+                use = dtype or torch.bfloat16      # the backbone's dtype, so fp8 and fp16 models keep theirs
                 device = self.device or "cuda:0"
-                kt = self._allocate_tensor(tuple(ks), dtype, device, allocations)
-                vt = self._allocate_tensor(tuple(vs), dtype, device, allocations)
+                kt = self._allocate_tensor(tuple(ks), use, device, allocations)
+                vt = self._allocate_tensor(tuple(vs), use, device, allocations)
                 if kt is None or vt is None:
                     for offset, size in allocations:
                         self._free(offset, size)

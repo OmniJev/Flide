@@ -349,9 +349,9 @@ class SessionCache:
         self.pstore.configure(device)
         return self.pstore.budget
 
-    def reserve_prefix(self, need: dict):
+    def reserve_prefix(self, need: dict, dtype=None):
         """Arena rows for a save point before the forward, from the prefix store (None when it has no room)."""
-        return self.pstore.reserve_rows(need) if getattr(self, "pstore", None) is not None else None
+        return self.pstore.reserve_rows(need, dtype) if getattr(self, "pstore", None) is not None else None
 
     def reserve(self, need: dict, keep=()):
         """Rows of the store for a state about to be saved (kind -> count), as ArenaRows, evicting what it needs room

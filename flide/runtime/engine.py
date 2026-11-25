@@ -412,7 +412,7 @@ class Engine:
                     m = max(batch.marks[j])
                     need = self.backbone.session_rows(m)
                     rows = (self.sessions.reserve(need, keep=keep) if getattr(self.sessions, "store", None) is not None
-                            else self.sessions.reserve_prefix(need))
+                            else self.sessions.reserve_prefix(need, dtype=self.backbone.dtype))
                     if rows is None:
                         del batch.marks[j]
                     else:
