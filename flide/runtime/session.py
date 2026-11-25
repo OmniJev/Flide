@@ -455,8 +455,14 @@ class SessionCache:
                     pos = max(inherited)
                     states[pos] = parent.states[pos]
             stored = None
+            hint = None
+            if parent is not None:
+                for k, e in self.entries.items():
+                    if e is parent:
+                        hint = self.node_of.get(k, (None,))[0]
+                        break
             while stored is None:
-                stored = self.pstore.insert(entry.tokens, states, entry.kv)
+                stored = self.pstore.insert(entry.tokens, states, entry.kv, parent_hint=hint)
                 if stored is not None:
                     break
                 victim = self._victim()

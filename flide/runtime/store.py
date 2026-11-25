@@ -339,7 +339,7 @@ class Store:
         self.used += sum(size for _, size in allocations)
         return KVSlots(self, tensors, allocations)
 
-    def insert(self, tokens, states: dict, kv: dict, session=None):
+    def insert(self, tokens, states: dict, kv: dict, session=None, parent_hint=None):
         """Insert token blocks, K/V tails, and independently referenced save points.
 
         Nodes are split at ``BLOCK`` boundaries, so siblings share their common
@@ -350,7 +350,12 @@ class Store:
         slots = kv if hasattr(kv, "tensors") else None      # rows already reserved for this save, before the forward
         if slots is not None:
             kv = slots.kv()
-        parent, shared = self._parent(tokens)
+        # the engine hands over the entry a request resumed from, so the path is already known: that skips the walk
+        # down the tree that used to cost 3 ms a save (the callers only pass an entry the request really resumed from)
+        if parent_hint is not None and parent_hint.end <= len(tokens):
+            parent, shared = parent_hint, parent_hint.end
+        else:
+            parent, shared = self._parent(tokens)
         staged_nodes: list[Node] = []
         staged_by_key: dict[bytes, Node] = {}
         kv_allocations: list[tuple[int, int]] = []
