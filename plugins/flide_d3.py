@@ -190,15 +190,45 @@ class D3(Format):
     _vision = NextToken._vision
     _open = staticmethod(NextToken._open)
 
-    def split(self, text: str, state: Any) -> tuple[list[int], int]:
-        """(the prompt's ids, its state segment's token count): the tokens whose characters all lie before the end of
-        the state, as d3_format.encode_split."""
-        enc = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    def _state_end(self, text: str, state: Any) -> tuple[int, int]:
+        """(the character position where the state segment ends, the length of its body without the markers).
+
+        Shared by `split` and `plan`, so both cut the prompt at the same place.
+        """
         body = describe(state) if state not in (None, "") else EMPTY_STATE
         start = text.find(STATE_MARK + body + QUESTION_MARK)
         if start < 0:
             raise ValueError("d3: the rendered prompt has no state segment before the question block")
-        end = start + len(STATE_MARK) + len(body)
+        return start + len(STATE_MARK) + len(body), len(body)
+
+    def _prefix_of(self, text: str, state: Any):
+        """(the prompt's prefix ids, the prefix's text, the branch ids left after it).
+
+        One full tokenize gives the prefix and the exact character cut; everything after the cut is
+        tokenized on its own, which is what `plan` reuses for the remaining questions.
+        """
+        end, _ = self._state_end(text, state)
+        enc = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        ids, offs = list(enc["input_ids"]), enc["offset_mapping"]
+        n = 0
+        for _, stop in offs:
+            if stop > end:
+                break
+            n += 1
+        if not 0 < n < len(ids):
+            raise ValueError("d3: empty state segment or no question tokens after it")
+        cut = offs[n - 1][1]
+        return ids[:n], text[:cut], ids[n:]
+
+    def _branch_of(self, text: str, prefix_text: str) -> list[int]:
+        """The branch ids of a question whose prefix text matched the first question's."""
+        return list(self.tokenizer(text[len(prefix_text):], add_special_tokens=False)["input_ids"])
+
+    def split(self, text: str, state: Any) -> tuple[list[int], int]:
+        """(the prompt's ids, its state segment's token count): the tokens whose characters all lie before the end of
+        the state, as d3_format.encode_split."""
+        enc = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        end, _ = self._state_end(text, state)
         n = 0
         for _, stop in enc["offset_mapping"]:
             if stop > end:
@@ -234,17 +264,25 @@ class D3(Format):
         items = [(name, *rendered(name, q)) for name, q in qs]
         header = [it[2] for it in items] if self.header else None
         prefix, branches, first = None, [], None
+        prefix_text = None
         for name, kind, shown, keys, _ in items:
             text = self.image_text(state, shown, len(refs)) if refs else self.text(state, shown, header)
             if refs and (text.count(IMAGE_TOKEN) != len(refs) or VIDEO_TOKEN in text):
                 raise ValueError(f"question {name!r}: the state or question contains a literal image or video "
                                  "placeholder token")
-            ids, n = self.split(text, state)
             if prefix is None:
-                prefix, first = ids[:n], text
-            elif ids[:n] != prefix:
-                raise ValueError("d3: the questions' state segments differ")
-            branches.append(ids[n:])
+                # the first question pays one full tokenize; it yields the prefix and the character cut
+                prefix, prefix_text, branch = self._prefix_of(text, state)
+                first = text
+            elif text[:len(prefix_text)] == prefix_text:
+                branch = self._branch_of(text, prefix_text)
+            else:
+                # the shared segment differs in its text, so tokenize this prompt whole and compare ids
+                ids, n = self.split(text, state)
+                if ids[:n] != prefix:
+                    raise ValueError("d3: the questions' state segments differ")
+                branch = ids[n:]
+            branches.append(branch)
         vision = None
         if refs:   # each image placeholder of the prefix repeated once per merged patch, as the release expands it
             prefix, vision = self._vision(prefix, [self._open(r) for r in refs], first, branches[0])
