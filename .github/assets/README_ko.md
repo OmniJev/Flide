@@ -29,12 +29,13 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-26** Flide 0.1.22에 [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e)와 [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) 채팅 모델, [kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b), [kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b), [Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B), [clef-omni](https://huggingface.co/Cloudflare/clef-omni)의 텍스트 부분과 밀집 Qwen3.5의 `--quantize int8`를 추가했습니다.
 - 🔥 **2026-11-24** Flide 0.1.21에 [kudhab](https://huggingface.co/plantwaterer/kudhab), [joey-1](https://huggingface.co/baselabs/joey-1), [KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5), 작은 크기의 [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) 모델과 `flide serve` 요청 한도를 추가했습니다.
 - 🔥 **2026-11-23** Flide 0.1.20에 Gemma 4 에이전트 세션을 추가했습니다.
-- 🔥 **2026-11-22** Flide 0.1.19에 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1), [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)를 추가하고, [d1-2B](https://huggingface.co/LiquidAI/d1-2B)가 이미지를 읽을 수 있게 되었으며, [Docker 이미지](https://hub.docker.com/r/omnijev/flide)도 제공합니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-22** Flide 0.1.19에 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1), [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)를 추가하고, [d1-2B](https://huggingface.co/LiquidAI/d1-2B)가 이미지를 읽을 수 있게 되었으며, [Docker 이미지](https://hub.docker.com/r/omnijev/flide)도 제공합니다.
 - 🔥 **2026-11-21** Flide 0.1.18에 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2), [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)를 추가하고, 선택적인 session cache를 넣었습니다.
 - 🔥 **2026-11-20** Flide 0.1.17에 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)를 추가하고, 텐서 병렬의 GPU 메모리 사용량을 줄였습니다.
 - 🔥 **2026-11-13** Flide 0.1.16에 [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039), [this-that](https://huggingface.co/flock-io/this-that-model-1.0)를 포함한 세 의사결정 모델 계열과, LiquidAI의 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)를 추가했습니다.
@@ -87,7 +88,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 
 ## 모델
 
-마지막 세 열은 Flide가 각 모델의 릴리스에 포함된 엔진보다 한 요청에 몇 배 빨리 답하는지를 보여 줍니다. H200 한 장에서 각 워크로드 요청들의 중앙값 지연 시간으로 측정했으며, DI는 Decision Index입니다. 채팅 모델은 vLLM과 SGLang 중 더 빠른 쪽과, OneJev는 Flide 이전에 쓰던 엔진인 qev와 비교했습니다. KnowLine 4B, KnowLine 35B와 Turion은 릴리스가 FP8로 서빙하므로 `--quantize fp8`로 실행했습니다. ~가 붙은 값은 테스트한 크기들의 평균입니다.
+마지막 세 열은 Flide가 각 모델의 릴리스에 포함된 엔진보다 한 요청에 몇 배 빨리 답하는지를 보여 줍니다. H200 한 장에서 각 워크로드 요청들의 중앙값 지연 시간으로 측정했으며, DI는 Decision Index입니다. 채팅 모델은 vLLM과 SGLang 중 더 빠른 쪽과(vLLM이 받지 않는 Qwen2.5는 SGLang과), OneJev는 Flide 이전에 쓰던 엔진인 qev와 비교했습니다. KnowLine 4B, KnowLine 35B와 Turion은 릴리스가 FP8로 서빙하므로 `--quantize fp8`로 실행했습니다. ~가 붙은 값은 테스트한 크기들의 평균입니다.
 
 | 모델 | 입력 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -96,11 +97,12 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 텍스트, 이미지 | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 텍스트 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 텍스트 | ~4.1× | ~8.6× | 1.1× |
-| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 텍스트, 이미지 | ~1.7× | ~1.1× | ~1.0× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 텍스트, 이미지 | ~1.8× | ~1.3× | ~1.2× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | 텍스트 | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | 텍스트, 이미지 | ~1.6× | ~1.3× | ~1.1× |
 | [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | 텍스트, 이미지 | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 텍스트 | ~1.4× | ~4.2× | ~1.2× |
+| [Decision 2.0](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) | 텍스트 | 4.5× | 5.9× | 2.8× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 텍스트, 이미지 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 텍스트 | 1.1× | 2.0× | 2.8× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 텍스트, 이미지 | ~1.3× | ~1.7× | ~1.0× |
@@ -112,7 +114,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 텍스트, 이미지 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 텍스트 | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | 텍스트 | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 텍스트 | ~7.9× | ~1.5× | ~1.7× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 텍스트 | ~5.7× | ~1.5× | ~2.0× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 텍스트, 이미지 | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | 텍스트 | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 텍스트 | 2.3× | 8.6× | 1.2× |
@@ -126,6 +128,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | 텍스트 | 4.2× | 5.0× | ~1.5× |
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 텍스트, 이미지 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 텍스트 | ~3.9× | ~7.1× | ~1.6× |
+| [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e), [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) | 텍스트 | ~1.5× | ~4.4× | ~1.3× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 텍스트, 이미지 | ~2.1× | ~4.8× | ~1.3× |
 | [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | 텍스트 | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 텍스트 | 3.1× | 28.1× | 1.2× |
@@ -144,7 +147,8 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 |---|---|
 | `--session-cache-gb 40` | 이전 요청의 상태를 보관해, 에이전트의 다음 단계는 새로 추가된 부분만 읽습니다 |
 | `--batch-invariant` | 어떤 요청과 함께 배치되어도 같은 요청은 비트 단위로 같은 결과를 냅니다. 속도는 조금 느려집니다 |
-| `--quantize fp8` | Ada, Hopper, Blackwell GPU에서 Qwen3.5를 FP8로 실행합니다 |
+| `--quantize fp8` | Ada, Hopper, Blackwell GPU에서 Qwen3.5와 Gemma 4를 FP8로 실행합니다 |
+| `--quantize int8` | Ampere 이후 GPU에서 Qwen3.5를 int8로 실행합니다. `--batch-invariant`를 함께 쓰면 어떤 부하에서도 비트 단위로 같은 결과를 냅니다 |
 | `--frontends 2` | HTTP, 렌더링, 토큰화를 전용 프로세스 두 개에서 처리합니다. 클라이언트가 많을 때 유용합니다 |
 
 ## 라이선스

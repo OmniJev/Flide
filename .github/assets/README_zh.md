@@ -29,12 +29,13 @@
 
 ## 🔥 动态
 
+- 🔥 **2026-11-26** Flide 0.1.22 新增 [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) 和 [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) 聊天模型、[kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b)、[kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b)、[Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) 和 [clef-omni](https://huggingface.co/Cloudflare/clef-omni) 的文字部分，以及稠密 Qwen3.5 的 `--quantize int8`。
 - 🔥 **2026-11-24** Flide 0.1.21 新增 [kudhab](https://huggingface.co/plantwaterer/kudhab)、[joey-1](https://huggingface.co/baselabs/joey-1)、[KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5) 和小尺寸的 [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) 模型，以及 `flide serve` 的请求上限。
 - 🔥 **2026-11-23** Flide 0.1.20 新增 Gemma 4 的 agent 会话。
-- 🔥 **2026-11-22** Flide 0.1.19 新增 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) 和 [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)，[d1-2B](https://huggingface.co/LiquidAI/d1-2B) 能读图片了，并提供 [Docker 镜像](https://hub.docker.com/r/omnijev/flide)。
 
 <details><summary>更早的动态</summary>
 
+- 🔥 **2026-11-22** Flide 0.1.19 新增 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) 和 [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)，[d1-2B](https://huggingface.co/LiquidAI/d1-2B) 能读图片了，并提供 [Docker 镜像](https://hub.docker.com/r/omnijev/flide)。
 - 🔥 **2026-11-21** Flide 0.1.18 新增 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) 和 [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)，并加了可选的 session cache。
 - 🔥 **2026-11-20** Flide 0.1.17 新增 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)，张量并行更省显存。
 - 🔥 **2026-11-13** Flide 0.1.16 新增三个决策模型家族，包括 [d3](https://huggingface.co/vllm-sr/d3-turbo)、[karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) 和 [this-that](https://huggingface.co/flock-io/this-that-model-1.0)，并支持 LiquidAI 的 [d1-2B](https://huggingface.co/LiquidAI/d1-2B)。
@@ -87,7 +88,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 
 ## 模型
 
-后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个，OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 4B、KnowLine 35B 与 Turion 和各自的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
+后三列是 Flide 回答单个请求比该模型发布版自带的引擎快多少倍，取每个数据集上请求的中位延迟，在一张 H200 上测，DI 指 Decision Index。聊天模型对比的是 vLLM 和 SGLang 中更快的那个（vLLM 不接 Qwen2.5，它只和 SGLang 比），OneJev 对比的是它换用 Flide 之前的 qev，KnowLine 4B、KnowLine 35B 与 Turion 和各自的发布版一样用 FP8 跑（`--quantize fp8`），带 ~ 的是测过的几个尺寸的平均值。
 
 | 模型 | 输入 | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -96,11 +97,12 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | 文本、图片 | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | 文本 | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | 文本 | ~4.1× | ~8.6× | 1.1× |
-| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.7× | ~1.1× | ~1.0× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | 文本、图片 | ~1.8× | ~1.3× | ~1.2× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | 文本 | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | 文本、图片 | ~1.6× | ~1.3× | ~1.1× |
 | [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | 文本、图片 | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | 文本 | ~1.4× | ~4.2× | ~1.2× |
+| [Decision 2.0](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) | 文本 | 4.5× | 5.9× | 2.8× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | 文本、图片 | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | 文本 | 1.1× | 2.0× | 2.8× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | 文本、图片 | ~1.3× | ~1.7× | ~1.0× |
@@ -112,7 +114,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 文本、图片 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 文本 | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | 文本 | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~7.9× | ~1.5× | ~1.7× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 文本 | ~5.7× | ~1.5× | ~2.0× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 文本、图片 | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | 文本 | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 文本 | 2.3× | 8.6× | 1.2× |
@@ -126,6 +128,7 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | 文本 | 4.2× | 5.0× | ~1.5× |
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | 文本、图片 | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | 文本 | ~3.9× | ~7.1× | ~1.6× |
+| [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) 和 [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) | 文本 | ~1.5× | ~4.4× | ~1.3× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | 文本、图片 | ~2.1× | ~4.8× | ~1.3× |
 | [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | 文本 | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 文本 | 3.1× | 28.1× | 1.2× |
@@ -144,7 +147,8 @@ Flide 给 1 万封邮件各回答 8 个问题，只花费28s。[邮件分拣示�
 |---|---|
 | `--session-cache-gb 40` | 保存之前请求的状态，智能体的下一步只读新增的部分 |
 | `--batch-invariant` | 无论和哪些请求同批，同一个请求的结果逐位相同，速度略慢 |
-| `--quantize fp8` | 在 Ada、Hopper、Blackwell 显卡上以 FP8 运行 Qwen3.5 |
+| `--quantize fp8` | 在 Ada、Hopper、Blackwell 显卡上以 FP8 运行 Qwen3.5 和 Gemma 4 |
+| `--quantize int8` | 在 Ampere 及更新的显卡上以 int8 运行 Qwen3.5，加上 `--batch-invariant` 后任何负载下结果都逐位相同 |
 | `--frontends 2` | HTTP、渲染和分词放到两个独立进程里，适合大量客户端 |
 
 ## 许可证

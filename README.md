@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-26** We added [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) and [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) chat models, [kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b), [kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b), [Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) and the text side of [clef-omni](https://huggingface.co/Cloudflare/clef-omni) in Flide 0.1.22, and `--quantize int8` for dense Qwen3.5.
 - 🔥 **2026-11-24** We added [kudhab](https://huggingface.co/plantwaterer/kudhab), [joey-1](https://huggingface.co/baselabs/joey-1), [KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5) and the small [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) models, and request limits for `flide serve` in Flide 0.1.21.
 - 🔥 **2026-11-23** We added Gemma 4 agent sessions in Flide 0.1.20.
-- 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
 - 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
 - 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
 - 🔥 **2026-11-13** We added three decision model families in Flide 0.1.16, including [d3](https://huggingface.co/vllm-sr/d3-turbo), [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) and [this-that](https://huggingface.co/flock-io/this-that-model-1.0), and also [d1-2B](https://huggingface.co/LiquidAI/d1-2B) from LiquidAI.
@@ -87,7 +88,7 @@ On one H200 with OneJev1.6-0.8B, Flide answers one email in 10.0 ms and all 10,0
 
 ## Models
 
-The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang, and OneJev against qev, the engine it used before Flide. KnowLine 4B, KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested. A dash means no benchmark result is available.
+The last three columns say how much faster Flide answers one request than the engine its release ships, as the median latency over the requests of each workload on one H200, where DI is the Decision Index. The chat models run against the faster of vLLM and SGLang (Qwen2.5 against SGLang, as vLLM refuses it), and OneJev against qev, the engine it used before Flide. KnowLine 4B, KnowLine 35B and Turion run with `--quantize fp8`, as their releases serve them in FP8. A value marked ~ is the average over the sizes tested.
 
 | Model | Inputs | DI | MultiRC | QuALITY |
 |---|---|---:|---:|---:|
@@ -96,11 +97,12 @@ The last three columns say how much faster Flide answers one request than the en
 | [AutoTrust](https://huggingface.co/collections/autotrust/autotrust-decision-models-6ada7050d1462de6733b7f98) | text, images | ~3.2× | ~7.6× | ~1.6× |
 | [Bespoke-Nimble](https://huggingface.co/bespokelabs/Nimble-v4-max) | text | ~2.1× | ~1.8× | ~1.5× |
 | [cerno](https://huggingface.co/apertixai/cerno-27b) | text | ~4.1× | ~8.6× | 1.1× |
-| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | ~1.7× | ~1.1× | ~1.0× |
+| [Clef](https://huggingface.co/collections/Cloudflare/clef-6ac429cac15d70ee2af5d1c6) | text, images | ~1.8× | ~1.3× | ~1.2× |
 | [Copernicus](https://huggingface.co/Poindexter-Labs/Copernicus-31B) | text | 1.4× | 2.0× | 1.4× |
 | [d1](https://huggingface.co/LiquidAI/d1-3B) | text, images | ~1.6× | ~1.3× | ~1.1× |
 | [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) | text, images | ~5.1× | ~2.4× | ~1.8× |
 | [Darwin](https://huggingface.co/collections/FINAL-Bench/ztc-models-jev-ecosystems-6aafa630afd69b39ead55aa8) | text | ~1.4× | ~4.2× | ~1.2× |
+| [Decision 2.0](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) | text | 4.5× | 5.9× | 2.8× |
 | [Drex](https://huggingface.co/nace-ai/drex-v2.0) | text, images | ~2.8× | ~6.2× | ~1.5× |
 | [FlexDM](https://huggingface.co/1000luca/FlexDM-LoRA-v2.1) | text | 1.1× | 2.0× | 2.8× |
 | [Gemma 4](https://huggingface.co/collections/google/gemma-4-69ce8ad93186d46744cb42f1) | text, images | ~1.3× | ~1.7× | ~1.0× |
@@ -112,7 +114,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | text, images | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | text | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | text | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~7.9× | ~1.5× | ~1.7× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~5.7× | ~1.5× | ~2.0× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | text | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
@@ -126,8 +128,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Open-Jev](https://huggingface.co/collections/ZefanCai/open-jev-6ab049b9d43a267bae4dedc8) | text | 4.2× | 5.0× | ~1.5× |
 | [pplx-decider](https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2) | text, images | ~2.2× | ~1.4× | ~1.3× |
 | [Quyet](https://huggingface.co/collections/chinhnc/quyet-10-6ac1b597a9a6a6806bb01fa6) | text | ~3.9× | ~7.1× | ~1.6× |
-| [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25) | text | — | — | — |
-| [Qwen3](https://huggingface.co/collections/Qwen/qwen3) | text | — | — | — |
+| [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) and [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) | text | ~1.5× | ~4.4× | ~1.3× |
 | [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35-6992e3053c019221cf2d725f) | text, images | ~2.1× | ~4.8× | ~1.3× |
 | [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) | text | 5.7× | 3.8× | 2.7× |
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | text | 3.1× | 28.1× | 1.2× |
@@ -140,35 +141,14 @@ The last three columns say how much faster Flide answers one request than the en
 | [Wald](https://huggingface.co/collections/org2ai/wald) | text | 1.6× | 12.7× | 1.5× |
 | [Xor](https://huggingface.co/juspay/Xor-26B-A4B) | text, images, video | 2.5× | 6.2× | 2.8× |
 
-The Qwen2.5 and Qwen3 backbones support full-attention text checkpoints with length-independent RoPE, including
-YaRN. The RoPE frequencies must span each attention head. Dynamic NTK and LongRoPE are rejected at load time.
-
-### H100 text latency
-
-Flide and vLLM 0.28.0 ran the same BF16 checkpoints on one NVIDIA H100 80 GB with CUDA graphs enabled and
-one request in flight. For each workload, 32 validation states were timed twice after warmup, with all selected
-questions for a state in one request and a unique state tag for each timed request.
-[MultiRC validation](https://huggingface.co/datasets/aps/super_glue/tree/main/multirc) · [QuALITY validation](https://github.com/nyu-mll/quality)
-
-P50 is the median HTTP round-trip latency. Flide receives text at `/v1/systemone`. vLLM receives the same
-prompts as pre-tokenized IDs in one `/v1/completions` call per state, with prefix caching enabled and
-first-token log probabilities for the answer labels. vLLM's client-side prompt rendering and tokenization
-are outside the timed interval. Speedup is vLLM P50 divided by Flide P50.
-
-| Model | Workload | Flide P50 (ms) | vLLM P50 (ms) | Speedup |
-|---|---|---:|---:|---:|
-| Qwen2.5-7B-Instruct | MultiRC | 75.2 | 90.2 | 1.20× |
-| Qwen2.5-7B-Instruct | QuALITY | 225.0 | 310.0 | 1.38× |
-| Qwen3-4B-Instruct-2507 | MultiRC | 52.7 | 87.5 | 1.66× |
-| Qwen3-4B-Instruct-2507 | QuALITY | 180.1 | 265.1 | 1.47× |
-
 ## Options
 
 | Option | What it does |
 |---|---|
 | `--session-cache-gb 40` | keeps the states of earlier requests, so an agent's next step reads only what is new |
 | `--batch-invariant` | the same bits for a request whatever it is batched with, at some cost in speed |
-| `--quantize fp8` | Qwen3.5 in FP8 on Ada, Hopper and Blackwell GPUs |
+| `--quantize fp8` | Qwen3.5 and Gemma 4 in FP8 on Ada, Hopper and Blackwell GPUs |
+| `--quantize int8` | Qwen3.5 in int8 on Ampere and later GPUs, with `--batch-invariant` the same bits at any load |
 | `--frontends 2` | HTTP, rendering and tokenizing in two processes of their own, for many clients |
 
 ## License
