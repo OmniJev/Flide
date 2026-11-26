@@ -2,13 +2,16 @@
 tensors, bit for bit, as reading the whole model and cutting it, in 16 bits and in float8 (no GPU needed)."""
 import tempfile
 import types
+from unittest.mock import Mock, patch
 
 import torch
 import transformers
 
+from flide import backbones, settings
 from flide.backbones.load import build, load_into
 from flide.backbones.qwen35 import decoder
 from flide.kernels.fp8 import quantize_rows
+from flide.runtime import tp
 
 CPU = torch.device("cpu")
 ARCH = transformers.Qwen3_5ForCausalLM
@@ -75,6 +78,20 @@ def test_two_ranks():
 
 def test_four_ranks():
     check(4)
+
+
+def test_worker_sets_batch_invariant_before_loading():
+    def load(*args, **kwargs):
+        assert settings.batch_invariant is True
+
+    conn = Mock()
+    conn.recv.return_value = None
+    with (patch.object(settings, "batch_invariant", False), patch.object(tp, "_init"),
+          patch.object(backbones, "get", return_value=types.SimpleNamespace(load=load)),
+          patch("flide.kernels.launcher.install"), patch("flide.runtime.kcache.seed"),
+          patch("flide.runtime.kcache.tune")):
+        tp._worker(1, 2, 0, "qwen2", "unused", "cuda:1", "bfloat16", {}, True, conn)
+    conn.send.assert_called_once_with("ready")
 
 
 if __name__ == "__main__":

@@ -402,6 +402,9 @@ class Engine:
         def launch(mb):
             """Queue a micro-batch on the GPU; its head outputs come back to the host without waiting."""
             batch = pack([p.job for p in mb.pieces], self.backbone.device)
+            # Splitting a plan's branches can leave the piece with the save points reading only early layers.
+            if batch.marks and FINAL not in batch.reads and self.backbone.num_layers not in batch.reads:
+                batch.marks.clear()
             shape = budget
             while shape < mb.tokens:
                 shape *= 2
@@ -582,7 +585,10 @@ class Engine:
             if p is None or not self._session_ok(p):
                 continue
             entry, start = self.sessions.match(p.prefix)
-            marks = self.sessions.marks(len(p.prefix), start)
+            # A saved prefix can be reused by deeper reads. Only save it if this plan computes every layer.
+            full = any(r.layer is FINAL or r.layer == self.backbone.num_layers
+                       for b in range(len(p.suffixes)) for r in p.branch_reads(b))
+            marks = self.sessions.marks(len(p.prefix), start) if full else ()
             if start or marks:
                 out[i] = {"start": start, "resume": entry, "marks": marks}
         return out

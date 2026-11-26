@@ -150,7 +150,7 @@ def known(model_dir: str, decision_config: dict | None) -> dict | None:
 
 @register("template", format_ids=(FORMAT_ID,))
 class Template(Format):
-    backbones = ("qwen3_5", "qwen3_5_text", "gemma4", "gemma4_text", "gemma4_unified")
+    backbones = ("qwen2", "qwen3", "qwen3_moe", "qwen3_5", "qwen3_5_text", "gemma4", "gemma4_text", "gemma4_unified")
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:

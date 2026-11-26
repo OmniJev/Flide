@@ -134,7 +134,7 @@ def add_parser(sub) -> None:
                    help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+); "
                         "changes the numbers a little")
     s.add_argument("--tp", type=int, default=1,
-                   help="tensor parallel over this many GPUs, --device and the ones after it (Qwen3.5 dense models)")
+                   help="tensor parallel over this many GPUs, --device and the ones after it (Qwen2, Qwen3 and Qwen3.5 dense models)")
     s.add_argument("--budget", type=_positive_int, default=None,
                    help="tokens per micro-batch (default 65536, or 16384 on a card of 24 GB or less)")
     s.add_argument("--max-branch-tokens", type=int, default=None)
