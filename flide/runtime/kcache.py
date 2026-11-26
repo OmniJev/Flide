@@ -468,6 +468,107 @@ def warm_requests(eng) -> None:
         eng.forward([p], mode="packed")
 
 
+class _Calls:
+    """Notes how the backbones call the kernels whose compiled forms follow a round's counts while models warm: the
+    attention tile scan (`attention.block_ranges`) and the grouped expert products (kernels/moe.py), for `warm_counts`."""
+
+    def __enter__(self):
+        from .. import settings
+        from ..kernels import attention, moe
+
+        self.tiles, self.experts, ids = set(), {}, [None]
+        self.real = [(attention, "block_ranges"), (moe, "align"), (moe, "grouped"), (moe, "grouped_fp8")]
+        self.real = [(m, name, getattr(m, name)) for m, name in self.real]
+        block_ranges, align, grouped, grouped_fp8 = (f for _, _, f in self.real)
+
+        def held(x):   # rows of one tensor, columns of one, or vectors of their own
+            own = x[0].untyped_storage().data_ptr() != x[1].untyped_storage().data_ptr()
+            return (None if x[0].stride(0) not in (1, 4) else "apart" if own and x[0].stride(0) == 1
+                    else "rows" if x[0].stride(0) == 1 else "columns")
+
+        def noted_ranges(lo1, hi1, lo2, hi2, block_m, block_n=0, exact=False, groups=0, tiles_from=None):
+            how = held((lo1, hi1)), None if tiles_from is None else held(tiles_from)
+            if None not in how[:1 if tiles_from is None else 2]:
+                self.tiles.add((block_m, block_n, bool(exact), bool(groups), *how, bool(settings.batch_invariant),
+                                str(lo1.device)))
+            return block_ranges(lo1, hi1, lo2, hi2, block_m, block_n, exact, groups, tiles_from)
+
+        def noted_align(i, *args):
+            ids[0] = i.dtype
+            return align(i, *args)
+
+        def note(a, w, scale, out, topk, by_token, weights):
+            key = (tuple(w.shape), w.dtype, a.dtype, a.shape[1], out.dtype, topk, by_token,
+                   None if weights is None else weights.dtype, ids[0])
+            self.experts.setdefault(key, (w, scale))
+
+        def noted_grouped(a, w, out, rows, blocks, used, topk, by_token, weights=None, tile=None):
+            note(a, w, None, out, topk, by_token, weights)
+            return grouped(a, w, out, rows, blocks, used, topk, by_token, weights, tile)
+
+        def noted_fp8(a, w, w_scale, out, rows, blocks, used, topk, by_token, weights=None, tile=None):
+            note(a, w, w_scale, out, topk, by_token, weights)
+            return grouped_fp8(a, w, w_scale, out, rows, blocks, used, topk, by_token, weights, tile)
+
+        for (m, name, _), f in zip(self.real, (noted_ranges, noted_align, noted_grouped, noted_fp8)):
+            setattr(m, name, f)
+        return self
+
+    def __exit__(self, *exc):
+        for m, name, f in self.real:
+            setattr(m, name, f)
+
+
+def warm_counts(calls: _Calls) -> None:
+    """The kernels that take a round's counts, in every form Triton compiles them: a kernel differs with whether a count
+    is one or a multiple of 16 and whether a vector starts on 16 bytes, all of which follow the rows and tokens of a
+    packed round, and the expert products change their tiles with the round. A family or a round of other counts than
+    the warm-up's would compile one while it answers, so each kind of call the models made runs at counts of every class."""
+    import torch
+
+    from .. import settings
+    from ..kernels import attention, moe
+
+    def vectors(T, how, device):
+        if how == "apart":
+            return [torch.zeros(T, dtype=torch.int32, device=device) for _ in range(4)]
+        x = torch.zeros((4, T) if how == "rows" else (T, 4), dtype=torch.int32, device=device)
+        return list(x if how == "rows" else x.T)
+
+    was = settings.batch_invariant
+    try:
+        for bm, bn, exact, grouped, how, by, invariant, device in sorted(calls.tiles, key=str):
+            settings.batch_invariant = invariant
+            if grouped:
+                shapes = [(T, g) for T in (1, 2, 3, 4, 16) for g in (1, 3, 15)]
+            else:
+                shapes = [(T, 0) for T in (1, 2, 3, 4, 16)] + [(k * bm + r, 0) for k in (1, 3, 15) for r in (1, 2, 4, 16)]
+            for T, groups in shapes:
+                attention.block_ranges(*vectors(T, how, device), bm, bn, exact, groups,
+                                       None if by is None else vectors(T, by, device))
+    finally:
+        settings.batch_invariant = was
+    for key, (w, scale) in calls.experts.items():
+        (E, N, KD), _, dtype, width, out_dtype, K, by_token, weight_dtype, ids_dtype = key
+        fp8, done = scale is not None, set()
+        for T in (*range(1, 600), *range(28000 // K - 600, 28000 // K + 1200), *range(15000 // K, 15000 // K + 600)):
+            n = T * K   # every tile the count picks, pairs and row blocks a multiple of 16 or not
+            t = moe.tile(n, fp8, w.device)
+            blocks_n = -(-(n + E * (t[0] - 1)) // t[0])
+            kind = (t, n % 16 == 0, blocks_n % 16 == 0)
+            if kind in done:
+                continue
+            done.add(kind)
+            rows, blocks, used = moe.align(torch.zeros((T, K), dtype=ids_dtype, device=w.device), E, t[0])
+            a = torch.zeros((T if by_token else n, width), dtype=dtype, device=w.device)
+            out = torch.empty((n, N), dtype=out_dtype, device=w.device)
+            weights = None if weight_dtype is None else torch.zeros(n, dtype=weight_dtype, device=w.device)
+            if fp8:
+                moe.grouped_fp8(a, w, scale, out, rows, blocks, used, K, by_token, weights, tile=t)
+            else:
+                moe.grouped(a, w, out, rows, blocks, used, K, by_token, weights, tile=t)
+
+
 def export(args) -> None:
     """Warm each model in a fresh cache directory and pack every kernel that ran."""
     tmp = tempfile.mkdtemp(prefix="flide-kernels-")
@@ -491,12 +592,16 @@ def export(args) -> None:
         opts = {"cuda_graphs": True, "quantize": args.quantize}
         if args.no_weights:
             opts["loader"] = "none"
-        eng = Engine(model, format=args.format, device=args.device, dtype=args.dtype, capture=True,
-                     session_cache_gb=1.0 if args.sessions else 0.0, backbone_options=opts)
-        warm_blocks(eng)
-        warm_requests(eng)
-        log.info("%s warm in %.1fs, %d kernels so far", model, time.perf_counter() - t0, len(rec.seen))
-        del eng
+        with _Calls() as calls:
+            eng = Engine(model, format=args.format, device=args.device, dtype=args.dtype, capture=True,
+                         session_cache_gb=1.0 if args.sessions else 0.0, backbone_options=opts)
+            warm_blocks(eng)
+            warm_requests(eng)
+        n = len(rec.seen)
+        warm_counts(calls)
+        log.info("%s warm in %.1fs, %d kernels so far (%d of them at other counts)", model, time.perf_counter() - t0,
+                 len(rec.seen), len(rec.seen) - n)
+        del eng, calls
         gc.collect()
         torch.cuda.empty_cache()
     knobs.runtime.jit_post_compile_hook = None
@@ -563,7 +668,7 @@ def add_parser(sub) -> None:
     e.add_argument("--dtype", default="bfloat16")
     e.add_argument("--sessions", action="store_true", help="also compile the session (save / resume) path")
     e.add_argument("--no-weights", action="store_true", help="build each model from its config, weights unread")
-    e.add_argument("--quantize", default=None, choices=["fp8"], help="the kernels of FP8 serving")
+    e.add_argument("--quantize", default=None, choices=["fp8", "int8"], help="the kernels of 8-bit serving")
     e.add_argument("--tuning", default=None, metavar="BUNDLES",
                    help="start the autotuners from these bundles' picks (files or directories, ':'-separated)")
     e.set_defaults(func=export)
