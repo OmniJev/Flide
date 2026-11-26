@@ -99,11 +99,14 @@ def one_word_pairs(tokenizer) -> set[str] | None:
 
 
 class Pieces:
+    CHECKS = 8   # calls of `rows` that also tokenize one text whole
+
     def __init__(self, tokenizer):
         self.ok = splits_like_gpt(tokenizer)
         self.pairs = None if self.ok else one_word_pairs(tokenizer)
         if self.pairs is not None:
             self.ok = True
+        self._checked = 0
 
     def cuts(self, text: str, lo: int = 0, hi: int | None = None):
         """The cuts in text[lo:hi], in order (none when `ok` is False)."""
@@ -148,6 +151,24 @@ class Pieces:
             out[k] += e.ids
         return out
 
+    def rows(self, tokenizer, texts: list[str]) -> tuple[list[int], list[list[int]]]:
+        """The texts' token ids as a head they all start with and each one's tail after it: their common start is
+        tokenized once, up to a cut where tokens restart, so a request of many prompts over one long state costs one
+        pass over the state. The first calls also tokenize a text whole, and a difference turns the cuts off. One text,
+        or texts without a cut in their common start, come whole after an empty head."""
+        if len(texts) > 1 and self.ok:
+            a, b = min(texts), max(texts)   # the common start of all is that of the first and last in order
+            lo = common_prefix_len(a, b)
+            c = self.last_cut(texts[0], lo - 1) if lo else 0
+            if c:
+                head, *tails = self.encode(tokenizer, [texts[0][:c]] + [t[c:] for t in texts])
+                if self._checked >= self.CHECKS or head + tails[0] == self.encode(tokenizer, texts[:1])[0]:
+                    self._checked += 1
+                    return head, tails
+                self.ok = False
+                log.warning("tokenizing in pieces off: a cut changed the tokens of a prompt")
+        return [], self.encode(tokenizer, texts)
+
     def split(self, text: str) -> list[str]:
         """The pieces `encode` tokenizes a text in: a long text cut, any other whole."""
         return self._split(text) if self.ok and len(text) >= LONG else [text]
@@ -180,6 +201,18 @@ def common_prefix_len(a: str, b: str) -> int:
     while lo < hi and a[lo] == b[lo]:
         lo += 1
     return lo
+
+
+def common_start(rows: list[list[int]]) -> int:
+    """How many tokens every row starts with, one token of each left over (compared by slices, in C)."""
+    first, lo, hi = rows[0], 0, min(len(r) for r in rows) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if all(r[lo:mid] == first[lo:mid] for r in rows[1:]):
+            lo = mid
+        else:
+            hi = mid - 1
+    return max(lo, 0)
 
 
 class TokenCache:

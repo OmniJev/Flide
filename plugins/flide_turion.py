@@ -24,6 +24,7 @@ from flide.api.schema import SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import register
 from flide.formats.base import Format, Plan, Read
 from flide.formats.next_token import TokenRows
+from flide.formats.tokens import Pieces, common_start
 
 REPOS = ("turion-ai/turion-jev-31b",)
 FILES = ("turion_jev.json", "prompt_config.json")
@@ -87,16 +88,6 @@ def _softmax(xs: list[float], t: float) -> list[float]:
     return [x / s for x in w]
 
 
-def _common(seqs: list[list[int]]) -> int:
-    """Tokens every sequence starts with, leaving at least one token in each."""
-    m = min(len(s) for s in seqs) - 1
-    for i in range(m):
-        t = seqs[0][i]
-        if any(s[i] != t for s in seqs):
-            return i
-    return max(m, 0)
-
-
 @register("turion")
 class Turion(Format):
     backbones = ("gemma4", "gemma4_text", "gemma4_unified")
@@ -120,6 +111,7 @@ class Turion(Format):
         self.second_pass_max_questions = int(second_pass_max_questions)
         self.repeat_max_questions = int(repeat_max_questions)
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self._pieces = Pieces(self.tokenizer)
         self.codes, self.code_ids = self._codes(self.n_slots)
 
     @classmethod
@@ -189,16 +181,17 @@ class Turion(Format):
                 jobs.append((i, True))
         if not jobs:   # every question has one option: one read, so that the round is not empty; its answer is set
             jobs.append((0, False))
-        seqs = []
+        texts = []
         for i, rev in jobs:
             q = qs[i]
             opts = list(reversed(q["options"])) if rev else q["options"]
-            ids = self._enc(self.prompt(q["type"], state, q["text"], opts, asked, repeat))
-            if len(ids) > self.max_len:
-                raise ValueError(f"prompt of {len(ids)} tokens exceeds max_len {self.max_len}")
-            seqs.append(ids)
-        m = _common(seqs) if len(seqs) > 1 else len(seqs[0]) - 1
-        return Plan(seqs[0][:m], [s[m:] for s in seqs], (READ,), {"questions": qs, "jobs": jobs})
+            texts.append(self.prompt(q["type"], state, q["text"], opts, asked, repeat))
+        head, tails = self._pieces.rows(self.tokenizer, texts)   # the state is tokenized once
+        for t in tails:
+            if len(head) + len(t) > self.max_len:
+                raise ValueError(f"prompt of {len(head) + len(t)} tokens exceeds max_len {self.max_len}")
+        m = common_start(tails) if len(tails) > 1 else len(tails[0]) - 1
+        return Plan(head + tails[0][:m], [t[m:] for t in tails], (READ,), {"questions": qs, "jobs": jobs})
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         qs, jobs = plan.data["questions"], plan.data["jobs"]

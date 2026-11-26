@@ -23,6 +23,7 @@ from flide.api.schema import SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import register
 from flide.formats.base import FINAL, Format, Plan, Read
 from flide.formats.next_token import TokenRows
+from flide.formats.tokens import Pieces, common_start
 
 READ_HEAD = "labels"
 MAX_OPTIONS = 173
@@ -212,6 +213,7 @@ class SearchJev(Format):
 
         self.model_dir = model_dir
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self._pieces = Pieces(self.tokenizer)
         self.language = language
         self.style = style
         self.max_length = int(max_length)
@@ -298,8 +300,8 @@ class SearchJev(Format):
     def _n_tokens(self, text: str) -> int:
         return len(self.tokenizer.encode(text, add_special_tokens=False))
 
-    def _compose(self, state: str, qtype: str, instructions: str,
-                 options: Sequence[tuple[str, str]]) -> list[int]:
+    def _budget(self, qtype: str, instructions: str, options: Sequence[tuple[str, str]]) -> tuple[int | None, int]:
+        """(option clip, tokens left for the state) of a question, from its prompt without the state."""
         clip = None
         fixed = self._n_tokens(self._wrap(self._render_user("", qtype, instructions, options)))
         budget = self.max_length - fixed - STATE_SLACK_TOKENS
@@ -309,41 +311,55 @@ class SearchJev(Format):
             budget = self.max_length - fixed - STATE_SLACK_TOKENS
             if budget < 1:
                 raise ValueError(f"the fixed prompt is {fixed} tokens; no room for the state")
+        return clip, budget
+
+    def _state_text(self, state_src: str, state_ids: list[int], budget: int) -> str:
+        """The state as a prompt shows it, cut to `budget` tokens."""
+        if len(state_ids) <= budget:
+            return state_src
+        return self.tokenizer.decode(state_ids[:budget], skip_special_tokens=True).rstrip() + TRUNCATION_MARK
+
+    def _compose(self, state: str, specs: Sequence[tuple[str, str, Sequence[tuple[str, str]]]]) -> list[list[int]]:
+        """Each question's prompt ids (type, instructions, options): the state is tokenized once, the prompts share it, and a
+        prompt that still does not fit is cut again, question by question."""
         state_src = self._neutralize(state)
         state_ids = self.tokenizer.encode(state_src, add_special_tokens=False)
-        state_text = state_src
-        for _ in range(_MAX_REFIT_ROUNDS):
-            if len(state_ids) > budget:
-                state_text = self.tokenizer.decode(state_ids[:budget], skip_special_tokens=True).rstrip()
-                state_text += TRUNCATION_MARK
-            prompt = self._wrap(self._render_user(state_text, qtype, instructions, options, clip))
-            ids = self.tokenizer.encode(prompt, add_special_tokens=False)
-            if len(ids) <= self.max_length:
-                return ids
-            budget -= (len(ids) - self.max_length) + STATE_SLACK_TOKENS
-            if budget < 1:
-                break
-        raise ValueError("the prompt could not be fitted into max_length")
+        fits = [self._budget(*spec) for spec in specs]
+        texts = [self._wrap(self._render_user(self._state_text(state_src, state_ids, budget), *spec, clip))
+                 for spec, (clip, budget) in zip(specs, fits)]
+        head, tails = self._pieces.rows(self.tokenizer, texts)
+        out = []
+        for spec, (clip, budget), tail in zip(specs, fits, tails):
+            ids = head + tail
+            for _ in range(_MAX_REFIT_ROUNDS - 1):
+                if len(ids) <= self.max_length:
+                    break
+                budget -= (len(ids) - self.max_length) + STATE_SLACK_TOKENS
+                if budget < 1:
+                    break
+                prompt = self._wrap(self._render_user(self._state_text(state_src, state_ids, budget), *spec, clip))
+                ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+            if len(ids) > self.max_length or budget < 1:
+                raise ValueError("the prompt could not be fitted into max_length")
+            out.append(ids)
+        return out
 
     # ---------------------------------------------------------------- plan
     def plan(self, request: SystemOneRequest, **_) -> Plan:
         state = render_state(request.state)
         if not state:
             raise ValueError("empty state")
-        rows, data = [], []
+        specs, data = [], []
         for name, q in request.questions.items():
             kind = q.type
             options = build_options(kind, q.criteria)
             instructions = "" if q.instructions is None else str(q.instructions).strip()
             if not 2 <= len(options) <= len(self.labels):
                 raise ValueError(f"question {name!r} needs 2 to {len(self.labels)} options, got {len(options)}")
-            rows.append(self._compose(state, kind, instructions or "", options))
+            specs.append((kind, instructions or "", options))
             data.append((name, kind, tuple(k for k, _ in options), tuple(options)))
-        m = min(len(r) for r in rows) - 1
-        for i in range(m):
-            if any(r[i] != rows[0][i] for r in rows):
-                m = i
-                break
+        rows = self._compose(state, specs)
+        m = common_start(rows) if len(rows) > 1 else len(rows[0]) - 1
         return Plan(rows[0][:m], [r[m:] for r in rows], (Read(READ_HEAD),), data)
 
     def _temperature(self, kind: str) -> float:

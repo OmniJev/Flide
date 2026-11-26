@@ -36,6 +36,7 @@ from flide.api.schema import SystemOneRequest, SystemOneResponse, Usage
 from flide.formats import register
 from flide.formats.base import Format, Plan, Read
 from flide.formats.next_token import TokenRows
+from flide.formats.tokens import Pieces
 
 SCHEMA = "jev-l01post-head-v1"
 HEAD_FILE, HEAD_META = "vbll_head.safetensors", "vbll_head.json"
@@ -275,6 +276,7 @@ class Liquamen(Format):
         if hashlib.sha256(raw).hexdigest() != meta["tensor_sha256"]:
             raise ValueError(f"{model_dir}: {HEAD_FILE} differs from the sha256 in {HEAD_META}")
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self._pieces = Pieces(self.tokenizer)
         ids = []
         for ch in LABELS:
             t = self._enc(ch)
@@ -332,7 +334,7 @@ class Liquamen(Format):
             st = st[: int(off[budget - 1][1])]
         return self._render(st, unit["instructions"], opts)
 
-    def _prompts(self, st: str, n_state, unit: dict, averaged: bool) -> list[tuple[list[int], list[int]]]:
+    def _prompts(self, st: str, n_state, unit: dict, averaged: bool) -> list[tuple[list[int], str]]:
         k = len(unit["keys"])
         base = _base_order(k, _seed(st, unit["hkey"], unit["keys"])) if unit["type"] == "choice" else list(range(k))
         orders = [base]
@@ -345,7 +347,7 @@ class Liquamen(Format):
             if text is None or (i == 0 and st.lstrip() not in text):
                 raise ValueError(f"maximum context length: question {unit['hkey']!r} does not fit {MAX_LEN} tokens "
                                  f"without cutting the state")
-            out.append((order, self._enc(text)))
+            out.append((order, text))
         return out
 
     def _unit(self, key: str, hkey: str, kind: str, keys: list[str], texts: list[str], instructions: str,
@@ -354,12 +356,13 @@ class Liquamen(Format):
                 "k52": k52}
 
     def _plan(self, st: str, n_state, units: list[dict], averaged: bool, data: dict) -> Plan:
-        seqs, prompts = [], []
+        texts, prompts = [], []
         for ui, unit in enumerate(units):
-            for order, ids in self._prompts(st, n_state, unit, averaged):
+            for order, text in self._prompts(st, n_state, unit, averaged):
                 prompts.append((ui, order))
-                seqs.append(ids)
-        return Plan([], seqs, (READ,), {**data, "units": units, "prompts": prompts}, attention="blocks")
+                texts.append(text)
+        head, tails = self._pieces.rows(self.tokenizer, texts)   # the state is tokenized once
+        return Plan([], [head + t for t in tails], (READ,), {**data, "units": units, "prompts": prompts}, attention="blocks")
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
         if getattr(request, "images", None):

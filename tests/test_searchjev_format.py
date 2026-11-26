@@ -8,6 +8,7 @@ not.
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins"))
@@ -34,6 +35,11 @@ class StubTokenizer:
 
     def decode(self, ids):
         return "".join(self._text.get(i, "") for i in ids)
+
+    @property
+    def backend_tokenizer(self):   # what formats/tokens.py tokenizes with; no split it knows, so texts go whole
+        return SimpleNamespace(encode=lambda t, add_special_tokens=False: SimpleNamespace(ids=self.encode(t)),
+                               encode_batch=lambda ts, add_special_tokens=False: [SimpleNamespace(ids=self.encode(t)) for t in ts])
 
 
 def main():
@@ -63,13 +69,14 @@ def main():
     tok = StubTokenizer()
     fmt = family.SearchJev.__new__(family.SearchJev)
     fmt.tokenizer, fmt.language, fmt.style = tok, "bilingual", "plain"
+    fmt._pieces = family.Pieces(tok)
     fmt.max_length = 2048
     fmt.system_prompt = family.SYSTEM_PROMPTS["bilingual"]
     fmt.hints = family.TYPE_HINTS["bilingual"]
     fmt.answer_line = family.ANSWER_INSTRUCTIONS["bilingual"]
     fmt.labels = list("ABCDEFGH")
     fmt.temperature = None
-    ids = fmt._compose("the state", "noul", "Is it urgent?", family.noul_options())
+    ids = fmt._compose("the state", [("noul", "Is it urgent?", family.noul_options())])[0]
     text = tok.decode(ids)
     check("the prompt opens the state inside the untrusted markers",
           "### State\n<<<STATE\nthe state\nSTATE>>>" in text, text[:80])
