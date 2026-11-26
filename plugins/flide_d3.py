@@ -274,7 +274,10 @@ class D3(Format):
                 # the first question pays one full tokenize; it yields the prefix and the character cut
                 prefix, prefix_text, branch = self._prefix_of(text, state)
                 first = text
-            elif text[:len(prefix_text)] == prefix_text:
+                if len(items) > 1 and self._branch_of(text, prefix_text) != branch:
+                    prefix_text = None   # the offsets do not cut this text cleanly (a decomposed character at the state's
+                    # end: the normalizer composes it and its offsets stop before the mark), so every prompt goes whole
+            elif prefix_text is not None and text.startswith(prefix_text):
                 branch = self._branch_of(text, prefix_text)
             else:
                 # the shared segment differs in its text, so tokenize this prompt whole and compare ids
