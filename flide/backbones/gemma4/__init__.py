@@ -185,7 +185,7 @@ class Gemma4(Backbone):
             key_map = [(r"^model\.language_model\.", "model.")]
         cfg._attn_implementation = IMPL
         # FP8 of the dense decoder: its projections go to float8 as they are read, so the 16-bit copies never sit
-        # on the device (a mixture of experts loads 16 bits and stays unquantized)
+        # on the device (a mixture of experts loads 16 bits, then its experts go to float8: quantize_fp8_experts)
         text = config.get_text_config() if hasattr(config, "get_text_config") else config
         tp = options.get("tp")
         lean_fp8 = (options.get("quantize") == "fp8" and not getattr(text, "enable_moe_block", False)
@@ -267,11 +267,9 @@ class Gemma4(Backbone):
         self._experts()
         self._fused = None
         if quantize is not None:
-            if self.moe:
-                raise NotImplementedError(
-                    "gemma4: --quantize fp8 covers the dense decoder; a mixture-of-experts checkpoint stays "
-                    "unquantized for now")
-            if fp8_store is not None:   # read as float8 already (load)
+            if self.moe:   # its routed experts alone, as the Qwen3.5 mixture of experts
+                self.quantize_fp8_experts()
+            elif fp8_store is not None:   # read as float8 already (load)
                 from ...kernels import fp8
                 from .fused import FusedDecoder
 
@@ -314,6 +312,33 @@ class Gemma4(Backbone):
             mods += [m for m in (getattr(a, "k_proj", None), getattr(a, "v_proj", None)) if m is not None]
             for m in mods:
                 m.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        return n
+
+    @torch.no_grad()
+    def quantize_fp8_experts(self) -> int:
+        """A mixture of experts under `--quantize fp8`: its routed experts to float8 with one scale per expert and output
+        row (kernels/moe.py), as the Qwen3.5 mixture of experts has them; attention, the dense MLP, the router, the
+        embedding and the head keep the model's dtype, which in float8 move the answers more than the experts do. The
+        16-bit experts are freed. Returns the number of weights converted."""
+        from ...kernels import fp8
+        from ...kernels.moe import quantize_experts
+        from .fused import FusedDecoder
+
+        if not fp8.supported(self.device):
+            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        fused = FusedDecoder(self.lm, float32_residual=self.float32_residual)
+        n = 0
+        for layer, w in zip(self.lm.layers, fused.w):
+            m = w.get("moe")
+            if m is None:
+                continue
+            for key in ("experts", "experts_down"):
+                m[key], m[key + "_scale"] = quantize_experts(m[key])
+                n += 1
+            layer.experts.gate_up_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+            layer.experts.down_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        self._fused = fused
+        torch.cuda.empty_cache()
         return n
 
     def _experts(self) -> str | None:
