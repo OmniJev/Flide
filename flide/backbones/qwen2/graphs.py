@@ -18,6 +18,7 @@ log = logging.getLogger("flide.graphs")
 
 LADDER = (32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072, 4096, 5120, 6144, 8192)
 MAX_READS = 256
+FULL = "full"   # graphs that read every row of the stream (a head over all positions), captured when first needed
 
 
 class Qwen2Graphs:
@@ -38,7 +39,7 @@ class Qwen2Graphs:
             self.pool = torch.cuda.graph_pool_handle()
             self.staged = torch.cuda.Event()
             self.done = torch.cuda.Event()
-            self.host = torch.zeros(8 * LADDER[-1] + MAX_READS, dtype=torch.int32, pin_memory=True)
+            self.host = torch.zeros(9 * LADDER[-1], dtype=torch.int32, pin_memory=True)
             self.inputs = torch.empty_like(self.host, device=self.device)
         self.host_array = self.host.numpy()
         self.offsets = np.arange(LADDER[-1], dtype=np.int32)
@@ -60,7 +61,28 @@ class Qwen2Graphs:
             reads = len(item[4]) if len(suffixes) == 1 else sum(map(len, item[4]))
         return len(prefix) + sum(map(len, suffixes)), reads
 
+    def _rung(self, requests, tokens, reads, *, limit_padding=True, branches=0):
+        """(size, full) of the graph that runs that many requests, tokens and reads (`branches` of them), or None. A graph that
+        reads every row (`full`) is taken where the reads a smaller graph has room for would mean a rung over twice as
+        large: a head over all positions asks for as many reads as tokens."""
+        if requests == 0 or reads <= 0:
+            return None
+        first = bisect.bisect_left(LADDER, tokens)
+        small = None
+        for size in LADDER[first:]:
+            if limit_padding and tokens >= 1024 and size - tokens > tokens // 8:
+                break   # the packed path avoids running the extra rows through every decoder layer
+            if requests > self._request_limit(size):
+                continue
+            if small is None and reads <= size and branches <= MAX_READS:
+                small = size
+            if reads <= self._read_limit(size):
+                return (size, False) if small is None or size <= 2 * small else (small, True)
+        return (small, True) if small is not None else None
+
     def flat_rung(self, requests, tokens, reads, *, limit_padding=True):
+        """The rung of the graphs that read at most `_read_limit` rows, or None: the size of a round the engine composes (and
+        of the session graphs)."""
         if requests == 0 or not 0 < reads <= MAX_READS:
             return None
         first = bisect.bisect_left(LADDER, tokens)
@@ -71,15 +93,21 @@ class Qwen2Graphs:
                 return size
         return None
 
+    def whole(self, item) -> bool:
+        """A request whose reads take a graph of every row (`FULL`): it runs alone."""
+        tokens, reads = self.flat_cost(item)
+        rung = self._rung(1, tokens, reads, branches=len(item[1]))
+        return rung is not None and rung[1]
+
     @staticmethod
     def fits(prefix_len, suffix_lens):
         return False   # all graph replays go through run_flat
 
-    def _stage(self, items, size):
+    def _stage(self, items, size, full=False):
         self.staged.synchronize()
         data = self.host_array[:8 * size].reshape(8, size)
         ids, pos, job, branch, lo1, hi1, lo2, hi2 = data
-        reads = self.host_array[8 * size:8 * size + self._read_limit(size)]
+        reads = self.host_array[8 * size:8 * size + (size if full else self._read_limit(size))]
         data.fill(0)
         reads.fill(size - 1)
         at = 0
@@ -121,18 +149,19 @@ class Qwen2Graphs:
         self.staged.record()
         return read_at
 
-    def _body(self, size, groups):
+    def _body(self, size, groups, full=False):
         ids, pos, job, branch = self.inputs[:4 * size].view(4, size)
-        reads = self.inputs[8 * size:8 * size + self._read_limit(size)].long()
+        reads = self.inputs[8 * size:8 * size + (size if full else self._read_limit(size))].long()
         hidden = self.backbone.lm.embed_tokens(ids)
         ranges = self.inputs[4 * size:8 * size].view(4, size)
         return self.backbone.decode(hidden, pos, (job, branch, pos), ranges, groups, {FINAL: reads})[FINAL]
 
-    def _capture(self, size):
-        groups = self._request_limit(size) + self._read_limit(size) + 1
-        return self._record((size, settings.batch_invariant),
-                            lambda: self._stage([([0] * (size - 2), [[0]], None)], size),
-                            lambda: self._body(size, groups))
+    def _capture(self, size, full=False):
+        # requests and branches bound the runs of rows sharing a range: every branch is read once or more
+        groups = self._request_limit(size) + (MAX_READS if full else self._read_limit(size)) + 1
+        key = (size, settings.batch_invariant, FULL) if full else (size, settings.batch_invariant)
+        return self._record(key, lambda: self._stage([([0] * (size - 2), [[0]], None)], size, full),
+                            lambda: self._body(size, groups, full))
 
     def _record(self, key, stage, body):
         if key in self.graphs:
@@ -177,7 +206,7 @@ class Qwen2Graphs:
 
     @torch.inference_mode()
     def capture_sflat(self):
-        """Warm the largest session workspace before the engine allocates its KV arena."""
+        """Warm the largest session work space before the engine allocates its KV arena."""
         from .session_graphs import CONTEXT_LADDER, MAX_STREAM, SessionGraphs
 
         shape = MAX_STREAM, CONTEXT_LADDER[-1]
@@ -195,17 +224,18 @@ class Qwen2Graphs:
         if not items or any(not item[0] or not item[1] or not all(item[1]) or item[2] is not None for item in items):
             return None
         tokens, reads = map(sum, zip(*(self.flat_cost(item) for item in items)))
-        size = self.flat_rung(len(items), tokens, reads)
-        if size is None:
+        rung = self._rung(len(items), tokens, reads, branches=sum(len(item[1]) for item in items))
+        if rung is None:
             return None
+        size, full = rung
         with self.lock, torch.cuda.device(self.device):
             torch.cuda.current_stream().wait_event(self.done)
             try:
-                captured = self._capture(size)
+                captured = self._capture(size, full)
                 if captured is None:
                     return None
                 graph, output = captured
-                n = self._stage(items, size)
+                n = self._stage(items, size, full)
                 graph.replay()
                 return output[:n].clone()
             finally:

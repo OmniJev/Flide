@@ -15,7 +15,6 @@ from transformers import Qwen2Config, Qwen2ForCausalLM, Qwen3Config, Qwen3MoeCon
 from flide import settings
 from flide.backbones import get
 from flide.backbones.qwen2.graphs import Qwen2Graphs
-from flide.backbones.qwen2.ops import rms_norm, swiglu
 from flide.formats.base import FINAL, Plan, Read
 from flide.runtime.engine import Engine
 from flide.runtime.pack import Job, pack
@@ -100,6 +99,18 @@ def check_graphs(backbone, device):
                              (prefix, branches, None, False, ((2, 1), (1,)))])
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
 
+    long_prefix = [i % 127 + 1 for i in range(400)]   # a head over every position: more reads than a graph's usual limit
+    spots = tuple(range(len(long_prefix) + 3))
+    jobs = [Job(long_prefix, [[8, 9, 10]], [(Read(None, FINAL, spots),)]), Job(other_prefix, other_branches, [(Read(None),)])]
+    expected = backbone.forward(pack(jobs, device))[FINAL]
+    actual = graph.run_flat([(long_prefix, [[8, 9, 10]], None, False, spots), (other_prefix, other_branches, None)])
+    torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
+    short = (other_prefix, [[8, 9, 10]], None, False, tuple(range(len(other_prefix) + 3)))   # every position of a short one
+    assert graph.whole(short) and graph._rung(1, *graph.flat_cost(short), branches=1) == (32, True)
+    jobs = [Job(other_prefix, [[8, 9, 10]], [(Read(None, FINAL, short[4]),)])]
+    expected = backbone.forward(pack(jobs, device))[FINAL]
+    torch.testing.assert_close(graph.run_flat([short]), expected, atol=2e-5, rtol=2e-5)
+
     jobs = [Job(prefix, branches, [(Read(None),)] * 2),
             Job(other_prefix, other_branches, [(Read(None),)])]
     expected = backbone.forward(pack(jobs, device))[FINAL]
@@ -145,29 +156,12 @@ def check_graphs(backbone, device):
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
 
 
-def check_bfloat16_pointwise(device):
-    x = torch.randn(7, 3584, device=device, dtype=torch.bfloat16)
-    residual = torch.randn_like(x)
-    weight = torch.randn_like(x[0])
-    expected_hidden = x + residual
-    f = expected_hidden.float()
-    expected = (f * (f.square().mean(-1, keepdim=True) + 1e-6).rsqrt()).bfloat16() * weight
-    hidden, actual = rms_norm(x, weight, 1e-6, residual)
-    torch.testing.assert_close(hidden, expected_hidden, atol=0, rtol=0)
-    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
-
-    gate_up = torch.randn(7, 2 * 3584, device=device, dtype=torch.bfloat16)
-    gate, up = gate_up.chunk(2, dim=-1)
-    torch.testing.assert_close(swiglu(gate_up), torch.nn.functional.silu(gate) * up, atol=0, rtol=0)
-
-
 @torch.inference_mode()
 def main():
     torch.set_float32_matmul_precision("highest")
     torch.manual_seed(23)
     device = torch.device("cuda:0")
     check_rope_validation()
-    check_bfloat16_pointwise(device)
     positions = (-1, 0, -2, -1)
     reads = (Read(None, FINAL, positions), Read(None, 1, positions), Read(None, 0, positions))
     jobs = [

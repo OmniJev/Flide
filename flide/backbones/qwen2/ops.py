@@ -1,58 +1,10 @@
-"""Fused Qwen pointwise operations, rotary embedding and KV arena copies."""
+"""Rotary embedding (with Qwen3's per-head norm) and KV arena copies of the Qwen2 and Qwen3 backbones. RMSNorm and
+SwiGLU are the shared kernels of kernels/pointwise.py."""
 from __future__ import annotations
 
 import torch
 import triton
 import triton.language as tl
-
-
-@triton.jit
-def _rms(X, D, W, H, Y, N, sx, sd, eps, ADD: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0).to(tl.int64)
-    col = tl.arange(0, BLOCK)
-    valid = col < N
-    x = tl.load(X + row * sx + col, mask=valid, other=0).to(tl.float32)
-    if ADD:
-        d = tl.load(D + row * sd + col, mask=valid, other=0).to(tl.float32)
-        x = (x + d).to(X.dtype.element_ty).to(tl.float32)
-        tl.store(H + row * N + col, x, mask=valid)
-    inv = tl.math.rsqrt(tl.sum(x * x, 0) / N + eps)
-    weight = tl.load(W + col, mask=valid, other=0).to(tl.float32)
-    # Qwen2RMSNorm casts the normalized hidden state before multiplying by the weight.
-    normed = (x * inv).to(X.dtype.element_ty).to(tl.float32)
-    tl.store(Y + row * N + col, normed * weight, mask=valid)
-
-
-def rms_norm(x, weight, eps: float, residual=None):
-    rows, width = x.shape
-    y = x.new_empty(x.shape)
-    hidden = x.new_empty(x.shape) if residual is not None else x
-    if rows:
-        d = x if residual is None else residual
-        _rms[(rows,)](x, d, weight, hidden, y, width, x.stride(0), d.stride(0), eps,
-                      ADD=residual is not None, BLOCK=triton.next_power_of_2(width), num_warps=8 if width > 2048 else 4)
-    return (hidden, y) if residual is not None else y
-
-
-@triton.jit
-def _swiglu(GU, OUT, N, S, BLOCK: tl.constexpr):
-    row = tl.program_id(0).to(tl.int64)
-    col = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
-    valid = col < N
-    gate = tl.load(GU + row * S + col, mask=valid, other=0).to(tl.float32)
-    up = tl.load(GU + row * S + N + col, mask=valid, other=0).to(tl.float32)
-    # The SiLU activation is stored at the projection dtype before the gate multiplies the up projection.
-    activated = (gate / (1.0 + tl.exp(-gate))).to(GU.dtype.element_ty).to(tl.float32)
-    tl.store(OUT + row * N + col, activated * up, mask=valid)
-
-
-def swiglu(gate_up):
-    rows, width = gate_up.shape
-    n = width // 2
-    out = gate_up.new_empty((rows, n))
-    if rows:
-        _swiglu[(rows, triton.cdiv(n, 1024))](gate_up, out, n, gate_up.stride(0), BLOCK=1024, num_warps=4)
-    return out
 
 
 @triton.jit
