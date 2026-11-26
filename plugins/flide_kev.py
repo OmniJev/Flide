@@ -57,8 +57,9 @@ def _meta(model_dir: str) -> dict | None:
     except Exception:
         return None
     head = meta.get("head") if isinstance(meta, dict) else None
-    if not isinstance(head, dict) or not {"q.weight", "k.weight"} <= set(head) or "head_dim" not in meta:
+    if not isinstance(head, dict) or not {"q.weight", "k.weight"} <= set(head):
         return None
+    meta.setdefault("head_dim", head["q.weight"].shape[0])   # kev-0.5b's does not name it
     return meta
 
 
@@ -101,7 +102,7 @@ def _options(q) -> tuple[str, list[str]]:
 
 @register("kev")
 class Kev(Format):
-    backbones = ("qwen3_5",)
+    backbones = ("qwen3_5", "qwen2", "qwen3")
     max_choice_options = 255
     max_score_levels = 255
     max_state = 65536
@@ -266,6 +267,7 @@ class Drex(Kev):
 
 @register("jevany")
 class JevAny(Kev):
+    backbones = ("qwen3_5",)
     merge_lora = True
     max_choice_options = 256
     max_state = 8192
