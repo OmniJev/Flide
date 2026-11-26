@@ -1,4 +1,4 @@
-"""Quantized products and the batch-invariant promise are refused together, verify takes --quantize, and serve
+"""A quantization without a batch-invariant form is refused with --batch-invariant (fp8 and int8 have one), verify takes --quantize, and serve
 takes --budget.
 
     python tests/test_engine_flags.py
@@ -30,23 +30,27 @@ def main():
             return str(exc)
         return ""
 
-    message = refused(True, {"quantize": "fp8"})
-    check("fp8 with --batch-invariant is refused", bool(message), message)
-    check("the message names both flags", "--quantize fp8" in message and "--batch-invariant" in message, message)
+    check("fp8 with --batch-invariant is allowed (one summation order)", refused(True, {"quantize": "fp8"}) == "")
+    message = refused(True, {"quantize": "nf4"})
+    check("a quantization without an invariant form is refused with --batch-invariant", bool(message), message)
+    check("the message names both flags", "--quantize nf4" in message and "--batch-invariant" in message, message)
     check("the message says why", "scaled matmul" in message and "split depends on the batch" in message, message)
     check("fp8 alone is allowed", refused(False, {"quantize": "fp8"}) == "")
     check("--batch-invariant alone is allowed", refused(True, {}) == "")
     check("a missing quantize value is not a conflict", refused(True, {"quantize": None}) == "")
     check("no options at all is allowed", refused(True, None) == "")
+    check("int8 with --batch-invariant is allowed (exact int32 sums)", refused(True, {"quantize": "int8"}) == "")
 
     parser = argparse.ArgumentParser()
     add_parser(parser.add_subparsers())
     args = parser.parse_args(["verify", "--model", "m", "--requests", "r", "--quantize", "fp8"])
     check("verify takes --quantize fp8", args.quantize == "fp8", args.quantize)
+    args = parser.parse_args(["verify", "--model", "m", "--requests", "r", "--quantize", "int8"])
+    check("verify takes --quantize int8", args.quantize == "int8", args.quantize)
     args = parser.parse_args(["verify", "--model", "m", "--requests", "r"])
     check("verify leaves it unset by default", args.quantize is None, args.quantize)
     try:
-        parser.parse_args(["verify", "--model", "m", "--requests", "r", "--quantize", "int8"])
+        parser.parse_args(["verify", "--model", "m", "--requests", "r", "--quantize", "int4"])
         bad = False
     except SystemExit as exc:
         bad = exc.code == 2

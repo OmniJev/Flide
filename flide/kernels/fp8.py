@@ -91,9 +91,14 @@ class Fp8Weight:
         if x.stride(-1) != 1:
             x = x.contiguous()
         xq, sx = quantize_tokens(x)
-        y = torch._scaled_mm(xq, self.q.t(), scale_a=sx, scale_b=self.scale, out_dtype=self.out_dtype)
+        if settings.batch_invariant:   # one summation order at any batch (kernels/fp8_invariant.py)
+            from .fp8_invariant import mm_scaled
+
+            y = mm_scaled(xq, sx, self.q, self.scale, self.out_dtype)
+        else:
+            y = torch._scaled_mm(xq, self.q.t(), scale_a=sx, scale_b=self.scale, out_dtype=self.out_dtype)
         if self.tail is not None:
-            y = torch.cat([y, x @ self.tail.T], 1)
+            y = torch.cat([y, mm(x, self.tail)], 1)
         return y
 
 
