@@ -215,7 +215,8 @@ class Qwen35(Backbone):
         straight onto the device (flide.backbones.load); "hf" uses transformers' from_pretrained (needs accelerate);
         "none" reads no weights (zeros).
         `quantize` "fp8": the decoder's projections are read as float8 (quantized while read, or as an FP8 checkpoint
-        stores them), never held in 16 bits. `tp` (rank, size): this rank's shard of a tensor parallel model
+        stores them), never held in 16 bits. "int8": the same projections read as int8 with per-row scales, never held
+        in 16 bits either; `calibrate_int8` then smooths them, reading each again from the checkpoint. `tp` (rank, size): this rank's shard of a tensor parallel model
         (runtime/tp.py; with the "direct" loader each tensor is cut to this rank's part as it is read, then quantized,
         so a rank never holds the whole model; otherwise read in 16 bits, cut, then quantized). `merge_lora`: a LoRA adapter merged into the weights as
         they are read (flide/lora.py)."""
@@ -245,16 +246,27 @@ class Qwen35(Backbone):
         if native_moe_fp8 and quant_config.get("weight_block_size"):
             raise NotImplementedError("Qwen3.5 MoE: prequantized block FP8 is not supported; use tensor/row scales")
         lean_fp8 = quantize == "fp8" and tp is None and (not moe or native_moe_fp8)
-        store = {} if lean_fp8 else None
+        lean_int8 = quantize == "int8" and tp is None and not moe and loader in ("none", "direct")
+        quant = None
+        if lean_int8:
+            from ...kernels import int8
+
+            quant = int8.quantize_rows
+        store = {} if lean_fp8 or lean_int8 else None
         if lean_fp8 and moe:
             lean = lambda name: name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
         else:
-            lean = _fp8_target if lean_fp8 else None
+            lean = _fp8_target if lean_fp8 or lean_int8 else None
+        reread = None
         if loader == "none":
             from ..load import blank, build
 
             model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
-            blank(model, torch.device(device), lean=lean, fp8=store)
+            if lean_int8:   # zeros again in 16 bits where the checkpoint would be read
+                shapes = {n: p.shape for n, p in model.named_parameters() if lean(n)}
+                reread = lambda names: [torch.zeros(shapes[n], device=device, dtype=getattr(torch, dtype))
+                                        for n in names]
+            blank(model, torch.device(device), lean=lean, fp8=store, quant=quant)
         elif loader == "direct":
             from ..load import build, load_into
 
@@ -265,14 +277,18 @@ class Qwen35(Backbone):
                 else:
                     model = build(arch, cfg, torch.device(device), getattr(torch, dtype), lean=lean)
                     load_into(model, model_dir, device, key_map=key_map, skip=skip, lean=lean, fp8=store,
-                              merge=merge_lora)
+                              merge=merge_lora, quant=quant)
+                    if lean_int8:
+                        from ..load import Reader
+
+                        reread = Reader(model_dir, device, getattr(torch, dtype), key_map, merge_lora)
             except (ValueError, FileNotFoundError) as exc:
                 if native_moe_fp8:
                     raise RuntimeError(f"FP8 MoE direct load failed: {exc}") from exc
                 import logging
 
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
-                model, store, cut = None, ({} if lean_fp8 else None), None
+                model, store, cut, reread = None, ({} if lean_fp8 else None), None, None
                 torch.cuda.empty_cache()
         if model is None:
             store = None   # transformers loads 16 bits; the forward quantizes them after
@@ -282,16 +298,19 @@ class Qwen35(Backbone):
         names = {id(m): n for n, m in model.named_modules()}
         if headless:
             model = _Headless(model)
-        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut, **options)
+        if quantize == "int8" and not store:   # 16 bits read (transformers, a mixture of experts): calibrate_int8
+            quantize = None                    # quantizes from them
+        return cls(model, quantize=quantize, fp8_store=(store, names) if store else None, tp=tp, tp_cut=cut,
+                   int8_reread=reread, **options)
 
     def __init__(self, causal_lm, cuda_graphs: bool = False, quantize: str | None = None, fp8_store=None,
                  tp: tuple[int, int] | None = None, float32_residual: bool = False, tp_cut: list | None = None,
-                 float32_vision: bool = False):
+                 float32_vision: bool = False, int8_reread=None):
         """`float32_residual`: the residual stream stays in float32 between the layers; each norm rounds the input of
         the products that read it once, and the final norm's output stays in float32 (off by default). `tp_cut`: the
         parts the loader already cut the weights to (`_read_tp`). `float32_vision`: the vision tower in float32, its
         products on TF32 tensor cores in the vision graphs, its features rounded once as they enter the decoder (off by
-        default)."""
+        default). `int8_reread`: reads the 16-bit weights of int8 projections again by name (`calibrate_int8`)."""
         self.causal_lm = causal_lm
         inner = causal_lm.model
         self.vlm = inner if hasattr(inner, "visual") else None   # Qwen3_5Model: vision tower and M-RoPE indexing
@@ -308,17 +327,20 @@ class Qwen35(Backbone):
         self.float32_residual = bool(float32_residual)
         self.xdtype = self.dtype if self.float32_residual else None   # the norms' output type (None: the stream's)
         self.cuda_graphs = cuda_graphs
-        self.fp8 = False
+        self.fp8 = self.int8 = False
+        self._int8_reread, self._int8_names = int8_reread, {}
         self.tp = tp if tp is not None and tp[1] > 1 else None
         if self.tp is not None:
             self.shard(*self.tp, cuts=tp_cut)
         self._prepare_fused()
         if fp8_store is not None:
-            self._fp8_from_store(*fp8_store)
+            self._fp8_from_store(*fp8_store, int8=quantize == "int8")
         elif quantize == "fp8":
             self.quantize_fp8()
+        elif quantize == "int8":
+            self.quantize_int8()
         elif quantize is not None:
-            raise ValueError(f"quantize {quantize!r}: only fp8")
+            raise ValueError(f"quantize {quantize!r}: fp8 or int8")
         if self.tp is not None:
             from ...runtime.tp import RowParallel
 
@@ -519,17 +541,25 @@ class Qwen35(Backbone):
                 w["heads"] = (m.q_proj.weight.shape[0] // (2 * m.head_dim), m.k_proj.weight.shape[0] // m.head_dim)
             self._w.append(w)
 
-    def _fp8_from_store(self, store: dict, names: dict) -> None:
+    def _fp8_from_store(self, store: dict, names: dict, int8: bool = False) -> None:
         """The fused weights from the float8 copies the loader read (rows of merged projections concatenated, with
-        their scales; the gate projections of Gated DeltaNet's input projection as 16-bit tail rows)."""
+        their scales; the gate projections of Gated DeltaNet's input projection as 16-bit tail rows). `int8`: the
+        copies are int8 (kernels/int8.py), unsmoothed until `calibrate_int8`, which reads them again by the names kept
+        here."""
         from ...kernels import fp8
+        from ...kernels import int8 as i8
+
+        weight = i8.Int8Weight if int8 else fp8.Fp8Weight
+        key_of = {}
 
         def get(mod):   # each copy leaves the store as it is joined, so the float8 weights are never held twice
             return store.pop(names[id(mod)] + ".weight")
 
         def joined(mods, tail=None, tail_mods=None):
+            if int8:
+                self._int8_names[key_of["k"]] = [names[id(m)] + ".weight" for m in mods]
             qs, ss = zip(*(get(m) for m in mods))
-            return lora.attached(fp8.Fp8Weight(torch.cat(qs), torch.cat(ss), tail, self.dtype), mods + (tail_mods or []))
+            return lora.attached(weight(torch.cat(qs), torch.cat(ss), tail, self.dtype), mods + (tail_mods or []))
 
         for i, layer in enumerate(self.layers):
             w, mlp = self._w[i], layer.mlp
@@ -538,19 +568,23 @@ class Qwen35(Backbone):
                 for key, parameter in (("experts", "gate_up_proj"), ("experts_down", "down_proj")):
                     w[key], w[key + "_scale"] = store.pop(prefix + "." + parameter)
                 continue
-            w["gate_up"] = joined([mlp.gate_proj, mlp.up_proj])
-            w["down"] = joined([mlp.down_proj])
+            parts = {"gate_up": ([mlp.gate_proj, mlp.up_proj],), "down": ([mlp.down_proj],)}
             if self.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
                 tail = torch.cat([m.in_proj_b.weight.data, m.in_proj_a.weight.data])
-                w["in"] = joined([m.in_proj_qkv, m.in_proj_z], tail, [m.in_proj_b, m.in_proj_a])
-                w["out"] = joined([m.out_proj])
+                parts.update({"in": ([m.in_proj_qkv, m.in_proj_z], tail, [m.in_proj_b, m.in_proj_a]),
+                              "out": ([m.out_proj],)})
             else:
                 m = layer.self_attn
-                w["qkv"] = joined([m.q_proj, m.k_proj, m.v_proj])
-                w["o"] = joined([m.o_proj])
+                parts.update({"qkv": ([m.q_proj, m.k_proj, m.v_proj],), "o": ([m.o_proj],)})
+            for k, args in parts.items():
+                key_of["k"] = (i, k)
+                w[k] = joined(*args)
         store.clear()
-        self.fp8 = True
+        if int8:
+            self.int8 = True
+        else:
+            self.fp8 = True
 
     @torch.no_grad()   # weights built by transformers' classes require grad
     def quantize_fp8(self) -> int:
@@ -595,6 +629,101 @@ class Qwen35(Backbone):
             for mod in mods:   # the modules held views of the 16-bit weights; only the float8 ones are used now
                 mod.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
         self.fp8 = True
+        torch.cuda.empty_cache()
+        return n
+
+    @torch.no_grad()
+    def quantize_int8(self, input_max: dict | None = None, alpha: float = 0.75) -> int:
+        """The products quantize_fp8 converts in a dense model, as int8 weights with per-row scales (kernels/int8.py),
+        whose int32 sums keep their bits at any load. `input_max` {(layer, key): per-channel max |input|} smooths each
+        product's input (SmoothQuant, kernels/int8.smoothing). No mixture of experts yet."""
+        from ...kernels import int8
+
+        if not int8.supported(self.device):
+            raise RuntimeError("int8 needs compute capability 8.0 or newer (Ampere, Ada, Hopper, Blackwell)")
+        if any("experts" in w for w in self._w):
+            raise ValueError("int8: no mixture of experts yet (--quantize fp8 quantizes their experts)")
+        n = 0
+        for i, layer in enumerate(self.layers):
+            w = self._w[i]
+            for key in ("gate_up", "down", "in", "out", "qkv", "o"):
+                if key in w:
+                    tail = 2 * layer.linear_attn.num_v_heads if key == "in" else 0
+                    base = w[key].base if isinstance(w[key], lora.LowRank) else w[key]
+                    amax = (input_max or {}).get((i, key))
+                    smooth = None if amax is None else int8.smoothing(amax, base[: base.shape[0] - tail], alpha)
+                    q = int8.Int8Weight.from_weight(base, tail, smooth)
+                    w[key] = w[key].with_base(q) if isinstance(w[key], lora.LowRank) else q
+                    n += 1
+            mods = [layer.mlp.gate_proj, layer.mlp.up_proj, layer.mlp.down_proj]
+            if self.layer_types[i] == "linear_attention":
+                m = layer.linear_attn
+                mods += [m.in_proj_qkv, m.in_proj_z, m.in_proj_b, m.in_proj_a, m.out_proj]
+            else:
+                m = layer.self_attn
+                mods += [m.q_proj, m.k_proj, m.v_proj, m.o_proj]
+            for mod in mods:   # the modules held views of the 16-bit weights; only the int8 ones are used now
+                mod.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        self.int8 = True
+        torch.cuda.empty_cache()
+        return n
+
+    def _weight16(self, i: int, k: str, cur):
+        """Reads product (i, k)'s 16-bit weight again from the checkpoint: its rows, the 16-bit tail rows and the LoRA
+        kept beside the int8 one."""
+        names = self._int8_names[(i, k)]
+        low = isinstance(cur, lora.LowRank)
+        tail = (cur.base if low else cur).tail
+
+        def read():
+            rows = torch.cat(self._int8_reread(names))
+            full = rows if tail is None else torch.cat([rows, tail])
+            return cur.with_base(full) if low else full
+
+        return read
+
+    @torch.no_grad()
+    def calibrate_int8(self, run, alpha: float = 0.75) -> int:
+        """quantize_int8 with SmoothQuant: every product it converts keeps the per-channel max |input| while `run()`
+        forwards calibration requests in 16 bits. When the weights were read as int8, each product takes its 16-bit weight
+        from the checkpoint for the call (one product's at a time), and is then smoothed and quantized in its place from the
+        weight read once more. `run()` should forward the requests at once: every micro-batch reads every weight."""
+        from ...kernels import int8
+
+        if any("experts" in w for w in self._w):
+            raise ValueError("int8: no mixture of experts yet (--quantize fp8 quantizes their experts)")
+        if self.int8 and self._int8_reread is None:
+            raise ValueError("int8 weights loaded without a way to read their 16-bit weights again: nothing to smooth")
+        keys = ("gate_up", "down", "in", "out", "qkv", "o")
+        for i, w in enumerate(self._w):
+            for k in keys:
+                if k in w:
+                    w[k] = int8.InputMax(w[k], self._weight16(i, k, w[k]) if self.int8 else None)
+        try:
+            run()
+            stats = {(i, k): w[k].amax for i, w in enumerate(self._w) for k in keys if k in w}
+        finally:   # no other reference to the weights, so each goes once its smoothed one replaces it
+            for w in self._w:
+                w.pop("split", None)   # the last layer's cached halves of qkv
+                for k in keys:
+                    if k in w:
+                        w[k] = w[k].w
+        if not self.int8:
+            return self.quantize_int8(stats, alpha)
+        n = 0
+        for (i, k), names in self._int8_names.items():   # one product at a time, so 16 bits never hold more than one
+            cur = self._w[i][k]
+            low = isinstance(cur, lora.LowRank)
+            old = cur.base if low else cur
+            rows = torch.cat(self._int8_reread(names))
+            tail = 0 if old.tail is None else old.tail.shape[0]
+            amax = stats.get((i, k))
+            smooth = None if amax is None else int8.smoothing(amax, rows, alpha)
+            q = int8.Int8Weight.from_weight(torch.cat([rows, old.tail]) if tail else rows, tail, smooth)
+            self._w[i][k] = cur.with_base(q) if low else q
+            del cur, old, rows
+            n += 1
+        self._int8_reread, self._int8_names = None, {}
         torch.cuda.empty_cache()
         return n
 

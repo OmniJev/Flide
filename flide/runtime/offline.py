@@ -382,8 +382,9 @@ def add_parser(sub) -> None:
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits whatever it is batched with")
-    p.add_argument("--quantize", default=None, choices=["fp8"],
-                   help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+)")
+    p.add_argument("--quantize", default=None, choices=["fp8", "int8"],
+                   help="decoder weights in 8 bits with per-row scales, inputs scaled per token: fp8 (compute capability "
+                        "8.9+) or int8 (8.0+)")
     p.add_argument("--warmup", type=int, default=0, help="micro-batches run once before the timed forward")
     p.add_argument("--stream-block", type=int, default=20000,
                    help="rows per GPU block while planning continues (0: plan everything, then forward, then finish)")

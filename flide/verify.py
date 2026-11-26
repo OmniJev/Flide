@@ -198,7 +198,7 @@ def add_parser(sub) -> None:
     v.add_argument("--format-arg", action="append", metavar="KEY=VALUE", help="family option")
     v.add_argument("--limit", type=int, default=32, help="requests to read")
     v.add_argument("--device", default="cuda:0")
-    v.add_argument("--quantize", choices=("fp8",), default=None,
+    v.add_argument("--quantize", choices=("fp8", "int8"), default=None,
                    help="check the quantized model the server runs, as serve --quantize does")
     v.add_argument("--batch-invariant", action="store_true", help="check the batch-invariant mode, bit for bit")
     v.add_argument("--session-cache-gb", type=_cache_size, default=0.0, help="also check the session cache, this large (GiB or auto)")

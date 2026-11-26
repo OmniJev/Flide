@@ -130,9 +130,9 @@ def add_parser(sub) -> None:
     s.add_argument("--no-cuda-graphs", action="store_true", help="run every request eagerly")
     s.add_argument("--batch-invariant", action="store_true",
                    help="batch-invariant products: every request gets the same bits at any load (slower)")
-    s.add_argument("--quantize", default=None, choices=["fp8"],
-                   help="decoder weights in float8 with per-row scales, inputs scaled per token (compute capability 8.9+); "
-                        "changes the numbers a little")
+    s.add_argument("--quantize", default=None, choices=["fp8", "int8"],
+                   help="decoder weights in 8 bits with per-row scales, inputs scaled per token: fp8 (compute capability "
+                        "8.9+) or int8 (8.0+); changes the numbers a little")
     s.add_argument("--tp", type=int, default=1,
                    help="tensor parallel over this many GPUs, --device and the ones after it (Qwen2, Qwen3 and Qwen3.5 dense models)")
     s.add_argument("--budget", type=_positive_int, default=None,

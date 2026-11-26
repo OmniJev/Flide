@@ -11,7 +11,9 @@ FP8: the weights `lean(name)` picks are never allocated in 16 bits (they stay on
 read into `fp8` as (float8 weight, per-row scale), quantized on the device as it is read, or taken as stored when
 the checkpoint already holds it in float8 with a `weight_scale` (compressed-tensors). Device memory
 then holds the float8 copy only. A float8 tensor of such a checkpoint that FP8 keeps in 16 bits (Gated DeltaNet's gate
-projections) is read back to 16 bits through its scale.
+projections) is read back to 16 bits through its scale. With `quant` (int8.quantize_rows) the same weights go into the
+store as that function rounds them (int8 with per-row scales); `Reader` reads such a weight in 16 bits again later, one
+at a time, as `load_into` would have read it.
 
 Tensor parallel: with `cut`, the tensors `lean` picks are cut to this rank's part as they are read (`cut(name)` gives
 the dimension and the part), then quantized into `fp8` (when `cut` says so) or kept in 16 bits in `held`, so a rank
@@ -124,13 +126,15 @@ def _init_buffers(model) -> None:
 
 
 @torch.inference_mode()
-def blank(model, device=None, lean=None, fp8: dict | None = None) -> None:
+def blank(model, device=None, lean=None, fp8: dict | None = None, quant=None) -> None:
     """Zeros for every parameter, buffers as loading sets them: a model that runs every kernel of the real one
     without reading its weights (kernels depend on shapes only; `flide kernels export --no-weights`). With `lean`
-    (a model built lean, see `build`), the parameters it picks go into `fp8` as float8 zeros, as `load_into` would
-    put them."""
+    (a model built lean, see `build`), the parameters it picks go into `fp8` as float8 zeros (or zeros through `quant`),
+    as `load_into` would put them."""
     for name, p in model.named_parameters():
-        if lean is not None and lean(name):
+        if lean is not None and lean(name) and quant is not None:
+            fp8[name] = quant(torch.zeros(p.shape, dtype=p.dtype, device=device))
+        elif lean is not None and lean(name):
             from ..kernels.fp8 import FP8
 
             scales = p.shape[:2] if p.ndim == 3 else (p.shape[0], 1)
@@ -158,14 +162,14 @@ def _read_part(f, key: str, idx, dim: int):
 @torch.inference_mode()
 def load_into(model, model_dir: str, device, key_map: list[tuple[str, str]] | None = None,
               skip: tuple[str, ...] = (), lean=None, fp8: dict | None = None, merge: bool = False,
-              cut=None, held: dict | None = None) -> dict:
+              cut=None, held: dict | None = None, quant=None) -> dict:
     from .. import lora
 
     adapter = lora.load(model_dir, device, merge)
     if adapter is None:
-        return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None, cut, held)
+        return _load_into(model, model_dir, device, key_map, skip, lean, fp8, None, cut, held, quant)
     try:
-        out = _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut, held)
+        out = _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut, held, quant)
         adapter.attach(model)
         adapter.check()
     except (ValueError, FileNotFoundError) as exc:
@@ -238,7 +242,7 @@ def _quantize_weight(src):
     return quantize_rows(src)
 
 
-def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=None, held=None) -> dict:
+def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=None, held=None, quant=None) -> dict:
     from safetensors import safe_open
 
     t0 = time.perf_counter()
@@ -359,10 +363,12 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
                         continue
                     if adapter is not None and src.dtype != FP8:
                         src = adapter.apply(key, src)
+                    if src.dtype == FP8 and quant is not None:
+                        raise ValueError(f"{key} is stored in float8; load this checkpoint with FP8 (--quantize fp8)")
                     if src.dtype == FP8:
                         fp8[name] = (src, _row_scales(src, scale_of(key), key))
                     else:
-                        fp8[name] = _quantize_weight(src.to(t.dtype))
+                        fp8[name] = (quant or _quantize_weight)(src.to(t.dtype))
                     nbytes += src.numel() * src.element_size()
                     filled.add(name)
                     continue
@@ -403,3 +409,43 @@ def _load_into(model, model_dir, device, key_map, skip, lean, fp8, adapter, cut=
     dt = time.perf_counter() - t0
     log.info("read %.2f GB of weights in %.1fs (%d checkpoint tensors unused)", nbytes / 1e9, dt, len(unused))
     return {"bytes": nbytes, "seconds": dt, "unused": unused}
+
+
+class Reader:
+    """Checkpoint tensors read again by module name after `load_into`, one call at a time: each in `dtype` on `device`,
+    named as `key_map` renames it and with the directory's LoRA adapter applied as `load_into` applied it (a module saved
+    whole replaces it, `merge` merges a projection's LoRA into it), so a weight comes back as it was before rounding."""
+
+    def __init__(self, model_dir: str, device, dtype, key_map: list[tuple[str, str]] | None = None,
+                 merge: bool = False):
+        from safetensors import safe_open
+
+        from .. import lora
+
+        self.device, self.dtype = device, dtype
+        self.adapter = lora.load(model_dir, device, merge)
+        rules = [(re.compile(a), b) for a, b in (key_map or [])]
+        self.where = {}
+        for path in checkpoint_files(model_dir):
+            with safe_open(str(path), framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    name = key
+                    for rx, rep in rules:
+                        name = rx.sub(rep, name)
+                    self.where[name] = (key, path)
+
+    @torch.inference_mode()
+    def __call__(self, names: list[str]) -> list[torch.Tensor]:
+        from safetensors import safe_open
+
+        out = []
+        for name in names:
+            if name not in self.where:
+                raise ValueError(f"{name} is not in the checkpoint")
+            key, path = self.where[name]
+            with safe_open(str(path), framework="pt", device=str(self.device)) as f:
+                src = f.get_tensor(key)
+            if self.adapter is not None:
+                src = self.adapter.apply(key, src)
+            out.append(src.to(self.dtype))
+        return out

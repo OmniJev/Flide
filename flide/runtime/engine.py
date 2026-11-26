@@ -53,6 +53,28 @@ def model_config(model_dir: str):
         return FileConfig(json.loads((Path(model_dir) / "config.json").read_text()))
 
 
+# rotary settings whose tables transformers recomputes from the largest position id of each forward
+LENGTH_ROPE = ("dynamic", "longrope")
+
+
+def refuse_length_rope(config) -> None:
+    """Dynamic NTK and LongRoPE pick their rotary tables from the longest position of the forward. A packed round holds
+    several requests, so a short request's answers would change with the longer requests beside it: refused at load."""
+    text = config.get_text_config() if hasattr(config, "get_text_config") else config
+    found = set()
+    for name in ("rope_parameters", "rope_scaling"):
+        p = getattr(text, name, None)
+        if not isinstance(p, dict):
+            continue
+        for g in [p] + [v for v in p.values() if isinstance(v, dict)]:   # one setting, or one per layer type
+            kind = str(g.get("rope_type") or g.get("type") or "")
+            if any(t in kind for t in LENGTH_ROPE):
+                found.add(kind)
+    if found:
+        raise ValueError(f"rotary scaling {', '.join(sorted(found))} is not supported: its tables follow the longest "
+                         "request of a batch, so answers would depend on the other requests")
+
+
 SMALL_CARD = 25 * 2 ** 30
 # requests of one round that share a start of this many tokens or more (in 64-token blocks) compute it once
 MERGE_MIN_TOKENS = 512
@@ -195,12 +217,15 @@ def _gib() -> tuple[float, float, float]:
     return torch.cuda.memory_allocated() / g, torch.cuda.memory_reserved() / g, (total - free) / g
 
 
+INVARIANT_QUANTIZE = ("fp8", "int8")   # fp8: kernels/fp8_invariant.py; int8: exact int32 sums
+
+
 def refuse_invariant_quantized(batch_invariant: bool, backbone_options: dict | None) -> None:
-    """`--quantize` and `--batch-invariant` cannot both hold: the quantized products come from a scaled matmul whose
-    split depends on the batch, so the promise `--batch-invariant` makes does not survive it. Refused rather than
-    silently answering with batch-dependent numbers."""
+    """`--batch-invariant` with a quantization whose products have no batch-invariant form: the promise it makes would
+    not survive, so it is refused rather than silently answering with batch-dependent numbers. fp8 (one summation
+    order in kernels/fp8_invariant.py) and int8 (exact int32 sums) keep their bits at any load."""
     quantize = (backbone_options or {}).get("quantize")
-    if batch_invariant and quantize:
+    if batch_invariant and quantize and quantize not in INVARIANT_QUANTIZE:
         raise ValueError(
             f"--quantize {quantize} cannot be combined with --batch-invariant: the quantized products come from a "
             "scaled matmul whose split depends on the batch, so the same question can answer differently in another "
@@ -234,7 +259,10 @@ class Engine:
         self.model_dir = resolve_model(model)
         config = model_config(self.model_dir)
         family = formats.detect(self.model_dir, config, format)
-        self.model_dir = family.run_dir(self.model_dir)
+        run_dir = family.run_dir(self.model_dir)
+        if run_dir != self.model_dir:   # laid out by the family: its config may be another file
+            self.model_dir, config = run_dir, model_config(run_dir)
+        refuse_length_rope(config)
         if family.backbones and config.model_type not in family.backbones:
             raise ValueError(f"format {family.name!r} runs on {family.backbones}, {self.model_dir} is {config.model_type}")
         self.format = family(self.model_dir, **format_options)
@@ -242,6 +270,11 @@ class Engine:
         if family.merge_lora:
             options["merge_lora"] = True
         tp_size = int(options.pop("tp", 1) or 1)
+        int8 = options.get("quantize") == "int8"
+        if int8:   # read as int8, smoothed after the calibration below
+            if tp_size > 1 or not hasattr(backbones.get(config.model_type), "calibrate_int8"):
+                raise ValueError(f"int8: {config.model_type}{' with tensor parallel' if tp_size > 1 else ''} is not "
+                                 "supported yet")
         if tp_size > 1:   # rank 0 here, the other ranks in worker processes (runtime/tp.py)
             if session_cache_gb == "auto" or session_cache_gb > 0:
                 raise ValueError("tensor parallel runs without the session cache")
@@ -282,6 +315,8 @@ class Engine:
                 log.info("session cache saves prefixes of %d tokens or more (--session-min-tokens sets it)",
                          session_min_tokens)
             self.sessions = SessionCache(0 if auto else int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
+        if int8:
+            self._quantize_int8()
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
         tune()
         if graphs is not None and capture is not False:
@@ -318,6 +353,34 @@ class Engine:
         log.info("memory: model %.2f GiB, graphs %.2f GiB (%d), sessions and work space %.2f GiB, reserved %.2f GiB, "
                  "device used %.2f GiB",
                  mem[0], mem_graphs[1] - mem[1], n_graphs, end[1] - mem_graphs[1], end[1], end[2])
+
+    def _quantize_int8(self) -> None:
+        """int8 weights smoothed (SmoothQuant) from the inputs every product sees while this model's own format reads
+        the calibration requests that ship with flide (runtime/calibration.jsonl), all at once, in 16 bits: every
+        product takes its 16-bit weight from the checkpoint for the call and is then smoothed from it, so the model is
+        never held in 16 bits."""
+        import json
+        from importlib.resources import files
+
+        from ..api.schema import SystemOneRequest
+
+        t0 = time.perf_counter()
+        plans = []
+        for line in files("flide.runtime").joinpath("calibration.jsonl").read_text().splitlines():
+            try:
+                plans.append(self.format.plan(SystemOneRequest.model_validate(json.loads(line))))
+            except ValueError:
+                continue
+        if not plans:
+            log.warning("int8: the %s format takes none of the calibration requests; inputs stay unsmoothed",
+                        self.format.name)
+        saved, self.sessions = self.sessions, None
+        try:
+            n = self.backbone.calibrate_int8(lambda: self.run_plans(plans) if plans else None)
+        finally:
+            self.sessions = saved
+        log.info("int8: %d weights quantized, smoothed from %d calibration requests in %.1fs", n, len(plans),
+                 time.perf_counter() - t0)
 
     def warmup(self) -> None:
         """One packed forward over made-up requests, so the kernels of the packed path (requests the graphs do not
