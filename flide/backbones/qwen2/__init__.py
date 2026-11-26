@@ -10,11 +10,12 @@ from torch.nn import functional as F
 from ... import lora, settings
 from ...formats.base import FINAL
 from ...kernels import attention
+from ...kernels import pointwise as pw
 from ...kernels.fp8 import mm
 from ...runtime.pack import PackedBatch
 from ..base import Backbone
 from ..load import blank, build, load_into
-from .ops import ArenaContext, rms_norm, rotary, swiglu
+from .ops import ArenaContext, rotary
 
 
 def _merge(linears):
@@ -26,7 +27,7 @@ def _merge(linears):
 
 
 def _norm(module, hidden, residual=None):
-    return rms_norm(hidden, module.weight, module.variance_epsilon, residual=residual)
+    return pw.rms_norm(hidden, module.weight, module.variance_epsilon, residual=residual, offset=False)
 
 
 def _project(x, weight, bias):
@@ -100,9 +101,18 @@ def _arena_context(batch):
 
 class Qwen2(Backbone):
     model_types = ("qwen2",)
+    text_types = ("qwen2",)   # the model types of the text configs it reads
     block_attention = True
     prefix_attention = True
     session_states = True
+
+    key_map = None   # checkpoint names to module names (load.load_into)
+
+    @staticmethod
+    def _config(model_dir: str):
+        from transformers import AutoConfig
+
+        return AutoConfig.from_pretrained(model_dir, local_files_only=True)
 
     @staticmethod
     def _architecture(config):
@@ -120,18 +130,17 @@ class Qwen2(Backbone):
     @staticmethod
     def _ffn(x, weights):
         gate_up, down = weights
-        return mm(swiglu(mm(x, gate_up)), down)
+        gu = mm(x, gate_up)
+        return mm(pw.swiglu(gu, gu.shape[1] // 2), down)
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", loader: str = "direct",
              merge_lora: bool = False, cuda_graphs: bool = False, quantize: str | None = None, tp=None) -> "Qwen2":
         """Load a text checkpoint, with CUDA graphs when requested by the engine."""
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model_dir, local_files_only=True)
+        config = cls._config(model_dir)
         name = config.model_type
-        if name not in cls.model_types:
-            raise ValueError(f"{cls.__name__}: found model_type {name!r}, expected one of {cls.model_types}")
+        if name not in cls.text_types:
+            raise ValueError(f"{cls.__name__}: found model_type {name!r}, expected one of {cls.text_types}")
         if quantize is not None:
             raise NotImplementedError(f"{name}: --quantize is not supported")
         device = torch.device(device)
@@ -170,7 +179,7 @@ class Qwen2(Backbone):
         elif loader == "direct":
             try:
                 model = build(arch, config, device, dtype)
-                load_into(model, model_dir, device, merge=merge_lora)
+                load_into(model, model_dir, device, cls.key_map, merge=merge_lora)
             except FileNotFoundError as exc:
                 logging.getLogger("flide.load").warning("direct load failed (%s); using transformers", exc)
                 model = None

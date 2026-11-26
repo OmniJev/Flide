@@ -1,11 +1,12 @@
-"""Clef family (Cloudflare/clef-flash on Qwen3.5-9B and Cloudflare/clef on Qwen3.8-27B): the release's
-joint_schema_model.py, its joint schema head over every hidden state of one causal sequence.
+"""Clef family (Cloudflare/clef-flash on Qwen3.5-9B, Cloudflare/clef on Qwen3.8-27B and, text only, Cloudflare/clef-omni
+on Qwen3-Omni-30B-A3B): the release's joint_schema_model.py, its joint schema head over every hidden state of one causal
+sequence.
 
 A request is one sequence, tokenized piece by piece as encode_record tokenizes it: a system turn, "STATE:" and the
 state, then "SCHEMA FIELDS:" with every question in order (its id, type, instructions and allowed options, each
 option the JSON of its id and description), then the assistant turn with thinking off. A choice's options are in the
 order of their names, a noul's are true and false with the release's descriptions unless the request gives its own,
-and a score's are its levels. The state is cut so the sequence holds at most 16,384 tokens. A request's images (data
+and a score's are its levels. The state is cut so the sequence holds at most 16,384 tokens (clef-omni: 64,000). A request's images (data
 URLs or base64) go after the system turn as the release places them, at its processor's sizes.
 
 The backbone reads the sequence causally and the head reads its final hidden states at every position (through
@@ -38,6 +39,7 @@ NOUL = {"true": "The proposition is true or the answer is yes.",
         "false": "The proposition is false or the answer is no."}
 TYPES = {"noul": 0, "choice": 1, "score": 2}
 MAX_LENGTH = 16384
+OMNI, OMNI_MAX_LENGTH = "qwen3_omni_moe", 64000
 
 
 def render(value: Any) -> str:
@@ -120,17 +122,18 @@ class _Normed:
 
 @register("clef")
 class Clef(Format):
-    backbones = ("qwen3_5",)
+    backbones = ("qwen3_5", OMNI)
     max_choice_options = 256
     max_score_levels = 256
 
-    def __init__(self, model_dir: str, tokenizer=None, max_length: int = MAX_LENGTH):
+    def __init__(self, model_dir: str, tokenizer=None, max_length: int | None = None):
         import transformers
 
         self.model_dir = model_dir
         self.config = json.loads((Path(model_dir) / CONFIG).read_text())
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
-        self.max_length = int(max_length)
+        self.omni = json.loads((Path(model_dir) / "config.json").read_text()).get("model_type") == OMNI
+        self.max_length = int(max_length or (OMNI_MAX_LENGTH if self.omni else MAX_LENGTH))
         self.head = None
         self.lm_head = None
         self.prefix = self._tokens(PREFIX)
@@ -173,6 +176,8 @@ class Clef(Format):
     def plan(self, request: SystemOneRequest, **_) -> Plan:
         if getattr(request, "videos", None):
             raise ValueError("videos: the clef family reads text and images")
+        if self.omni and (getattr(request, "images", None) or getattr(request, "audio", None)):
+            raise ValueError("images and audio: clef-omni is read as text only")
         # every piece on its own, as encode_record tokenizes them, in one call: the state, then the schema in order
         texts, opts = [render(request.state), "\n\nSCHEMA FIELDS:\n"], []
         for i, (name, q) in enumerate(request.questions.items()):

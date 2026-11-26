@@ -3,7 +3,7 @@ from ..qwen2 import Qwen2
 
 
 class Qwen3(Qwen2):
-    model_types = ("qwen3",)
+    model_types = text_types = ("qwen3",)
 
     @staticmethod
     def _architecture(config):

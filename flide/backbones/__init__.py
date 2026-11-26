@@ -18,6 +18,7 @@ _BACKBONES: dict[str, type[Backbone]] = {}
 _BUILTIN = {"qwen2": "flide.backbones.qwen2:Qwen2",
             "qwen3": "flide.backbones.qwen3:Qwen3",
             "qwen3_moe": "flide.backbones.qwen3.moe:Qwen3Moe",
+            "qwen3_omni_moe": "flide.backbones.qwen3.omni:Qwen3OmniMoe",
             "qwen3_5": "flide.backbones.qwen35:Qwen35", "qwen3_5_text": "flide.backbones.qwen35:Qwen35",
             "qwen3_5_moe": "flide.backbones.qwen35:Qwen35", "qwen3_5_moe_text": "flide.backbones.qwen35:Qwen35",
             "gemma4": "flide.backbones.gemma4:Gemma4", "gemma4_text": "flide.backbones.gemma4:Gemma4",
