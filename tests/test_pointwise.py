@@ -24,12 +24,15 @@ def _rms(x, w, eps: float):
     xf = x.float()
     return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps) * (1.0 + w.float())).to(x.dtype)
 
+
 def _add_rms(h, d, w, eps: float):
     h = h + d
     return h, _rms(h, w, eps)
 
+
 def _swiglu(gu, n: int):
     return F.silu(gu[:, :n]) * gu[:, n:]
+
 
 def _gated_rms(o, z, w, eps: float):
     """fla output [t, heads, dv] and the strided gate z [t, heads * dv] -> [t, heads * dv]."""
@@ -37,6 +40,7 @@ def _gated_rms(o, z, w, eps: float):
     of = o.float()
     y = (of * torch.rsqrt(of.pow(2).mean(-1, keepdim=True) + eps)).to(o.dtype) * w
     return (y.float() * F.silu(z.view(t, nh, dv).float())).to(o.dtype).view(t, nh * dv)
+
 
 def _norm_rope(x, cos, sin, w, eps: float):
     """Per-head RMSNorm of x [t, heads, hd] and the partial rotary embedding, in the input dtype."""
@@ -47,9 +51,11 @@ def _norm_rope(x, cos, sin, w, eps: float):
     rot = torch.cat([x1 * c[..., : r // 2] - x2 * s[..., : r // 2], x2 * c[..., r // 2:] + x1 * s[..., r // 2:]], -1)
     return torch.cat([rot, rest], -1).to(x.dtype)
 
+
 def _qk_norm_rope(q, k, cos, sin, wq, wk, eps: float):
     """Per-head RMSNorm of q and k and the partial rotary embedding, in the input dtype."""
     return _norm_rope(q, cos, sin, wq, eps), _norm_rope(k, cos, sin, wk, eps)
+
 
 def _gate(o, gate):
     """Attention output [t, heads, hd] times the sigmoid of the strided gate [t, heads, hd] -> [t, heads * hd]."""

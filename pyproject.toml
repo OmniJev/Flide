@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flide"
-version = "0.1.22"
+version = "0.2.0"
 description = "Accelerating decision inference with exact state forking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -57,10 +57,11 @@ d3 = "flide_d3:D3"
 karpo = "flide_karpo:Karpo"
 liquamen = "flide_liquamen:Liquamen"
 decision2 = "flide_decision2:Decision2"
+strands = "flide_strands:Strands"
 
 [tool.setuptools]
 package-dir = {"" = "plugins", "flide" = "flide"}
-py-modules = ["flide_autotrust", "flide_cerno", "flide_clef", "flide_d1", "flide_d3", "flide_decision2", "flide_flexdm", "flide_glide", "flide_intern_decision", "flide_jdi", "flide_jeffan", "flide_karpo", "flide_kev", "flide_knowline", "flide_liquamen", "flide_pplx", "flide_searchjev", "flide_sieve", "flide_sigma", "flide_thisthat", "flide_torchcast", "flide_turion", "flide_wald", "flide_xor"]
+py-modules = ["flide_autotrust", "flide_cerno", "flide_clef", "flide_d1", "flide_d3", "flide_decision2", "flide_flexdm", "flide_glide", "flide_intern_decision", "flide_jdi", "flide_jeffan", "flide_karpo", "flide_kev", "flide_knowline", "flide_liquamen", "flide_pplx", "flide_searchjev", "flide_sieve", "flide_sigma", "flide_strands", "flide_thisthat", "flide_torchcast", "flide_turion", "flide_wald", "flide_xor"]
 
 [tool.setuptools.package-data]
 flide = ["api/playground/*.html", "kernels/prebuilt/cuda_utils/*/*", "kernels/prebuilt/gpu/*.tar.xz", "formats/known/*.json", "runtime/calibration.jsonl"]

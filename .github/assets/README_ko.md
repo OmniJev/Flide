@@ -29,12 +29,13 @@
 
 ## 🔥 뉴스
 
+- 🔥 **2026-11-27** Flide 0.2.0에서 AMD Instinct GPU를 지원하며, MI210 한 장에서 vLLM보다 최대 6.9배 빠르게 답합니다. 또한 [Strands Decider v2](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611)를 추가하고 Qwen2.5, Qwen3, Gemma 4도 8비트 가중치로 실행되며, `flide serve --vllm-kv`는 vLLM이 서빙하는 에이전트의 키와 값으로 질문에 답합니다.
 - 🔥 **2026-11-26** Flide 0.1.22에 [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e)와 [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) 채팅 모델, [kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b), [kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b), [Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B), [clef-omni](https://huggingface.co/Cloudflare/clef-omni)의 텍스트 부분과 밀집 Qwen3.5의 `--quantize int8`를 추가했습니다.
 - 🔥 **2026-11-24** Flide 0.1.21에 [kudhab](https://huggingface.co/plantwaterer/kudhab), [joey-1](https://huggingface.co/baselabs/joey-1), [KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5), 작은 크기의 [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) 모델과 `flide serve` 요청 한도를 추가했습니다.
-- 🔥 **2026-11-23** Flide 0.1.20에 Gemma 4 에이전트 세션을 추가했습니다.
 
 <details><summary>이전 뉴스</summary>
 
+- 🔥 **2026-11-23** Flide 0.1.20에 Gemma 4 에이전트 세션을 추가했습니다.
 - 🔥 **2026-11-22** Flide 0.1.19에 [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1), [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b)를 추가하고, [d1-2B](https://huggingface.co/LiquidAI/d1-2B)가 이미지를 읽을 수 있게 되었으며, [Docker 이미지](https://hub.docker.com/r/omnijev/flide)도 제공합니다.
 - 🔥 **2026-11-21** Flide 0.1.18에 [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2), [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211)를 추가하고, 선택적인 session cache를 넣었습니다.
 - 🔥 **2026-11-20** Flide 0.1.17에 [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B)를 추가하고, 텐서 병렬의 GPU 메모리 사용량을 줄였습니다.
@@ -60,7 +61,7 @@
 
 ## 빠른 시작
 
-Flide는 NVIDIA GPU가 필요하며 Linux 또는 Windows WSL2에서 실행됩니다. uv로 설치하거나 Docker 이미지를 받으세요.
+Flide는 Linux 또는 Windows WSL2의 NVIDIA GPU와 Linux의 AMD Instinct GPU에서 실행됩니다. uv로 설치하거나 Docker 이미지를 받으세요.
 
 ```bash
 uv pip install flide
@@ -70,7 +71,7 @@ uv pip install flide
 docker pull omnijev/flide
 ```
 
-모든 모델, 이미지, API, 전체 옵션은 [문서](https://docs.flide.org)를 참고하세요.
+모든 모델, 이미지, API, 전체 옵션은 [문서](https://docs.flide.org)를 참고하세요. AMD GPU에서는 ROCm용 PyTorch를 먼저 설치하세요. 방법은 [AMD GPUs](https://docs.flide.org/install/#amd-gpus)에 있습니다.
 
 ## 예시
 
@@ -114,7 +115,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | 텍스트, 이미지 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | 텍스트 | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | 텍스트 | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 텍스트 | ~5.7× | ~1.5× | ~2.0× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | 텍스트 | ~5.2× | ~1.4× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | 텍스트, 이미지 | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | 텍스트 | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | 텍스트 | 2.3× | 8.6× | 1.2× |
@@ -134,6 +135,7 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | 텍스트 | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | 텍스트 | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | 텍스트 | 2.6× | 1.1× | 1.2× |
+| [Strands Decider](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611) | 텍스트, 이미지 | ~3.3× | ~2.4× | ~1.9× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | 텍스트 | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | 텍스트 | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | 텍스트, 이미지 | 1.6× | 8.4× | 1.5× |
@@ -147,8 +149,8 @@ H200 한 장과 OneJev1.6-0.8B로 Flide는 이메일 한 통을 10.0 ms에, 10,0
 |---|---|
 | `--session-cache-gb 40` | 이전 요청의 상태를 보관해, 에이전트의 다음 단계는 새로 추가된 부분만 읽습니다 |
 | `--batch-invariant` | 어떤 요청과 함께 배치되어도 같은 요청은 비트 단위로 같은 결과를 냅니다. 속도는 조금 느려집니다 |
-| `--quantize fp8` | Ada, Hopper, Blackwell GPU에서 Qwen3.5와 Gemma 4를 FP8로 실행합니다 |
-| `--quantize int8` | Ampere 이후 GPU에서 Qwen3.5를 int8로 실행합니다. `--batch-invariant`를 함께 쓰면 어떤 부하에서도 비트 단위로 같은 결과를 냅니다 |
+| `--quantize fp8` | NVIDIA Ada, Hopper, Blackwell GPU에서 Qwen2.5, Qwen3, Qwen3.5, Gemma 4를 FP8로 실행합니다 |
+| `--quantize int8` | NVIDIA Ampere 이후 GPU와 AMD Instinct GPU에서 Qwen2.5, Qwen3, Qwen3.5, Gemma 4를 int8로 실행합니다. `--batch-invariant`를 함께 쓰면 어떤 부하에서도 비트 단위로 같은 결과를 냅니다 |
 | `--frontends 2` | HTTP, 렌더링, 토큰화를 전용 프로세스 두 개에서 처리합니다. 클라이언트가 많을 때 유용합니다 |
 
 ## 라이선스

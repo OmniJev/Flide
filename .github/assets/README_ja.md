@@ -29,12 +29,13 @@
 
 ## 🔥 ニュース
 
+- 🔥 **2026-11-27** Flide 0.2.0 で AMD Instinct GPU に対応し、MI210 1 枚で vLLM より最大 6.9 倍速く答えます。あわせて [Strands Decider v2](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611) に対応し、Qwen2.5、Qwen3、Gemma 4 も 8 ビットの重みで動くようになり、`flide serve --vllm-kv` は vLLM が動かすエージェントのキーとバリューから質問に答えます。
 - 🔥 **2026-11-26** Flide 0.1.22 で [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) と [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) のチャットモデル、[kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b)、[kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b)、[Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B)、[clef-omni](https://huggingface.co/Cloudflare/clef-omni) のテキスト部分と、密な Qwen3.5 の `--quantize int8` に対応しました。
 - 🔥 **2026-11-24** Flide 0.1.21 で [kudhab](https://huggingface.co/plantwaterer/kudhab)、[joey-1](https://huggingface.co/baselabs/joey-1)、[KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5)、小さいサイズの [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) モデルと `flide serve` のリクエスト上限に対応しました。
-- 🔥 **2026-11-23** Flide 0.1.20 で Gemma 4 のエージェントセッションに対応しました。
 
 <details><summary>過去のニュース</summary>
 
+- 🔥 **2026-11-23** Flide 0.1.20 で Gemma 4 のエージェントセッションに対応しました。
 - 🔥 **2026-11-22** Flide 0.1.19 で [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B)、[liquamen](https://huggingface.co/plantwaterer/liquamen)、[Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1)、[turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) に対応し、[d1-2B](https://huggingface.co/LiquidAI/d1-2B) が画像を読めるようになり、[Docker イメージ](https://hub.docker.com/r/omnijev/flide)も公開しました。
 - 🔥 **2026-11-21** Flide 0.1.18 で [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1)、[KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2)、[Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) に対応し、オプションの session cache を追加しました。
 - 🔥 **2026-11-20** Flide 0.1.17 で [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) に対応し、テンソル並列の GPU メモリ使用量を減らしました。
@@ -60,7 +61,7 @@
 
 ## クイックスタート
 
-Flide は NVIDIA GPU を使い、Linux または Windows の WSL2 で動きます。uv でインストールするか、Docker イメージを取得してください。
+Flide は Linux または Windows の WSL2 上の NVIDIA GPU と、Linux 上の AMD Instinct GPU で動きます。uv でインストールするか、Docker イメージを取得してください。
 
 ```bash
 uv pip install flide
@@ -70,7 +71,7 @@ uv pip install flide
 docker pull omnijev/flide
 ```
 
-各モデルの使い方、画像、API、すべてのオプションは[ドキュメント](https://docs.flide.org)を参照してください。
+各モデルの使い方、画像、API、すべてのオプションは[ドキュメント](https://docs.flide.org)を参照してください。AMD GPU では先に ROCm 版の PyTorch を入れてください。手順は [AMD GPUs](https://docs.flide.org/install/#amd-gpus) にあります。
 
 ## 例
 
@@ -114,7 +115,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | テキスト、画像 | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | テキスト | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | テキスト | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~5.7× | ~1.5× | ~2.0× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | テキスト | ~5.2× | ~1.4× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | テキスト、画像 | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | テキスト | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | テキスト | 2.3× | 8.6× | 1.2× |
@@ -134,6 +135,7 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | テキスト | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | テキスト | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | テキスト | 2.6× | 1.1× | 1.2× |
+| [Strands Decider](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611) | テキスト、画像 | ~3.3× | ~2.4× | ~1.9× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | テキスト | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | テキスト | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | テキスト、画像 | 1.6× | 8.4× | 1.5× |
@@ -147,8 +149,8 @@ H200 1 枚と OneJev1.6-0.8B で、Flide は 1 通を 10.0 ms、1 万通を 28 �
 |---|---|
 | `--session-cache-gb 40` | 以前のリクエストの状態を保存し、エージェントの次のステップは新しい部分だけを読む |
 | `--batch-invariant` | どのリクエストと同じバッチでも、同じリクエストはビット単位で同じ結果になる（少し遅くなる） |
-| `--quantize fp8` | Ada、Hopper、Blackwell の GPU で Qwen3.5 と Gemma 4 を FP8 で動かす |
-| `--quantize int8` | Ampere 以降の GPU で Qwen3.5 を int8 で動かす（`--batch-invariant` と併用すると、どの負荷でもビット単位で同じ結果になる） |
+| `--quantize fp8` | NVIDIA の Ada、Hopper、Blackwell の GPU で Qwen2.5、Qwen3、Qwen3.5、Gemma 4 を FP8 で動かす |
+| `--quantize int8` | NVIDIA の Ampere 以降の GPU と AMD Instinct GPU で Qwen2.5、Qwen3、Qwen3.5、Gemma 4 を int8 で動かす（`--batch-invariant` と併用すると、どの負荷でもビット単位で同じ結果になる） |
 | `--frontends 2` | HTTP、レンダリング、トークン化を 2 つの専用プロセスで行う（クライアントが多いとき向け） |
 
 ## ライセンス

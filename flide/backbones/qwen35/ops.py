@@ -9,10 +9,6 @@ from ... import settings
 from ...kernels import pointwise as pw
 
 
-
-
-
-
 def merge(linears) -> torch.Tensor:
     """One weight matrix for several nn.Linear that read the same input; each module's weight
     becomes a row slice of it, so the HF modules keep working and no memory is added."""
@@ -26,9 +22,6 @@ def merge(linears) -> torch.Tensor:
         m.weight.data = w[at: at + n]
         at += n
     return w
-
-
-
 
 
 def rms(x, w, eps: float, dtype=None):

@@ -192,7 +192,6 @@ class _Hashes:
         return pos, hash((self.blocks[k], tuple(self.tokens[k * BLOCK: pos])))
 
 
-
 def _free(entry) -> None:
     """Give an entry's rows back to its store (entries that hold their own tensors have nothing to give)."""
     free = getattr(entry.kv, "free", None)

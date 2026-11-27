@@ -29,12 +29,13 @@
 
 ## 🔥 News
 
+- 🔥 **2026-11-27** We added AMD Instinct GPUs in Flide 0.2.0, where Flide answers up to 6.9 times as fast as vLLM on one MI210, along with [Strands Decider v2](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611) and 8-bit weights for Qwen2.5, Qwen3 and Gemma 4, and `flide serve --vllm-kv` answers questions from the keys and values of an agent that vLLM serves.
 - 🔥 **2026-11-26** We added [Qwen2.5](https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e) and [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) chat models, [kev-0.5b](https://huggingface.co/jaredpalmer/kev-0.5b), [kev-0.6b](https://huggingface.co/jaredpalmer/kev-0.6b), [Decision-2.0-Kai-0.6B](https://huggingface.co/vllm-sr/Decision-2.0-Kai-0.6B) and the text side of [clef-omni](https://huggingface.co/Cloudflare/clef-omni) in Flide 0.1.22, and `--quantize int8` for dense Qwen3.5.
 - 🔥 **2026-11-24** We added [kudhab](https://huggingface.co/plantwaterer/kudhab), [joey-1](https://huggingface.co/baselabs/joey-1), [KnowLine-4B-Gen5.5](https://huggingface.co/PelaAI/KnowLine-4B-Gen5.5) and the small [d3](https://huggingface.co/collections/vllm-sr/decision-30-6aca5f47b0d942380f6e4a64) models, and request limits for `flide serve` in Flide 0.1.21.
-- 🔥 **2026-11-23** We added Gemma 4 agent sessions in Flide 0.1.20.
 
 <details><summary>Earlier news</summary>
 
+- 🔥 **2026-11-23** We added Gemma 4 agent sessions in Flide 0.1.20.
 - 🔥 **2026-11-22** We added [Copernicus-31B](https://huggingface.co/Poindexter-Labs/Copernicus-31B), [liquamen](https://huggingface.co/plantwaterer/liquamen), [Logits-Sigma-1](https://huggingface.co/logitshq/Logits-Sigma-1) and [turion-jev-31b](https://huggingface.co/turion-ai/turion-jev-31b) in Flide 0.1.19, [d1-2B](https://huggingface.co/LiquidAI/d1-2B) now reads images, and Flide comes as a [Docker image](https://hub.docker.com/r/omnijev/flide).
 - 🔥 **2026-11-21** We added [cerno-27b-v1.1](https://huggingface.co/apertixai/cerno-27b-v1.1), [KnowLine-31B-Gen2](https://huggingface.co/PelaAI/KnowLine-31B-Gen2) and [Jeffan-27B-1211](https://huggingface.co/tattrongvu/Jeffan-27B-1211) in Flide 0.1.18, and an optional session cache.
 - 🔥 **2026-11-20** We added [SearchJev](https://huggingface.co/SearchJev/SearchJev-0.8B) in Flide 0.1.17, and tensor parallel now needs less memory on each GPU.
@@ -60,7 +61,7 @@
 
 ## Quick start
 
-Flide runs on an NVIDIA GPU under Linux or Windows WSL2. Install it with uv, or pull the Docker image.
+Flide runs on an NVIDIA GPU under Linux or Windows WSL2, and on an AMD Instinct GPU under Linux. Install it with uv, or pull the Docker image.
 
 ```bash
 uv pip install flide
@@ -70,7 +71,7 @@ uv pip install flide
 docker pull omnijev/flide
 ```
 
-See the [docs](https://docs.flide.org) for every model, images, the API and all options.
+See the [docs](https://docs.flide.org) for every model, images, the API and all options. On an AMD GPU, install the ROCm build of PyTorch first, as [AMD GPUs](https://docs.flide.org/install/#amd-gpus) shows.
 
 ## Example
 
@@ -114,7 +115,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [JevAny](https://huggingface.co/collections/SimpleJev/jevany-adaptive-decision-systems-6abc8fd39266b1c17b11b4e6) | text, images | 1.5× | 5.8× | 1.2× |
 | [jiwo](https://huggingface.co/eljiwo/jiwo-4b) | text | ~1.9× | ~5.9× | 1.8× |
 | [karpo](https://huggingface.co/collections/MachinePulseAI/karpo-decision-6aec94535bd0ce02a8821039) | text | 1.0× | 1.2× | 1.1× |
-| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~5.7× | ~1.5× | ~2.0× |
+| [Kev](https://huggingface.co/collections/jaredpalmer/kev-6aad9d0ea49f2589665e07cd) | text | ~5.2× | ~1.4× | ~1.7× |
 | [KnowLine](https://huggingface.co/PelaAI/KnowLine-35B-A3B-Gen1.5) | text, images | ~1.5× | ~4.9× | ~1.4× |
 | [kudhab](https://huggingface.co/plantwaterer/kudhab) | text | 1.1× | 1.2× | 1.1× |
 | [Linne](https://huggingface.co/collections/PNPM244/decision-model-6ad363fb3351cecf1112a5a8) | text | 2.3× | 8.6× | 1.2× |
@@ -134,6 +135,7 @@ The last three columns say how much faster Flide answers one request than the en
 | [Senova](https://huggingface.co/WangSenQWQ/Senova-4B) | text | 3.1× | 28.1× | 1.2× |
 | [Sieve](https://huggingface.co/collections/sthanika-ai/sieve-6abb93a61dd495f69811c586) | text | ~2.3× | ~8.1× | ~2.3× |
 | [StartLux](https://huggingface.co/collections/startlux-models/startlux-decision-v11-instant-6aca8158623e8e001724cc82) | text | 2.6× | 1.1× | 1.2× |
+| [Strands Decider](https://huggingface.co/StrandsAgents/strands-decider-E2B-gemma4-v2-2611) | text, images | ~3.3× | ~2.4× | ~1.9× |
 | [SynACK Decide](https://huggingface.co/SkyPanther/synack-decide-26b-a4b) | text | 3.3× | 11.9× | 3.0× |
 | [this-that](https://huggingface.co/flock-io/this-that-model-1.0) | text | 4.3× | 1.5× | 2.0× |
 | [torchcast](https://huggingface.co/torchcast-ai/torchcast-decision-27b) | text, images | 1.6× | 8.4× | 1.5× |
@@ -147,8 +149,8 @@ The last three columns say how much faster Flide answers one request than the en
 |---|---|
 | `--session-cache-gb 40` | keeps the states of earlier requests, so an agent's next step reads only what is new |
 | `--batch-invariant` | the same bits for a request whatever it is batched with, at some cost in speed |
-| `--quantize fp8` | Qwen3.5 and Gemma 4 in FP8 on Ada, Hopper and Blackwell GPUs |
-| `--quantize int8` | Qwen3.5 in int8 on Ampere and later GPUs, with `--batch-invariant` the same bits at any load |
+| `--quantize fp8` | Qwen2.5, Qwen3, Qwen3.5 and Gemma 4 in FP8 on NVIDIA Ada, Hopper and Blackwell GPUs |
+| `--quantize int8` | Qwen2.5, Qwen3, Qwen3.5 and Gemma 4 in int8 on NVIDIA Ampere and later GPUs and on AMD Instinct GPUs, with `--batch-invariant` the same bits at any load |
 | `--frontends 2` | HTTP, rendering and tokenizing in two processes of their own, for many clients |
 
 ## License

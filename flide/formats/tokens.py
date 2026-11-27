@@ -97,7 +97,6 @@ def one_word_pairs(tokenizer) -> set[str] | None:
     return {s[i: i + 2] for s in model.get("vocab", {}) for i in range(len(s) - 1)}
 
 
-
 class Pieces:
     CHECKS = 8   # calls of `rows` that also tokenize one text whole
 

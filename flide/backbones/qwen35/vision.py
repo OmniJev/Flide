@@ -25,7 +25,6 @@ from ...kernels import vision as vk
 from ...runtime.tp import capture_mode
 
 
-
 def patchify(img: torch.Tensor, patch: int, merge: int, temporal: int) -> torch.Tensor:
     """[3, H, W] -> [H * W / patch^2, 3 * temporal * patch^2]: the image processor's patch layout (Qwen2VL `patchify`,
     the same reshape, permute and temporal repeat), on whatever device the image is."""
@@ -99,6 +98,7 @@ def pixels(v: dict, pix: str, device) -> torch.Tensor:
         u8 = u8.to(device, non_blocking=True)
     mean, std = (t.to(device, non_blocking=True) for t in v["pixel_scale"])
     return (u8.float() - mean) / std
+
 
 def _segment_attention(q, k, v, segs, scale: float) -> torch.Tensor:
     """[n, H, D] each; every token sees the tokens of its own segment. PyTorch's attention, cuDNN first."""
