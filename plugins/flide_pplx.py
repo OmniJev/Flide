@@ -39,10 +39,13 @@ LEGACY_MAX_PIXELS = 262_144
 
 
 def _describe(value: Any) -> str:
+    """A string as it is, anything else as JSON, as the release writes caller values."""
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
 def _options(q) -> tuple[str, list[Any]]:
+    """A question's kind and its options in order: a choice's "name: description", a noul's false then true (the
+    release's defaults when the criteria leave them out), a score's levels."""
     if isinstance(q, ChoiceQuestion):
         return "choice", [k if v is None else f"{k}: {_describe(v)}" for k, v in q.criteria.items()]
     if isinstance(q, NoulQuestion):
@@ -54,12 +57,16 @@ def _options(q) -> tuple[str, list[Any]]:
 
 @register("pplx")
 class Pplx(Format):
+    """pplx-decider v1.2 and flash v1.2 on Qwen3.5 (the module docstring gives the prompt, attention and readout)."""
+
     backbones = ("qwen3_5",)
     attention = "blocks"
     max_choice_options = MAX_OPTIONS
     max_score_levels = MAX_OPTIONS
 
     def __init__(self, model_dir: str, tokenizer=None, temperature: float | None = None, max_length: int = 262144):
+        """Reads decision_config.json (codes, temperature, max_pixels) and the tokenizer, whose marker must be one token;
+        `temperature` overrides the checkpoint's, `max_length` caps a request's tokens."""
         import transformers
 
         self.model_dir = model_dir
@@ -97,6 +104,7 @@ class Pplx(Format):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        """joint_config.json is protocol version 3 as above, and the decision config asks for noncausal attention."""
         joint = Path(model_dir) / "joint_config.json"
         if not joint.is_file() or not decision_config:
             return False
@@ -107,6 +115,7 @@ class Pplx(Format):
         return protocol == PROTOCOL and decision_config.get("attention_mode") == "noncausal_full_attention"
 
     def load_heads(self, backbone) -> dict[str, Any]:
+        """readout.safetensors, one row per code, as the head a question's marker is read through."""
         from safetensors.torch import load_file
 
         rows = load_file(str(Path(self.model_dir) / "readout.safetensors"))["weight"]
@@ -115,12 +124,14 @@ class Pplx(Format):
         return {READ_HEAD: TokenRows(rows.to(backbone.device), list(range(rows.shape[0])))}
 
     def _text(self, value: Any) -> str:
+        """A caller value written out, every special token and the marker in it given fullwidth brackets."""
         text = _describe(value)
         for token in self.escapes:
             text = text.replace(token, token.replace("<", "＜").replace(">", "＞"))
         return text
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
+        """The whole request as one block, read at each question's marker; images go ahead of the text."""
         refs = getattr(request, "images", None) or []
         parts, fields = ["State:\n" + self._text(request.state)], []
         for index, (name, q) in enumerate(request.questions.items()):
@@ -154,6 +165,7 @@ class Pplx(Format):
                     attention="blocks")
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
+        """Each question's softmax over its options' readout rows at the checkpoint's temperature."""
         rows = outputs[0][0]
         answers = {}
         for (name, kind, n), logits in zip(plan.data, rows):

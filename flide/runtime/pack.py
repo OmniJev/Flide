@@ -38,6 +38,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class Job:
+    """One plan, or some of its branches, as the stream takes it: the shared prefix, the branches (`suffixes`) and
+    what to read in each (`reads`, one tuple per branch). The other fields carry media, rotary positions, a session
+    resume and marks, and the plan's attention."""
+
     prefix: list[int]
     suffixes: list[list[int]]
     reads: list[tuple[Read, ...]]
@@ -59,6 +63,9 @@ class Job:
 
 @dataclass
 class ReadGroup:
+    """The rows one head reads at one layer: `start` to `end` of that layer's gathered rows, and in `owners`, run by
+    run, the branch and the read each belongs to."""
+
     layer: int | None
     head: str | None
     start: int                                    # rows [start, end) of the layer's gathered rows
@@ -68,6 +75,10 @@ class ReadGroup:
 
 @dataclass
 class PackedBatch:
+    """The stream pack() builds for a micro-batch, as tensors on the device: each token's id, position, job and
+    branch, the bounds of every prefix and branch, the rows each read gathers, and what attention, media and sessions
+    need. [T] marks one entry per token of the stream, [J] per job, [B] per branch."""
+
     input_ids: "torch.Tensor"     # [T] long
     positions: "torch.Tensor"     # [T] long, prefix 0..P-1, every suffix restarts at P
     job: "torch.Tensor"           # [T] long, job index of every token
@@ -98,10 +109,14 @@ class PackedBatch:
 
     @property
     def n_tokens(self) -> int:
+        """Tokens in the stream."""
         return int(self.input_ids.shape[0])
 
 
 def pack(jobs: Sequence[Job], device) -> PackedBatch:
+    """`jobs` as one stream on `device`, in the order the module docstring shows. ValueError for a job it cannot
+    pack: an empty prefix or branch, a resume outside the prefix, a session with media or with block attention, or set
+    segments that do not rise to the end of the prefix."""
     import numpy as np
     import torch
 
@@ -168,6 +183,7 @@ def pack(jobs: Sequence[Job], device) -> PackedBatch:
     n_prefix = n
 
     def stream_index(j: int, a: int) -> int:
+        """The stream row of prefix position `a` of job `j`; the positions before a resume are not in the stream."""
         for lo, hi, st in segs[j]:
             if lo <= a < hi:
                 return st + a - lo

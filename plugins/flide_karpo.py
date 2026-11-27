@@ -47,10 +47,12 @@ HEAD = "readout"
 
 
 def describe(value: Any) -> str:
+    """A string as it is, anything else as JSON, as the release writes caller values."""
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
 def _given(model) -> dict:
+    """The fields a caller set on a request part (pydantic model or dict), extra keys included, as a dict."""
     if model is None:
         return {}
     if isinstance(model, dict):
@@ -71,6 +73,8 @@ def options(kind: str, criteria: Any) -> tuple[list[str], list[str]]:
 
 
 class _Hidden:
+    """A head that hands over the final hidden state at the read row; the readout runs in finish()."""
+
     on_device = True
 
     def __call__(self, h):
@@ -79,11 +83,15 @@ class _Hidden:
 
 @register("karpo")
 class Karpo(Format):
+    """karpo-decision-31B on Gemma 4 (the module docstring gives the prompt, the attention and the readout)."""
+
     backbones = ("gemma4", "gemma4_text")
     max_choice_options = MAX_OPTIONS
     backbone_options = {"vision": False, "float32_residual": True, "graph_step": 8}
 
     def __init__(self, model_dir: str, tokenizer=None, max_request_tokens: int = 262144):
+        """Reads decision_config.json (codes, token ids, temperatures), checks each code is one token, and splits the
+        chat template around the user turn's body into the token pieces every request reuses."""
         import transformers
 
         self.model_dir = model_dir
@@ -114,18 +122,22 @@ class Karpo(Format):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        """decision_config.json names template karpo-blocks-v1 and readout.safetensors is there."""
         return ((decision_config or {}).get("template") == "karpo-blocks-v1"
                 and (Path(model_dir) / "readout.safetensors").is_file())
 
     def escape(self, text: str) -> str:
+        """`text` with the < and > of every special or added token made fullwidth, so caller text makes no token."""
         for token in self.specials:
             text = text.replace(token, token.replace("<", ESCAPED[0]).replace(">", ESCAPED[1]))
         return text
 
     def text(self, value: Any) -> list[int]:
+        """Token ids of a caller value, written out and escaped."""
         return self.enc(self.escape(describe(value)))
 
     def load_heads(self, backbone) -> dict[str, Any]:
+        """readout.safetensors in float32 and the backbone's soft cap; the read row passes through as it is."""
         from safetensors.torch import load_file
 
         from flide import settings
@@ -138,6 +150,7 @@ class Karpo(Format):
         return {HEAD: _Hidden()}
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
+        """The shared block and a branch per question under block attention; one question makes one block alone."""
         if getattr(request, "images", None):
             raise ValueError("karpo: the block layout reads text only")
         qs = list(request.questions.items())
@@ -176,6 +189,8 @@ class Karpo(Format):
         return Plan(shared, [it[4] for it in items], (Read(HEAD),), data, attention="blocks")
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
+        """The readout on each question's hidden state, soft-capped; a softmax over its codes at its type's
+        temperature."""
         import torch
 
         h = torch.stack([out[0][0] for out in outputs]).float()
