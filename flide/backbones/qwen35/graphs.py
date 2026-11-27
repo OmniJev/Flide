@@ -46,7 +46,7 @@ import time
 
 import torch
 
-from ...kernels import attention as attn_kernel
+from ...kernels import attention as attn_kernel, gpu
 from ...kernels.fp8 import mm
 from ...runtime.tp import capture_mode
 from ... import settings
@@ -92,7 +92,7 @@ def _causal(q, k, v, scale: float):
     from torch.nn.attention import SDPBackend, sdpa_kernel
 
     order = [SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
-    if torch.cuda.get_device_capability(q.device)[0] >= 9:
+    if gpu.hopper_or_later(q.device):
         order[:2] = order[1::-1]
     heads = lambda x: x.transpose(0, 1)[None]
     with sdpa_kernel(order, set_priority=True):

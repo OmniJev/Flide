@@ -15,7 +15,6 @@ from .schedule import schedule
 log = logging.getLogger("flide.engine")
 
 
-
 def resolve_model(name: str) -> str:
     """A local directory, or a Hub repository id downloaded (or found in the cache) as a snapshot; a LoRA adapter
     becomes the directory it runs from, its base checkpoint with the adapter (lora.view)."""
@@ -241,11 +240,12 @@ class Engine:
         refuse_invariant_quantized(batch_invariant, backbone_options)
         if batch_invariant:
             settings.batch_invariant = True
-        from ..kernels import launcher
+        from ..kernels import gpu, launcher
         from .env import check_cuda
 
         if str(device).startswith("cuda"):
             check_cuda()
+            gpu.choose_blas()
         launcher.install()
         from .kcache import cache_dir, no_bundle, progress, seed, tune
 
@@ -447,6 +447,7 @@ class Engine:
         import torch
 
         budget = budget or self.budget
+        self._lend(plans)
         plans = [_rooted(p) for p in plans]
         for p in plans:
             if p is not None and _blocks(p) and not getattr(self.backbone, _capability(p), False):
@@ -632,8 +633,27 @@ class Engine:
         return all(p < 0 and -p <= shortest for b in range(len(plan.suffixes)) for r in plan.branch_reads(b)
                    for p in r.positions)
 
+    def _lend(self, plans) -> None:
+        """Plans asking about a vLLM request's conversation (`vllm_ref`, formats.next_token) get its keys and values in
+        the session cache first, on the thread that runs the GPU (integrations.vllm_kv). When that fails the plan still
+        runs, computing the conversation whole."""
+        for p in plans:
+            ref = getattr(p, "vllm_ref", None)
+            if ref is None:
+                continue
+            p.vllm_ref = None
+            try:
+                from ..integrations import vllm_kv
+
+                t = time.perf_counter()
+                n = len(vllm_kv.lend(self, vllm_kv.source(), ref))
+                log.debug("vllm_ref %s: %d tokens lent in %.1f ms", ref, n, (time.perf_counter() - t) * 1000)
+            except Exception as exc:
+                log.warning("vllm_ref %s: %s; the conversation is computed whole", ref, exc)
+
     def cost(self, plan: Plan) -> int:
         """Tokens a plan computes: all of them, less the start of its prefix a saved session state covers."""
+        self._lend([plan])
         plan = _rooted(plan)
         if self.sessions is None or not self._session_ok(plan):
             return plan.tokens
@@ -1059,6 +1079,7 @@ class Engine:
         batcher queues the next round before collecting this one, so the GPU does not wait for the host."""
         import torch
 
+        self._lend(plans)
         plans = [_rooted(p) for p in plans]
         outs: list[Any] = [None] * len(plans)
         paths = ["packed"] * len(plans)
@@ -1111,6 +1132,7 @@ class Engine:
         return outs, paths
 
     def _run_one(self, plan):
+        self._lend([plan])
         plan = _rooted(plan)
         if settings.batch_invariant:
             outs, paths = self.forward([plan], "batch")
