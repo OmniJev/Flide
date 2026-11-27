@@ -443,12 +443,15 @@ class KnowLine(Format):
 
     def __init__(self, model_dir: str, tokenizer=None, read_twice: bool = True, twice_max_tokens: int = 3000,
                  temperature: float = 1.0, header_when_long: int | None = None, temperatures: str | dict | None = None,
-                 max_questions: int = MAX_QUESTIONS):
+                 max_questions: int = MAX_QUESTIONS, max_request_tokens: int | None = None):
         import transformers
 
         self.max_questions = int(max_questions)
         if self.max_questions < 1:
             raise ValueError("max_questions must be positive")
+        self.max_request_tokens = None if max_request_tokens is None else int(max_request_tokens)
+        if self.max_request_tokens is not None and self.max_request_tokens < 1:
+            raise ValueError("max_request_tokens must be positive")
         self.model_dir = model_dir
         self.tokenizer = tokenizer or transformers.AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
         self.read_twice = bool(read_twice)
@@ -603,7 +606,11 @@ class KnowLine(Format):
             if any(not isinstance(r, str) or r.startswith(("http://", "https://")) for r in media):
                 raise ValueError("images: data URLs or base64 strings; URLs are not fetched")
             prefix_ids, vision = self._vision(prefix_ids, [self._open(r) for r in media], texts[0], suffixes[0])
-        return Plan(prefix_ids, suffixes, (READ,), data, vision=vision)
+        plan = Plan(prefix_ids, suffixes, (READ,), data, vision=vision)
+        if self.max_request_tokens is not None and plan.tokens > self.max_request_tokens:
+            raise ValueError(f"request is {plan.tokens} tokens, limit is {self.max_request_tokens} "
+                             "(shared prefix plus all question branches)")
+        return plan
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
         answers = {}

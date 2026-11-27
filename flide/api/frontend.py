@@ -215,17 +215,17 @@ class RemoteBatcher:
         one."""
         return self._control("flush")
 
-    def stats(self) -> cf.Future:
+    def stats(self, *, memory_details: bool = False) -> cf.Future:
         """The GPU process's numbers, one dict per replica it runs (a list when there are several)."""
-        return self._control("stats")
+        return self._control("stats", True) if memory_details else self._control("stats")
 
-    def _control(self, command: str) -> cf.Future:
+    def _control(self, command: str, *options) -> cf.Future:
         calls = {next(self._ids): cf.Future() for _ in self.requests}
         with self._lock:
             self._check_connected()
             self._waiting.update(calls)
         for outbox, rid in zip(self.requests, calls):
-            outbox.put((command, self.fid, rid))
+            outbox.put((command, self.fid, rid, *options))
         futs = list(calls.values())
         if len(futs) == 1:
             return futs[0]
@@ -385,9 +385,9 @@ def dispatch(batcher, requests, replies, admission=None) -> None:
             if fut is not None:
                 batcher.cancel_forward(fut)
         elif command == "stats":
-            _, fid, rid = msg
+            _, fid, rid, *options = msg
             sessions = batcher.engine.sessions
-            payload = batcher.stats()
+            payload = batcher.stats(memory_details=True) if options and options[0] else batcher.stats()
             if admission is not None:
                 payload.update(admission.stats())
             payload["sessions"] = sessions.stats() if sessions is not None else None
