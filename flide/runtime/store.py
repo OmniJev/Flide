@@ -74,7 +74,7 @@ class StateSnapshot:
         self.value = value
         self.refs = 0
         self.allocations = allocations
-        self.bytes = sum(size for _, size in allocations)
+        self.bytes = sum(a[-1] for a in allocations)
 
 
 class KVSlots:
@@ -100,9 +100,9 @@ class KVSlots:
     def free(self) -> None:
         """Give the rows back when the save does not happen (a forward that raised, or an entry dropped)."""
         if self.allocations:
-            for offset, size in self.allocations:
-                self.store._free(offset, size)
-            self.store.used -= sum(size for _, size in self.allocations)
+            for chunk, offset, size in self.allocations:
+                self.store._free(chunk, offset, size)
+            self.store.used -= sum(size for _, _, size in self.allocations)
             self.allocations = []
 
 
@@ -114,6 +114,8 @@ class Store:
     dtypes can share it. Their original dtype and shape are preserved.
     """
 
+    CHUNK = 256 << 20   # the arena grows a chunk at a time, so a cache that is barely used barely takes memory
+
     def __init__(self, budget_bytes: int):
         self.budget = max(0, int(budget_bytes))
         self.used = 0
@@ -121,26 +123,52 @@ class Store:
         self.by_position: dict[int, set[bytes]] = {}
         self.state_records: dict[bytes, StateSnapshot] = {}
         self.evictions = 0
-        self.buffer = None
+        self.chunks: list = []
+        self.chunk_free: list[list[tuple[int, int]]] = []
         self.device = None
-        self.free: list[tuple[int, int]] = []
 
     def configure(self, device) -> None:
-        """Reserve the store's backing block before requests start."""
+        """Prepare the store: the first chunk is taken now, the rest as the arena fills."""
         import torch
 
         if self.nodes:
-            raise RuntimeError(
-                "cannot configure a prefix store after inserting entries"
-            )
-        self.buffer = torch.empty(self.budget, dtype=torch.uint8, device=device)
+            raise RuntimeError("cannot configure a prefix store after inserting entries")
         self.device = torch.device(device)
-        self.free = [(0, self.budget)] if self.budget else []
+        self.chunks, self.chunk_free = [], []
+        if self.budget:
+            self._grow()
 
-    def _alloc(self, nbytes: int, alignment: int) -> int | None:
+    @property
+    def allocated(self) -> int:
+        return sum(c.numel() for c in self.chunks)
+
+    def _grow(self) -> bool:
+        """Take another chunk, up to the budget. False when the arena is already as big as it may get."""
+        import torch
+
+        left = self.budget - self.allocated
+        if left <= 0:
+            return False
+        size = min(left, max(self.CHUNK, self.allocated))
+        self.chunks.append(torch.empty(size, dtype=torch.uint8, device=self.device))
+        self.chunk_free.append([(0, size)])
+        return True
+
+    def _alloc(self, nbytes: int, alignment: int):
+        """`(chunk, offset)` for `nbytes`, growing the arena when no chunk has room; None when it does not fit."""
         if nbytes == 0:
-            return 0
-        for i, (start, size) in enumerate(self.free):
+            return (0, 0) if self.chunks else (0, 0)
+        while True:
+            for index, free in enumerate(self.chunk_free):
+                at = self._take(free, nbytes, alignment)
+                if at is not None:
+                    return index, at
+            if not self._grow():
+                return None
+
+    @staticmethod
+    def _take(free, nbytes: int, alignment: int):
+        for i, (start, size) in enumerate(free):
             at = (start + alignment - 1) // alignment * alignment
             padding = at - start
             if size - padding < nbytes:
@@ -152,23 +180,24 @@ class Store:
                 replacement.append((start, padding))
             if tail:
                 replacement.append((end, tail))
-            self.free[i : i + 1] = replacement
+            free[i : i + 1] = replacement
             return at
         return None
 
-    def _free(self, offset: int, nbytes: int) -> None:
-        if not nbytes:
+    def _free(self, chunk: int, offset: int, nbytes: int) -> None:
+        if not nbytes or chunk >= len(self.chunk_free):
             return
-        self.free.append((offset, nbytes))
-        self.free.sort()
+        free = self.chunk_free[chunk]
+        free.append((offset, nbytes))
+        free.sort()
         merged: list[tuple[int, int]] = []
-        for start, size in self.free:
+        for start, size in free:
             if merged and merged[-1][0] + merged[-1][1] == start:
                 prev, length = merged[-1]
                 merged[-1] = (prev, length + size)
             else:
                 merged.append((start, size))
-        self.free = merged
+        self.chunk_free[chunk] = merged
 
     def _allocate_tensor(self, shape, dtype, device, allocations):
         import math
@@ -177,20 +206,20 @@ class Store:
 
         element_size = torch.empty((), dtype=dtype).element_size()
         nbytes = math.prod(shape) * element_size
-        if self.buffer is None:
+        if not self.chunks:
             self.configure(device)
         if torch.device(device) != self.device:
             raise ValueError(
                 f"prefix-store tensor is on {device}, expected {self.device}"
             )
-        offset = self._alloc(nbytes, element_size)
-        if offset is None:
+        got = self._alloc(nbytes, element_size)
+        if got is None:
             return None
-        allocations.append((offset, nbytes))
+        chunk, offset = got
+        allocations.append((chunk, offset, nbytes))
         if not nbytes:
             return torch.empty(shape, dtype=dtype, device=device)
-        view = self.buffer.narrow(0, offset, nbytes).view(dtype).view(shape)
-        return view
+        return self.chunks[chunk].narrow(0, offset, nbytes).view(dtype).view(shape)
 
     def _copy_tensor(self, source, allocations: list[tuple[int, int]]):
         view = self._allocate_tensor(
@@ -340,15 +369,15 @@ class Store:
                 kt = self._allocate_tensor(tuple(ks), use, device, allocations)
                 vt = self._allocate_tensor(tuple(vs), use, device, allocations)
                 if kt is None or vt is None:
-                    for offset, size in allocations:
-                        self._free(offset, size)
+                    for chunk, offset, size in allocations:
+                        self._free(chunk, offset, size)
                     return None
                 tensors[layer] = (kt, vt)
         except Exception:
-            for offset, size in allocations:
-                self._free(offset, size)
+            for chunk, offset, size in allocations:
+                self._free(chunk, offset, size)
             return None
-        self.used += sum(size for _, size in allocations)
+        self.used += sum(size for _, _, size in allocations)
         return KVSlots(self, tensors, allocations)
 
     def insert(self, tokens, states: dict, kv: dict, session=None, parent_hint=None):
@@ -476,8 +505,8 @@ class Store:
         return leaf, stored_states, tuple(state_keys), added_bytes
 
     def _rollback(self, allocations) -> None:
-        for offset, size in allocations:
-            self._free(offset, size)
+        for chunk, offset, size in allocations:
+            self._free(chunk, offset, size)
 
     def _prefix_equals(self, node: Node, pos: int, tokens) -> bool:
         """Whether the path to ``node`` spells ``tokens[:pos]``."""
@@ -514,8 +543,8 @@ class Store:
         self.nodes.pop(node.key, None)
         if node.parent is not None:
             node.parent.children.pop(node.key, None)
-        for offset, size in node.allocations:
-            self._free(offset, size)
+        for chunk, offset, size in node.allocations:
+            self._free(chunk, offset, size)
         self.used -= node.bytes
         return node.bytes
 
@@ -535,8 +564,8 @@ class Store:
                 holders.discard(key)
                 if not holders:
                     self.by_position.pop(record.position, None)
-            for offset, size in record.allocations:
-                self._free(offset, size)
+            for chunk, offset, size in record.allocations:
+                self._free(chunk, offset, size)
             self.used -= record.bytes
             freed += record.bytes
         node.refs -= 1
@@ -554,6 +583,6 @@ class Store:
         self.state_records.clear()
         self.by_position.clear()
         self.used = 0
-        self.free = (
-            [(0, self.budget)] if self.buffer is not None and self.budget else []
-        )
+        self.chunks, self.chunk_free = [], []
+        if self.budget:
+            self._grow()
