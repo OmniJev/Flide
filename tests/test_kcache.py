@@ -94,6 +94,42 @@ def main():
         fails += not ok
         print(f"{'PASS' if ok else 'FAIL'} seeded cache hits ({n} seeded, {again} on the second seed, hit {hit})")
 
+        # an archive of two targets: a start files its own kernels and reads past the other's
+        t80 = {**tdict, "arch": 80}
+        man80 = {**man, "target": t80, "kernels": [{**man["kernels"][0], "dir": "k00001"}]}
+        kcache._write(Path(b) / "k80.tar.xz", man80, {"k00001/_axpy.cubin": b"eighty", "k00001/_axpy.json": json.dumps(meta).encode()})
+        solid = Path(b) / "solid.tar.xz"
+        packed = kcache.pack(solid, [bundle, Path(b) / "k80.tar.xz"])
+        with_index = kcache._index(solid)
+        own, others = kcache._files(solid, f"sm90-triton{triton.__version__}"), kcache._files(solid, f"sm80-triton{triton.__version__}")
+        ok = packed == 2 and sorted(with_index) == sorted([f"sm90-triton{triton.__version__}", f"sm80-triton{triton.__version__}"]) \
+            and own == {"k00000/_axpy.cubin": Path(group["_axpy.cubin"]).read_bytes(), "k00000/_axpy.json": json.dumps(meta).encode()} \
+            and others["k00001/_axpy.cubin"] == b"eighty"
+        fails += not ok
+        print(f"{'PASS' if ok else 'FAIL'} an archive of two targets keeps each bundle's files apart")
+        fresh2 = Path(b) / "cache2"
+        os.environ["TRITON_CACHE_DIR"] = str(fresh2)
+        n = kcache.seed(str(solid), target=tdict)
+        again = kcache.seed(str(solid), target=tdict)
+        _, _, k3, hit = compile_once(target, launch)
+        other80 = kcache.seed(str(solid), target=t80)
+        none = kcache.seed(str(solid), target={**tdict, "arch": 100})
+        ok = n == 1 and again == 0 and hit and k3.hash == h and k3.asm["cubin"] == k.asm["cubin"] and other80 == 1 and none == 0
+        fails += not ok
+        print(f"{'PASS' if ok else 'FAIL'} seeding an archive files this GPU's kernels alone ({n}, {again}, {other80}, {none})")
+        try:
+            kcache.pack(Path(b) / "twice.tar.xz", [bundle, bundle])
+            ok = False
+        except SystemExit:
+            ok = True
+        fails += not ok
+        print(f"{'PASS' if ok else 'FAIL'} two bundles for one target are refused")
+        (Path(b) / "solid2.tar.xz").write_bytes(b"not an archive")
+        n = kcache.seed(str(Path(b) / "solid2.tar.xz"), target=tdict)
+        ok = n == 0
+        fails += not ok
+        print(f"{'PASS' if ok else 'FAIL'} a broken file is passed over")
+
         other = Path(b) / "other"
         os.environ["TRITON_CACHE_DIR"] = str(other)
         n = kcache.seed(str(bundle), target={**tdict, "arch": 80})
