@@ -27,7 +27,9 @@ the model is asked and read:
                (recurrent and sliding-window layers stay causal), so every question is a sequence of its own and nothing is
                shared (a request's images are read again in each); "causal" (the default) shares the state between
                questions; "prefix": the request, through the last occurrence of the text "prefix_ends", is read both
-               ways and shared, and each question's tail after it one way (text only)
+               ways and shared, and each question's tail after it one way; "blocks": the same shared prefix, with
+               each question reading both ways within its own tail in the full-attention layers. Both shared-prefix
+               modes are text only
   images       {"min_pixels", "max_pixels"}: the model reads a request's images (data URLs or base64), ahead of the text of
                the last user turn as one image block each, resized by the checkpoint's processor within those bounds;
                without it images are refused. max_prompt_tokens counts the images' tokens
@@ -198,13 +200,17 @@ class Template(Format):
         self.images = spec.get("images")
         if self.images is not None and self.prompt is not None:
             raise ValueError("images go in a user turn: a configuration with images has messages")
-        if spec.get("attention", "causal") not in ("causal", "bidirectional", "prefix"):
-            raise ValueError("attention is causal, bidirectional or prefix")
-        self.attention = {"bidirectional": "blocks", "prefix": "prefix"}.get(spec.get("attention"), "causal")
-        if (self.attention == "prefix") != ("prefix_ends" in spec) or (self.attention == "prefix" and self.images):
-            raise ValueError("attention prefix takes prefix_ends and no images")
+        attention = spec.get("attention", "causal")
+        if attention not in ("causal", "bidirectional", "prefix", "blocks"):
+            raise ValueError("attention is causal, bidirectional, prefix or blocks")
+        self.attention = "blocks" if attention == "bidirectional" else attention
+        shared = attention in ("prefix", "blocks")
+        if shared != ("prefix_ends" in spec) or (shared and self.images is not None):
+            raise ValueError("attention prefix and blocks take prefix_ends and no images")
         self.prefix_ends = (self.tokenizer(spec["prefix_ends"], add_special_tokens=False)["input_ids"]
-                            if self.attention == "prefix" else None)
+                            if shared else None)
+        if attention == "blocks" and not self.prefix_ends:
+            raise ValueError("attention blocks requires a nonempty prefix_ends")
         st = spec.get("state")
         self.state_text = env.from_string(st["text"]) if st else None
         if st:
@@ -452,14 +458,17 @@ class Template(Format):
                 raise ValueError(f"the questions leave no room for the state within {self.max_prompt_tokens} tokens")
         else:
             raise ValueError(f"prompt is over {self.max_prompt_tokens} tokens")
-        if self.attention == "blocks" and not refs:   # whole prompts read both ways: sequences of their own
-            return Plan([], [head + t for t in tails], (READ,), data, attention="blocks")
-        if self.attention == "prefix":   # the request through the last prefix_ends read both ways, each tail one way
+        if self.prefix_ends is not None:
             rows = [head + t for t in tails]
             end = self._prefix_end(rows[0])
-            if any(r[:end] != rows[0][:end] or len(r) <= end for r in rows):
+            shared = rows[0][:end]
+            if any(len(row) <= end or row[:end] != shared for row in rows):
                 raise ValueError("the prompts differ before their requested parts end")
-            return Plan(rows[0][:end], [r[end:] for r in rows], (READ,), data, attention="prefix")
+            if self.attention == "blocks" and any(self._prefix_end(row) != end for row in rows[1:]):
+                raise ValueError("the shared prefix ends at different positions across questions")
+            return Plan(shared, [row[end:] for row in rows], (READ,), data, attention=self.attention)
+        if self.attention == "blocks" and not refs:   # whole prompts read both ways: sequences of their own
+            return Plan([], [head + t for t in tails], (READ,), data, attention="blocks")
         m = min(len(t) for t in tails) - 1   # where the prompts part, past the head they share
         for i in range(m):
             if any(t[i] != tails[0][i] for t in tails):
