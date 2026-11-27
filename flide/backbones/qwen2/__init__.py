@@ -9,7 +9,7 @@ from torch.nn import functional as F
 
 from ... import lora, settings
 from ...formats.base import FINAL
-from ...kernels import attention
+from ...kernels import attention, gpu
 from ...kernels import pointwise as pw
 from ...kernels.fp8 import mm
 from ...runtime.pack import PackedBatch
@@ -136,13 +136,18 @@ class Qwen2(Backbone):
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", loader: str = "direct",
              merge_lora: bool = False, cuda_graphs: bool = False, quantize: str | None = None, tp=None) -> "Qwen2":
-        """Load a text checkpoint, with CUDA graphs when requested by the engine."""
+        """Load a text checkpoint, with CUDA graphs when requested by the engine. `quantize` "fp8": the products to
+        float8 once read (backbones/quant.py); "int8": read in 16 bits, then the engine's `calibrate_int8` takes them
+        to int8 smoothed by its calibration requests."""
+        from .. import quant
+
         config = cls._config(model_dir)
         name = config.model_type
         if name not in cls.text_types:
             raise ValueError(f"{cls.__name__}: found model_type {name!r}, expected one of {cls.text_types}")
-        if quantize is not None:
-            raise NotImplementedError(f"{name}: --quantize is not supported")
+        quant.check(quantize, device, name)
+        if quantize is not None and tp is not None and tp[1] > 1:
+            raise NotImplementedError(f"{name}: --quantize with tensor parallel is not supported")
         device = torch.device(device)
         dtype = getattr(torch, dtype)
         if device.type != "cuda":
@@ -192,7 +197,10 @@ class Qwen2(Backbone):
             if missing:
                 raise ValueError(f"{model_dir}: missing checkpoint weights, e.g. {sorted(missing)[:5]}")
             model.eval()
-        return cls(model, cuda_graphs=cuda_graphs)
+        backbone = cls(model, cuda_graphs=cuda_graphs)
+        if quantize == "fp8":
+            backbone.quantize_fp8()
+        return backbone
 
     def __init__(self, model, cuda_graphs: bool = False, tensor_parallel: bool = False):
         from ...runtime.tp import RowParallel
@@ -212,7 +220,7 @@ class Qwen2(Backbone):
             raise NotImplementedError(f"{self.config.model_type}: RoPE frequencies must cover the full attention head")
         self.qkv_widths = first.q_proj.out_features, first.k_proj.out_features, first.v_proj.out_features
         self.attn_cfg = attention.config(self.device, self.dtype, self.head_dim)
-        if torch.cuda.get_device_capability(self.device) == (8, 0) and self.dtype != torch.float32 and self.head_dim <= 128:
+        if gpu.a100(self.device) and self.dtype != torch.float32 and self.head_dim <= 128:
             # A100 keeps more thread blocks resident with a smaller query tile than Hopper.
             self.attn_cfg = {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 4, "num_stages": 2}
         self.projections = []
@@ -225,10 +233,79 @@ class Qwen2(Backbone):
                 out = RowParallel(out)
             self.projections.append((_merge(qkv), bias, out, self._mlp_weights(mlp, tensor_parallel),
                                      getattr(attn, "q_norm", None), getattr(attn, "k_norm", None)))
-        last_qkv, last_bias, *_ = self.projections[-1]
+        self._rewire()
+        last_bias = self.projections[-1][1]
+        q_width = self.qkv_widths[0]
+        self.last_bias = (None, None) if last_bias is None else (last_bias[:q_width], last_bias[q_width:])
+
+    def _rewire(self) -> None:
+        """The last layer's query and key-value rows, which its final read projects apart."""
+        last_qkv = self.projections[-1][0]
         q_width = self.qkv_widths[0]
         self.last_qkv = (last_qkv[:q_width], last_qkv[q_width:]) if isinstance(last_qkv, torch.Tensor) else last_qkv.split(q_width)
-        self.last_bias = (None, None) if last_bias is None else (last_bias[:q_width], last_bias[q_width:])
+
+    def _slots(self) -> list:
+        """The products quantization converts (backbones/quant.py): per layer the merged query, key and value
+        projection, the output projection, and a dense MLP's merged gate and up projection and its down projection."""
+        from ..quant import Slot
+
+        where = {"qkv": (0, None), "o": (2, None), "gate_up": (3, 0), "down": (3, 1)}   # (place, place in the MLP's)
+
+        def getter(i, name):
+            at, sub = where[name]
+            return lambda: self.projections[i][at] if sub is None else self.projections[i][at][sub]
+
+        def setter(i, name):
+            at, sub = where[name]
+
+            def put(w):   # the entries are tuples (a dense MLP's is one too): rebuilt with the new weight
+                p = list(self.projections[i])
+                if sub is None:
+                    p[at] = w
+                else:
+                    mlp = list(p[at])
+                    mlp[sub] = w
+                    p[at] = tuple(mlp)
+                self.projections[i] = tuple(p)
+            return put
+
+        slots = []
+        for i, layer in enumerate(self.lm.layers):
+            attn, mlp = layer.self_attn, layer.mlp
+            mods = {"qkv": [attn.q_proj, attn.k_proj, attn.v_proj], "o": [attn.o_proj]}
+            if isinstance(self.projections[i][3], tuple):   # a dense MLP (a mixture of experts keeps a dict)
+                mods.update({"gate_up": [mlp.gate_proj, mlp.up_proj], "down": [mlp.down_proj]})
+            slots += [Slot((i, name), getter(i, name), setter(i, name), modules=m) for name, m in mods.items()]
+        return slots
+
+    def _experts(self) -> list:
+        """(weights, mlp) of the mixture-of-experts layers (kernels/moe.py reads the weights)."""
+        return [(p[3], layer.mlp) for p, layer in zip(self.projections, self.lm.layers) if isinstance(p[3], dict)]
+
+    def quantize_fp8(self) -> int:
+        """The products to float8 (backbones/quant.py): every one listed by `_slots`, or in a mixture of experts its
+        routed experts alone. Returns the number converted."""
+        from .. import quant
+
+        moe = self._experts()
+        if moe:
+            for weights, mlp in moe:
+                quant.experts_fp8(weights, mlp)
+            return 2 * len(moe)
+        n = quant.fp8(self._slots())
+        self._rewire()
+        return n
+
+    def calibrate_int8(self, run, alpha: float = 0.5) -> int:
+        """The products to int8 smoothed by the calibration requests `run()` forwards in 16 bits
+        (backbones/quant.calibrate_int8). Returns the number converted. SmoothQuant's alpha 0.5 here, where Qwen3.5's
+        is 0.75: on Qwen3-1.7B (H100, 16 rows each of MultiRC, RACE and QuALITY against a float32 referee) 0.5 gave 44,
+        2 and 2 clear flips against 55, 10 and 3 at 0.75, 62, 5 and 2 at 0.85, and 68, 10 and 3 unsmoothed."""
+        from .. import quant
+
+        if self._experts():
+            raise ValueError("int8: no mixture of experts yet (--quantize fp8 quantizes their experts)")
+        return quant.calibrate_int8(self._slots(), run, alpha, rewire=self._rewire)
 
     def request_graphs(self):
         if self.cuda_graphs and self._graphs is None:

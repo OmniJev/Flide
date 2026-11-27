@@ -32,12 +32,12 @@ def _geglu(a, b):
 def rmm(x, w):
     """The products of the last layer at the read rows: the batch-invariant kernel, whose sums do not depend on the
     number of rows (a replay holds as many read rows as its length allows, so the count changes with the round).
-    A quantized weight has no batch-invariant product (a pair the engine refuses), so it runs its own."""
-    from ...kernels.fp8 import Fp8Weight, mm as fp8_mm
+    A quantized weight (float8, int8) runs its own product, as does int8 calibration's wrapper of a 16-bit weight."""
+    from ...kernels.fp8 import mm as fp8_mm
     from ...kernels.invariant import mm as imm
 
     base = getattr(w, "base", w)
-    if isinstance(base, Fp8Weight):
+    if not isinstance(base, torch.Tensor):
         return fp8_mm(x, w)
     return imm(x, w) if isinstance(w, torch.Tensor) else w(x, imm)
 
@@ -63,19 +63,13 @@ DENSE_KEYS = ("qkv", "o", "gate_up", "down")
 
 
 def quantize_dense(weights: list[dict]) -> int:
-    """Each layer's dense projections to float8 weights in place, returning how many were converted. The per-layer
-    input gate and projection stay in the model's dtype (the keys picked here), as do the embedding and the head."""
-    from ...kernels.fp8 import Fp8Weight
+    """Each layer's dense projections to float8 weights in place (backbones/quant.py), returning how many were
+    converted. The per-layer input gate and projection stay in the model's dtype (the keys picked here), as do the
+    embedding and the head."""
+    from ..quant import Slot, fp8
 
-    n = 0
-    for layer in weights:
-        for key in DENSE_KEYS:
-            weight = layer[key]
-            base = weight.base if hasattr(weight, "base") else weight
-            wrapped = Fp8Weight.from_weight(base)
-            layer[key] = weight.with_base(wrapped) if hasattr(weight, "with_base") else wrapped
-            n += 1
-    return n
+    return fp8([Slot((i, k), lambda w=w, k=k: w[k], lambda v, w=w, k=k: w.__setitem__(k, v))
+                for i, w in enumerate(weights) for k in DENSE_KEYS])
 
 
 class FusedDecoder:

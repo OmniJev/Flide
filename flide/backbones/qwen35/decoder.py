@@ -222,6 +222,10 @@ class Qwen35(Backbone):
         they are read (flide/lora.py)."""
         import transformers
 
+        from .. import quant
+
+        if torch.device(device).type == "cuda":   # before any weight is read as float8 or int8
+            quant.check(quantize, torch.device(device), "qwen3_5")
         config = transformers.AutoConfig.from_pretrained(model_dir, local_files_only=True)
         if vision is None:
             vision = getattr(config, "vision_config", None) is not None
@@ -593,79 +597,56 @@ class Qwen35(Backbone):
         input projection), the embedding, the output head and the vision tower stay in 16 bits. In a mixture of experts
         only the routed experts go to float8 (kernels/moe.py). The 16-bit copies are freed. Returns the number of
         weights converted."""
-        from ...kernels import fp8
+        from .. import quant
 
-        if not fp8.supported(self.device):
-            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        quant.check("fp8", self.device, "qwen3_5")
         n = 0
         for i, layer in enumerate(self.layers):
-            w = self._w[i]
-            if "experts" in w:   # a mixture of experts: its routed experts (kernels/moe.py) alone; the rest of the
-                # layer keeps 16 bits, which in float8 moves the answers more than the experts do
-                from ...kernels.moe import quantize_experts
+            if "experts" in self._w[i]:   # a mixture of experts: its routed experts (kernels/moe.py) alone; the rest
+                # of the layer keeps 16 bits, which in float8 moves the answers more than the experts do
+                quant.experts_fp8(self._w[i], layer.mlp)
+                n += 2
+        n += quant.fp8(self._slots())
+        self.fp8 = True
+        return n
 
-                for key in ("experts", "experts_down"):
-                    w[key], w[key + "_scale"] = quantize_experts(w[key])
-                    n += 1
-                ex = layer.mlp.experts
-                ex.gate_up_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
-                ex.down_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+    def _slots(self) -> list:
+        """The products quantization converts (backbones/quant.py) in the layers without routed experts: the merged MLP
+        projections, Gated DeltaNet's merged input projection (its small gate projections, its last rows, stay in 16
+        bits) and its output projection, attention's merged query, key and value projection and its output
+        projection."""
+        from ..quant import Slot
+
+        slots = []
+        for i, layer in enumerate(self.layers):
+            w = self._w[i]
+            if "experts" in w:
                 continue
-            for key in ("gate_up", "down", "in", "out", "qkv", "o"):
-                if key in w:
-                    tail = 2 * layer.linear_attn.num_v_heads if key == "in" else 0
-                    if isinstance(w[key], lora.LowRank):
-                        w[key] = w[key].with_base(fp8.Fp8Weight.from_weight(w[key].base, tail))
-                    else:
-                        w[key] = fp8.Fp8Weight.from_weight(w[key], tail)
-                    n += 1
-            mods = [layer.mlp.gate_proj, layer.mlp.up_proj, layer.mlp.down_proj]
+            mods = {"gate_up": [layer.mlp.gate_proj, layer.mlp.up_proj], "down": [layer.mlp.down_proj]}
             if self.layer_types[i] == "linear_attention":
                 m = layer.linear_attn
-                mods += [m.in_proj_qkv, m.in_proj_z, m.in_proj_b, m.in_proj_a, m.out_proj]
+                mods.update({"in": [m.in_proj_qkv, m.in_proj_z, m.in_proj_b, m.in_proj_a], "out": [m.out_proj]})
             else:
                 m = layer.self_attn
-                mods += [m.q_proj, m.k_proj, m.v_proj, m.o_proj]
-            for mod in mods:   # the modules held views of the 16-bit weights; only the float8 ones are used now
-                mod.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
-        self.fp8 = True
-        torch.cuda.empty_cache()
-        return n
+                mods.update({"qkv": [m.q_proj, m.k_proj, m.v_proj], "o": [m.o_proj]})
+            for key in ("gate_up", "down", "in", "out", "qkv", "o"):
+                if key in w:
+                    slots.append(Slot((i, key), lambda w=w, k=key: w[k], lambda v, w=w, k=key: w.__setitem__(k, v),
+                                      tail=2 * m.num_v_heads if key == "in" else 0, modules=mods[key]))
+        return slots
 
     @torch.no_grad()
     def quantize_int8(self, input_max: dict | None = None, alpha: float = 0.75) -> int:
         """The products quantize_fp8 converts in a dense model, as int8 weights with per-row scales (kernels/int8.py),
         whose int32 sums keep their bits at any load. `input_max` {(layer, key): per-channel max |input|} smooths each
         product's input (SmoothQuant, kernels/int8.smoothing). No mixture of experts yet."""
-        from ...kernels import int8
+        from .. import quant
 
-        if not int8.supported(self.device):
-            raise RuntimeError("int8 needs compute capability 8.0 or newer (Ampere, Ada, Hopper, Blackwell)")
+        quant.check("int8", self.device, "qwen3_5")
         if any("experts" in w for w in self._w):
             raise ValueError("int8: no mixture of experts yet (--quantize fp8 quantizes their experts)")
-        n = 0
-        for i, layer in enumerate(self.layers):
-            w = self._w[i]
-            for key in ("gate_up", "down", "in", "out", "qkv", "o"):
-                if key in w:
-                    tail = 2 * layer.linear_attn.num_v_heads if key == "in" else 0
-                    base = w[key].base if isinstance(w[key], lora.LowRank) else w[key]
-                    amax = (input_max or {}).get((i, key))
-                    smooth = None if amax is None else int8.smoothing(amax, base[: base.shape[0] - tail], alpha)
-                    q = int8.Int8Weight.from_weight(base, tail, smooth)
-                    w[key] = w[key].with_base(q) if isinstance(w[key], lora.LowRank) else q
-                    n += 1
-            mods = [layer.mlp.gate_proj, layer.mlp.up_proj, layer.mlp.down_proj]
-            if self.layer_types[i] == "linear_attention":
-                m = layer.linear_attn
-                mods += [m.in_proj_qkv, m.in_proj_z, m.in_proj_b, m.in_proj_a, m.out_proj]
-            else:
-                m = layer.self_attn
-                mods += [m.q_proj, m.k_proj, m.v_proj, m.o_proj]
-            for mod in mods:   # the modules held views of the 16-bit weights; only the int8 ones are used now
-                mod.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
+        n = quant.int8(self._slots(), input_max, alpha)
         self.int8 = True
-        torch.cuda.empty_cache()
         return n
 
     def _weight16(self, i: int, k: str, cur):

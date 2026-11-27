@@ -63,8 +63,10 @@ class Lfm3(Backbone):
         return cls(model, vision=parts, **options)
 
     def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, vision=None, **_):
-        if quantize is not None:
-            raise NotImplementedError("lfm3: --quantize is not supported yet")
+        """`quantize` "fp8": the decoder's products to float8 once read (backbones/quant.py); "int8": kept in 16 bits
+        until the engine's `calibrate_int8` takes them to int8 smoothed by its calibration requests."""
+        from .. import quant
+
         if tp is not None and tp[1] > 1:
             raise NotImplementedError("lfm3: tensor parallel is not supported yet")
         self.model = model
@@ -79,6 +81,44 @@ class Lfm3(Backbone):
         self.image_token = vision.config.image_token_id if vision is not None else None
         self._fused = None
         self.decoder()
+        quant.check(quantize, self.device, "lfm3")
+        if quantize == "fp8":
+            self.quantize_fp8()
+
+    def _slots(self) -> list:
+        """The fused decoder's products quantization converts (backbones/quant.py): the merged gate and up projection
+        and the down projection, an attention layer's merged query, key, value and gate projection (its per-head gate,
+        the last rows, stays in 16 bits: one row a head, which also leaves the rest a multiple of 16 rows as float8
+        products need) and output projection, a convolution layer's input and output projections (the vision tower
+        stays in 16 bits)."""
+        from .. import quant
+
+        mods = []
+        for layer in self.lm.layers:
+            ff = layer.feed_forward
+            m = {"gate_up": [ff.w1, ff.w3], "down": [ff.w2]}
+            if layer.is_attention_layer:
+                a = layer.self_attn
+                m.update({"qkvg": [a.q_proj, a.k_proj, a.v_proj, a.gate_proj], "o": [a.o_proj]})
+            else:
+                m.update({"in": [layer.conv.in_proj], "out": [layer.conv.out_proj]})
+            mods.append(m)
+        weights = self.decoder().w
+        slots = quant.table(weights, mods)
+        for s in slots:
+            if s.key[1] == "qkvg":
+                s.tail = weights[s.key[0]]["nh"]   # a gate row per query head (the modules' weights may be freed)
+        return slots
+
+    def quantize_fp8(self) -> int:
+        from .. import quant
+
+        return quant.fp8(self._slots())
+
+    def calibrate_int8(self, run, alpha: float = 0.75) -> int:
+        from .. import quant
+
+        return quant.calibrate_int8(self._slots(), run, alpha)
 
     def vision_positions(self, ids, vision):
         """LFM3-VL places every token at its index (no multimodal rotary positions)."""

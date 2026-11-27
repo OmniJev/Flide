@@ -159,12 +159,13 @@ class Gemma4(Backbone):
 
     @classmethod
     def load(cls, model_dir: str, device: str = "cuda:0", dtype: str = "bfloat16", vision: bool | None = None,
-             loader: str = "direct", merge_lora: bool = False, **options) -> "Gemma4":
+             loader: str = "direct", merge_lora: bool = False, no_window: bool = False, **options) -> "Gemma4":
         """Checkpoints with a vision tower load it (`vision` None) unless `vision` is False; then only the decoder
         loads (vision and audio towers stay on disk).
         `loader` "direct" reads the safetensors straight onto the device (flide.backbones.load); "hf" uses
         transformers' from_pretrained (needs accelerate); "none" reads no weights (zeros). `merge_lora`: a LoRA adapter
-        merged into the weights as they are read (flide/lora.py)."""
+        merged into the weights as they are read (flide/lora.py). `no_window`: the sliding-window layers read the
+        whole range, and in block rounds they read each block whole as the global layers do (a family trained so)."""
         import transformers
 
         _register()
@@ -187,7 +188,13 @@ class Gemma4(Backbone):
         # FP8 of the dense decoder: its projections go to float8 as they are read, so the 16-bit copies never sit
         # on the device (a mixture of experts loads 16 bits, then its experts go to float8: quantize_fp8_experts)
         text = config.get_text_config() if hasattr(config, "get_text_config") else config
+        if no_window:
+            text.sliding_window = 0
         tp = options.get("tp")
+        if options.get("quantize") in ("fp8", "int8") and torch.device(device).type == "cuda":   # before a float8 read
+            from .. import quant
+
+            quant.check(options["quantize"], torch.device(device), "gemma4")
         lean_fp8 = (options.get("quantize") == "fp8" and not getattr(text, "enable_moe_block", False)
                     and (tp is None or tp[1] <= 1))
         lean = _fp8_target if lean_fp8 else None
@@ -228,16 +235,16 @@ class Gemma4(Backbone):
         model.config.get_text_config()._attn_implementation = IMPL
         model.eval()
         names = {id(m): n for n, m in model.named_modules()}
-        return cls(model, fp8_store=(store, names) if store else None, **options)
+        return cls(model, fp8_store=(store, names) if store else None, no_window=no_window, **options)
 
     def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, fp8_store=None,
-                 float32_residual: bool = False, graph_step: int = 0, **_):
+                 float32_residual: bool = False, graph_step: int = 0, no_window: bool = False, **_):
         """`float32_residual`: the fused decoder keeps the residual stream in float32 (fused.py). `graph_step`: the
         request graphs' lengths every `graph_step` tokens up to 1024 (graphs.fine_ladder), each timed as it is
         captured and a round replayed at the fastest length a little above its own (GemmaGraphs `pick`), for a model
         whose matrix products cost enough that padding a round to the next length on the default ladder costs more
         than the launches the graph saves."""
-        if quantize is not None and quantize != "fp8":
+        if quantize not in (None, "fp8", "int8"):
             raise ValueError(f"gemma4: unknown quantization {quantize!r}")
         if tp is not None and tp[1] > 1:
             raise NotImplementedError("gemma4: tensor parallel is not supported yet")
@@ -254,6 +261,7 @@ class Gemma4(Backbone):
         self.cuda_graphs = cuda_graphs
         self.float32_residual = bool(float32_residual)
         self.graph_step = int(graph_step or 0)
+        self.no_window = bool(no_window)
         top = model.config
         self.vlm = model if hasattr(inner, "get_image_features") else None
         self.placeholders = {i for i in (getattr(top, k, None) for k in ("image_token_id", "video_token_id",
@@ -266,15 +274,20 @@ class Gemma4(Backbone):
         self.moe = bool(getattr(self.config, "enable_moe_block", False))
         self._experts()
         self._fused = None
-        if quantize is not None:
+        if quantize == "int8":   # 16 bits until the engine's calibrate_int8
+            from .. import quant
+
+            quant.check("int8", self.device, "gemma4")
+            if self.moe:
+                raise ValueError("gemma4: int8 has no mixture of experts yet (--quantize fp8 quantizes their experts)")
+        elif quantize == "fp8":
             if self.moe:   # its routed experts alone, as the Qwen3.5 mixture of experts
                 self.quantize_fp8_experts()
             elif fp8_store is not None:   # read as float8 already (load)
-                from ...kernels import fp8
+                from .. import quant
                 from .fused import FusedDecoder
 
-                if not fp8.supported(self.device):
-                    raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+                quant.check("fp8", self.device, "gemma4")
                 self._fused = FusedDecoder(self.lm, store=fp8_store, float32_residual=self.float32_residual)
                 fp8_store[0].clear()
             else:
@@ -298,21 +311,43 @@ class Gemma4(Backbone):
         projections, the output projection and the down projection. The token embedding, the norms, the per-layer
         input gate and projection and the output head stay in the model's dtype, and the 16-bit copies of the
         converted weights are freed. Returns the number of weights converted."""
-        from ...kernels import fp8
-        from .fused import FusedDecoder, quantize_dense
+        from .. import quant
+        from .fused import FusedDecoder
 
-        if not fp8.supported(self.device):
-            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        quant.check("fp8", self.device, "gemma4")
         fused = FusedDecoder(self.lm, float32_residual=self.float32_residual)
-        n = quantize_dense(fused.w)
+        n = quant.fp8(self._slots(fused))
         self._fused = fused
-        for layer in self.lm.layers:
-            a, mlp = layer.self_attn, layer.mlp
-            mods = [a.q_proj, a.o_proj, mlp.gate_proj, mlp.up_proj, mlp.down_proj]
-            mods += [m for m in (getattr(a, "k_proj", None), getattr(a, "v_proj", None)) if m is not None]
-            for m in mods:
-                m.weight.data = torch.empty(0, device=self.device, dtype=self.dtype)
         return n
+
+    def calibrate_int8(self, run, alpha: float = 0.5) -> int:
+        """The dense decoder's products to int8 smoothed by the calibration requests `run()` forwards in 16 bits
+        (backbones/quant.calibrate_int8). Returns the number converted. `alpha` 0.5: on Gemma 4 E2B (16 rows each of
+        multirc, race_all, quality_long) clear flips against a float32 referee were 33, 35, 19, 21, 35 at 0, 0.35, 0.5,
+        0.65, 0.75 (bfloat16 transformers 7)."""
+        from .. import quant
+
+        if self.moe:
+            raise ValueError("int8: no mixture of experts yet (--quantize fp8 quantizes their experts)")
+        return quant.calibrate_int8(self._slots(), run, alpha)
+
+    def _slots(self, fused=None) -> list:
+        """The dense decoder's products quantization converts (backbones/quant.py), in the fused decoder's weights
+        (`fused`, else the current one): the merged query, key and value projection (a layer sharing another's keys
+        and values projects its queries alone), the output projection, the merged gate and up projection and the down
+        projection."""
+        from ..quant import Slot
+        from .fused import DENSE_KEYS
+
+        fused = fused or self.decoder()
+        slots = []
+        for i, (layer, w) in enumerate(zip(self.lm.layers, fused.w)):
+            a, mlp = layer.self_attn, layer.mlp
+            qkv = [a.q_proj] + [m for m in (getattr(a, "k_proj", None), getattr(a, "v_proj", None)) if m is not None]
+            mods = {"qkv": qkv, "o": [a.o_proj], "gate_up": [mlp.gate_proj, mlp.up_proj], "down": [mlp.down_proj]}
+            slots += [Slot((i, k), lambda w=w, k=k: w[k], lambda v, w=w, k=k: w.__setitem__(k, v), modules=mods[k])
+                      for k in DENSE_KEYS]
+        return slots
 
     @torch.no_grad()
     def quantize_fp8_experts(self) -> int:
@@ -320,23 +355,16 @@ class Gemma4(Backbone):
         row (kernels/moe.py), as the Qwen3.5 mixture of experts has them; attention, the dense MLP, the router, the
         embedding and the head keep the model's dtype, which in float8 move the answers more than the experts do. The
         16-bit experts are freed. Returns the number of weights converted."""
-        from ...kernels import fp8
-        from ...kernels.moe import quantize_experts
+        from .. import quant
         from .fused import FusedDecoder
 
-        if not fp8.supported(self.device):
-            raise RuntimeError("FP8 needs compute capability 8.9 or newer (Ada, Hopper, Blackwell)")
+        quant.check("fp8", self.device, "gemma4")
         fused = FusedDecoder(self.lm, float32_residual=self.float32_residual)
         n = 0
         for layer, w in zip(self.lm.layers, fused.w):
-            m = w.get("moe")
-            if m is None:
-                continue
-            for key in ("experts", "experts_down"):
-                m[key], m[key + "_scale"] = quantize_experts(m[key])
-                n += 1
-            layer.experts.gate_up_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
-            layer.experts.down_proj.data = torch.empty(0, device=self.device, dtype=self.dtype)
+            if w.get("moe") is not None:
+                quant.experts_fp8(w["moe"], layer)   # the layer holds its experts as `experts`
+                n += 2
         self._fused = fused
         torch.cuda.empty_cache()
         return n
@@ -430,8 +458,9 @@ class Gemma4(Backbone):
         """Block and prefix attention (formats.base.Plan): the global layers see every block whole, from the batch's key
         ranges and a block number per token (a block job's prefix 0 and its branches 1; a prefix job's prefix 0 and its
         branches -1, which pack's ranges keep one way; every other token -1); the sliding layers read the same queries
-        causally, cut to their window. Text without sessions."""
-        if batch.vision or batch.ctx is not None:
+        causally, cut to their window, or (`no_window`, images too) as the global layers do. No
+        sessions, and text alone with a window."""
+        if batch.ctx is not None or (batch.vision and not self.no_window):
             raise ValueError("block and prefix attention on gemma4 take text without session states")
         job, branch, qpos = tok
         jl = job.long()
@@ -444,9 +473,10 @@ class Gemma4(Backbone):
                                    ranges[:, 1])
         causal[:, 3] = torch.where(branch >= 0, torch.minimum(ranges[:, 3], idx + 1), ranges[:, 3])
         groups = batch.attn_runs or attn_kernel.runs(ranges.cpu().numpy(), by_row=True)
-        return {"full_attention": _Meta(tuple(tok) + (blk,), ranges, None, None, groups),
-                "sliding_attention": _Meta(tok, window_ranges(causal, qpos, self.config.sliding_window or 0), None, None,
-                                           groups, tiles=causal)}
+        full = _Meta(tuple(tok) + (blk,), ranges, None, None, groups)
+        return {"full_attention": full,
+                "sliding_attention": full if self.no_window else
+                _Meta(tok, window_ranges(causal, qpos, self.config.sliding_window or 0), None, None, groups, tiles=causal)}
 
     def session_rows(self, mark: int) -> dict:
         """Rows of the session store a state saved at `mark` takes, per layer kind: a full layer keeps every position

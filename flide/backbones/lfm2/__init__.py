@@ -93,8 +93,10 @@ class Lfm2(Backbone):
         return cls(model, **options)
 
     def __init__(self, model, cuda_graphs: bool = False, quantize: str | None = None, tp=None, **_):
-        if quantize is not None:
-            raise NotImplementedError("lfm2: --quantize is not supported yet")
+        """`quantize` "fp8": the decoder's products to float8 once read (backbones/quant.py); "int8": kept in 16 bits
+        until the engine's `calibrate_int8` takes them to int8 smoothed by its calibration requests."""
+        from .. import quant
+
         if tp is not None and tp[1] > 1:
             raise NotImplementedError("lfm2: tensor parallel is not supported yet")
         self.model = model
@@ -109,6 +111,9 @@ class Lfm2(Backbone):
         self.image_token = getattr(model.config, "image_token_id", None)
         self._fused = None
         self.decoder()
+        quant.check(quantize, self.device, "lfm2")
+        if quantize == "fp8":
+            self.quantize_fp8()
 
     def decoder(self):
         from .fused import FusedDecoder
@@ -116,6 +121,34 @@ class Lfm2(Backbone):
         if self._fused is None or self._fused.dtype != self.lm.layers[0].feed_forward.w1.weight.dtype:
             self._fused = FusedDecoder(self.lm)
         return self._fused
+
+    def _slots(self) -> list:
+        """The fused decoder's products quantization converts (backbones/quant.py): the merged gate and up projection
+        and the down projection, an attention layer's merged query, key and value projection and output projection,
+        a convolution layer's input and output projections."""
+        from .. import quant
+
+        mods = []
+        for layer in self.lm.layers:
+            ff = layer.feed_forward
+            m = {"gate_up": [ff.w1, ff.w3], "down": [ff.w2]}
+            if layer.is_attention_layer:
+                a = layer.self_attn
+                m.update({"qkv": [a.q_proj, a.k_proj, a.v_proj], "o": [a.out_proj]})
+            else:
+                m.update({"in": [layer.conv.in_proj], "out": [layer.conv.out_proj]})
+            mods.append(m)
+        return quant.table(self.decoder().w, mods)
+
+    def quantize_fp8(self) -> int:
+        from .. import quant
+
+        return quant.fp8(self._slots())
+
+    def calibrate_int8(self, run, alpha: float = 0.75) -> int:
+        from .. import quant
+
+        return quant.calibrate_int8(self._slots(), run, alpha)
 
     def vision_positions(self, ids, vision):
         """LFM2-VL places every token at its index (no multimodal rotary positions)."""

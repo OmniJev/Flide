@@ -9,9 +9,9 @@ import torch
 import transformers
 
 from flide.backbones.qwen35 import Qwen35
-from flide.kernels import int8
+from flide.kernels import gpu, int8
 
-int8.supported = lambda device: True   # the CPU stands in for the GPU: these products are never run here
+gpu.int8 = lambda device=None: True   # the CPU stands in for the GPU: these products are never run here
 KEYS = ("gate_up", "down", "in", "out", "qkv", "o")
 _CKPT = None
 
