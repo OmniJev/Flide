@@ -379,10 +379,24 @@ class Engine:
                      "session cache (--budget sets it)", self.budget)
 
     def run_plans(self, plans: Sequence[Plan | None], budget: int | None = None,
-                  log_fn: Callable[[str], None] | None = None, warmup: int = 0) -> tuple[list, dict]:
-        """Head outputs for every plan: out[plan][branch][read] is a list of rows, one per read position."""
+                  log_fn: Callable[[str], None] | None = None, warmup: int = 0,
+                  _merge: bool = True) -> tuple[list, dict]:
+        """Head outputs for every plan: out[plan][branch][read] is a list of rows, one per read position.
+
+        Requests that share a prefix run as one multi-branch plan, which computes that prefix once -- 7x on eight
+        requests over a 6k prefix. That changes the shape of the prefix's computation, so the answers are bit-for-bit
+        the same only with the invariant products on; without them the merge is a rounding-level approximation, so it
+        stays off unless `batch_invariant` is set."""
         import torch
 
+        if _merge and settings.batch_invariant and sum(1 for p in plans if p is not None) > 1:
+            from .merge import group, split
+
+            groups = group(plans)
+            if any(len(parts) > 1 for _, parts in groups):
+                outs, stats = self.run_plans([g[0] for g in groups], budget=budget, log_fn=log_fn,
+                                             warmup=warmup, _merge=False)
+                return split(outs, groups, len(plans)), stats
         budget = budget or self.budget
         plans = [_rooted(p) for p in plans]
         for p in plans:

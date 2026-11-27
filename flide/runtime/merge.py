@@ -61,9 +61,9 @@ def group(plans):
     return out
 
 
-def split(outputs, groups):
+def split(outputs, groups, n=None):
     """`out[original index]` = that plan's own branch outputs, taken back out of the merged ones."""
-    out = [None] * sum(len(parts) for _, parts in groups)
+    out = [None] * (n if n is not None else sum(len(parts) for _, parts in groups))
     for slot, (_, parts) in enumerate(groups):
         merged = outputs[slot]
         at = 0
