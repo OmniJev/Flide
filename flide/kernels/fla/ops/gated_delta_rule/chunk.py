@@ -30,6 +30,7 @@ def chunk_gated_delta_rule_fwd(
     A_log: torch.Tensor | None = None,
     dt_bias: torch.Tensor | None = None,
     chunk_size: int = 64,
+    initial_state_indices: torch.Tensor | None = None,
 ):
     g_input = g if use_gate_in_kernel else None
     if use_gate_in_kernel:
@@ -62,6 +63,7 @@ def chunk_gated_delta_rule_fwd(
         u=u,
         g=g,
         initial_state=initial_state,
+        initial_state_indices=initial_state_indices,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,
@@ -105,9 +107,14 @@ def chunk_gated_delta_rule(
     A_log: torch.Tensor | None = None,
     dt_bias: torch.Tensor | None = None,
     chunk_size: int = 64,
+    initial_state_indices: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """fla's chunk_gated_delta_rule with ChunkGatedDeltaRuleFunction.forward, for inference: the same checks, the same
-    calls in the same order (its input_guard makes every tensor argument contiguous first), no autograd."""
+    calls in the same order (its input_guard makes every tensor argument contiguous first), no autograd.
+
+    For packed input, initial_state_indices maps each sequence to a valid row in initial_state.
+    Multiple sequences may read the same row without modifying it.
+    """
     if q.shape[2] != k.shape[2]:
         raise ValueError(f"q and k must have the same number of heads, but got q.shape[2]={q.shape[2]} and "
                          f"k.shape[2]={k.shape[2]}")
@@ -119,9 +126,14 @@ def chunk_gated_delta_rule(
     if cu_seqlens is not None:
         if q.shape[0] != 1:
             raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`.")
-        if initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
-            raise ValueError(f"The number of initial states is expected to be equal to the number of input sequences, "
-                             f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.")
+    if initial_state_indices is not None:
+        if initial_state is None or cu_seqlens is None or initial_state_indices.shape != (len(cu_seqlens) - 1,):
+            raise ValueError("indexed initial state requires a state pool and one index per packed sequence")
+        if initial_state_indices.device != initial_state.device or initial_state_indices.dtype not in (torch.int32, torch.int64):
+            raise ValueError("initial_state_indices must contain integers on the same device as initial_state")
+    elif cu_seqlens is not None and initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
+        raise ValueError(f"The number of initial states is expected to be equal to the number of input sequences, "
+                         f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.")
     if use_gate_in_kernel and A_log is None:
         raise ValueError("A_log must be provided when use_gate_in_kernel=True.")
     if allow_neg_eigval and not use_beta_sigmoid_in_kernel:
@@ -143,6 +155,7 @@ def chunk_gated_delta_rule(
         beta=beta,
         scale=scale,
         initial_state=initial_state,
+        initial_state_indices=initial_state_indices,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,

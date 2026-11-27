@@ -29,6 +29,7 @@ else:
     'USE_G': lambda args: args['g'] is not None,
     'USE_GK': lambda args: args['gk'] is not None,
     'USE_INITIAL_STATE': lambda args: args['h0'] is not None,
+    'USE_INITIAL_STATE_INDICES': lambda args: args['h0_indices'] is not None,
     'STORE_FINAL_STATE': lambda args: args['ht'] is not None,
     'SAVE_NEW_VALUE': lambda args: args['v_new'] is not None,
     'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
@@ -52,6 +53,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     gk,
     h,
     h0,
+    h0_indices,
     ht,
     cu_seqlens,
     chunk_offsets,
@@ -65,6 +67,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     USE_G: tl.constexpr,
     USE_GK: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
+    USE_INITIAL_STATE_INDICES: tl.constexpr,
     STORE_FINAL_STATE: tl.constexpr,
     SAVE_NEW_VALUE: tl.constexpr,
     STATE_V_FIRST: tl.constexpr,
@@ -110,7 +113,10 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
         v_new += (bos * HV + i_h).to(tl.int64) * V
 
     if USE_INITIAL_STATE:
-        h0 = h0 + i_nh * K*V
+        state_row = i_n
+        if USE_INITIAL_STATE_INDICES:
+            state_row = tl.load(h0_indices + i_n).to(tl.int64)
+        h0 = h0 + (state_row * HV + i_h) * K*V
     if STORE_FINAL_STATE:
         ht = ht + i_nh * K*V
 
@@ -351,6 +357,7 @@ def chunk_gated_delta_rule_fwd_h(
     cu_seqlens_cpu: torch.LongTensor | None = None,
     chunk_indices: torch.LongTensor | None = None,
     chunk_offsets: torch.LongTensor | None = None,
+    initial_state_indices: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     B, T, H, K, V, HV = *k.shape, u.shape[-1], u.shape[2]
     BT = chunk_size
@@ -384,6 +391,7 @@ def chunk_gated_delta_rule_fwd_h(
         gk=gk,
         h=h,
         h0=initial_state,
+        h0_indices=initial_state_indices,
         ht=final_state,
         cu_seqlens=cu_seqlens,
         chunk_offsets=chunk_offsets,

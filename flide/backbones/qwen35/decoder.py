@@ -715,7 +715,7 @@ class Qwen35(Backbone):
         op, state = chunk_gated_delta_rule(qp, kp, vp, g=a[None, :Tp], beta=beta[None, :Tp], output_final_state=True,
                                            cu_seqlens=b.cu_prefix, cu_seqlens_cpu=b.cu_prefix_cpu, **gate)
         os_, _ = chunk_gated_delta_rule(qs, ks, vs, g=a[None, Tp:], beta=beta[None, Tp:],
-                                        initial_state=state.index_select(0, b.branch_job), output_final_state=False,
+                                        initial_state=state, initial_state_indices=b.branch_job, output_final_state=False,
                                         cu_seqlens=b.cu_suffix, cu_seqlens_cpu=b.cu_suffix_cpu, **gate)
         out = torch.empty(T, w["out"].shape[0], device=x.device, dtype=x.dtype)
         mm_into(gated_rms(op[0], z[:Tp], m.norm.weight, m.norm.variance_epsilon), w["out"], out[:Tp])
@@ -788,7 +788,7 @@ class Qwen35(Backbone):
             ys.append(y.view(1, T - Tp, heads, dim))
         qs, ks, vs = ys
         os_, _ = chunk_gated_delta_rule(qs, ks, vs, g=a[None, Tp:], beta=beta[None, Tp:],
-                                        initial_state=S.index_select(0, bj), output_final_state=False,
+                                        initial_state=S, initial_state_indices=bj, output_final_state=False,
                                         cu_seqlens=b.cu_suffix, cu_seqlens_cpu=b.cu_suffix_cpu, **gate)
         out = torch.empty(T, w["out"].shape[0], device=x.device, dtype=x.dtype)
         mm_into(gated_rms_segments([o[0] for o in outs], z[:Tp], m.norm.weight, m.norm.variance_epsilon),
