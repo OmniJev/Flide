@@ -14,6 +14,7 @@ from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5Moe
 
 from flide.backbones.qwen35.decoder import Qwen35
 from flide.formats.base import FINAL, Read
+from flide.kernels import gpu
 from flide.kernels.moe import quantize_experts
 from flide.runtime.pack import Job, pack
 
@@ -72,6 +73,9 @@ def check_model(layer_types):
         loaded = Qwen35.load(str(root / 'bf16'), device='cuda:0')
         assert torch.equal(forward(reference), forward(loaded))
         print('PASS BF16 checkpoint load gives the original model outputs', flush=True)
+        if not gpu.fp8('cuda:0'):   # A40 (sm86), MI210: no float8 products
+            print('SKIP FP8 layouts (this GPU has no float8 products)', flush=True)
+            return
         loaded_fused = Qwen35.load(str(root / 'fused'), device='cuda:0', quantize='fp8')
         loaded_split = Qwen35.load(str(root / 'split'), device='cuda:0', quantize='fp8')
         for loaded_fp8 in (loaded_fused, loaded_split):

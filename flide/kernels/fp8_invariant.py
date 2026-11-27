@@ -75,6 +75,9 @@ def _mm_tma_kernel(X, W, SX, SW, Y, M, N, K, sxm, swn, sym, BM: tl.constexpr, BN
         y_desc.store([pm * BM, pn * BN], (acc * sx[:, None] * sw[None, :]).to(Y.dtype.element_ty))
 
 
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
+
+
 # TMA tile shapes (BM, BN, BK, warps, stages), widest first; any of them sums an element in the same order
 WIDE, NARROW, SMALL = (128, 128, BK, 8, 4), (64, 128, BK, 4, 4), (64, 64, BK, 4, 3)
 SMALL_M = 512   # rows at or below: the narrow shapes
@@ -105,13 +108,13 @@ def mm_scaled(xq: torch.Tensor, sx: torch.Tensor, q: torch.Tensor, sw: torch.Ten
     y = torch.empty((M, N), dtype=out_dtype, device=xq.device)
     if M == 0:
         return y
-    tma = (torch.cuda.get_device_capability(xq.device)[0] >= 9 and K % 16 == 0 and xq.stride(0) % 16 == 0
+    tma = (gpu.tma(xq.device) and K % 16 == 0 and xq.stride(0) % 16 == 0
            and q.stride(0) % 16 == 0 and (y.stride(0) * y.element_size()) % 16 == 0)
     shape = cfg or (pick(M, budget(xq.device), y.element_size()) if tma else None)
     if tma and shape is not None:
         BM, BN, bk, warps, stages = shape
         if _sms is None:
-            _sms = torch.cuda.get_device_properties(xq.device).multi_processor_count
+            _sms = gpu.sms(xq.device)
         if not getattr(_local, "allocator", False):
             triton.set_allocator(_alloc)
             _local.allocator = True

@@ -179,9 +179,9 @@ def config(device, dtype, head_dim: int) -> dict:
     """Tile sizes that fit the part's shared memory: about 99 KB per block on consumer and workstation cards,
     227 KB on H100 / H200. On the large parts, 128-query tiles (H200, bfloat16: 349 TFLOP/s causal at 256-dim heads
     against 182 with 64-query tiles; 182 against 59 at 64-dim heads, where 4 warps beat 8)."""
-    smem = getattr(torch.cuda.get_device_properties(device), "shared_memory_per_block_optin", 0)
-    big = smem >= 160 * 1024
-    dp = triton.next_power_of_2(head_dim)
+    big, dp = gpu.big_smem(device), triton.next_power_of_2(head_dim)
+    if gpu.AMD and dtype != torch.float32:
+        return _amd_config(dp)
     if dp > 256:   # Gemma 4 global layers (512); on the large parts in 16 bits, 128-query tiles with each program
         # writing half the value dims (H200: 200 TFLOP/s causal at 3584 tokens against 65 with 16-query tiles whole), two
         # stages (12 to 17 percent faster than one from 512 tokens on, the same bits)
@@ -196,7 +196,7 @@ def config(device, dtype, head_dim: int) -> dict:
             # on Blackwell: four warps measured 1.2x at 4k tokens and 1.5x at 8k. BLOCK_M stays: the query tile is what
             # block_ranges groups rows by, and a smaller tile changes the key ranges those rows are masked against,
             # which moves long-prompt answers where the ranges differ.
-            if torch.cuda.get_device_capability(device) >= (12, 0):
+            if gpu.consumer_blackwell(device):
                 return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 2}
             return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 8, "num_stages": 1}
         return {"BLOCK_M": 64, "BLOCK_N": 64, "num_warps": 8, "num_stages": 2}
@@ -306,6 +306,22 @@ def _tile_ranges(LO1, HI1, LO2, HI2, sr, ROW_LO, ROW_HI, R, BM: tl.constexpr, BL
     tl.store(out + 7, f)
     tl.store(out + 8, g)
     tl.store(out + 9, h)
+
+
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
+
+
+def _amd_config(dp: int) -> dict:
+    """AMD (MI210, 64 KB of LDS; bench/attn_sweep_amd.py, causal at 3584 tokens): one stage and four warps for all. The
+    tiles below ran 2.5 to 7 times faster than NVIDIA's (82 TFLOP/s at 128-dim heads against 12). Only tiles that pass
+    tests/test_attention.py whole: ROCm miscompiles some others into kernels that fault on the block layouts (m128 n64,
+    m64 n64 with four warps, and m128 n32 without waves_per_eu, none of which reads outside its tensors under NVIDIA's
+    compute-sanitizer), and eight warps with two stages at 256-dim heads returned wrong values."""
+    if dp > 256:
+        return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 1}
+    if dp > 128:
+        return {"BLOCK_M": 64, "BLOCK_N": 32, "num_warps": 4, "num_stages": 1, "waves_per_eu": 2}
+    return {"BLOCK_M": 128, "BLOCK_N": 32, "num_warps": 4, "num_stages": 1, "waves_per_eu": 2}
 
 
 def block_ranges(lo1, hi1, lo2, hi2, block_m: int, block_n: int = 0, exact: bool = False, groups: int = 0,
@@ -438,5 +454,6 @@ def attention(q, k1, v1, k2, v2, q_meta, k1_meta, k2_meta, ranges, scale: float,
         k2.stride(0), k2.stride(1), v2.stride(0), v2.stride(1), out.stride(0), out.stride(1),
         G=G, D=D, DP=triton.next_power_of_2(D), BLOCK_M=cfg["BLOCK_M"], BLOCK_N=cfg["BLOCK_N"], WINDOW=window > 0,
         BLOCKS=blocks, EXACT=qranges is not None, SPLIT=split,
-        num_warps=cfg["num_warps"], num_stages=cfg["num_stages"])
+        num_warps=cfg["num_warps"], num_stages=cfg["num_stages"], **gpu.SAME_BITS,
+        **({"waves_per_eu": cfg["waves_per_eu"]} if "waves_per_eu" in cfg else {}))
     return out

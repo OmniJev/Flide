@@ -4,16 +4,18 @@ Triton files a compiled kernel under a hash of the kernel's source and specializ
 and the Triton install itself (its shared library and its ptxas build), so a copy of one machine's cache directory
 hits only where the very same Triton wheel is installed: another Python version or CPU architecture misses every
 kernel. A bundle keeps per kernel the parts of that hash that travel (the source and specialization hash, the
-options) with the binary (cubin and Triton's metadata), and files each kernel under the key this machine's Triton
-computes. It also keeps every autotuner's picks, which go into the autotuners once their modules are loaded, so
-nothing is benchmarked at start either.
+options) with the binary (cubin, hsaco on AMD, and Triton's metadata), and files each kernel under the key this
+machine's Triton computes. It also keeps every autotuner's picks, which go into the autotuners once their modules are
+loaded, so nothing is benchmarked at start either.
 
 `flide kernels export --model M [--model M2 ...] --out K.tar.xz` warms the models on a GPU and packs every kernel
 they ran (`--no-weights` builds each model from its config alone: kernels depend on shapes, not on values);
 `--tuning` starts its autotuners from an earlier bundle's picks, so a new bundle keeps the configs (and so the bits)
 of the one it replaces wherever the keys recur. Bundles are xz-compressed tar files; gzip ones (`.tgz`) still load.
 Bundles are applied at engine start from the
-package's `kernels/prebuilt/gpu`; entries for another Triton version or GPU are skipped.
+package's `kernels/prebuilt/gpu`; entries for another Triton version or GPU are skipped. `flide kernels pack` puts the
+bundles of several GPUs and Triton versions into one archive, the same kernel's files side by side: they compress
+against each other, and a start reads past the ones that are not its own.
 """
 from __future__ import annotations
 
@@ -37,6 +39,8 @@ FORMAT = 2
 MANIFEST = "flide-kernels.json"
 SHIPPED = Path(__file__).resolve().parent.parent / "kernels" / "prebuilt" / "gpu"
 PATTERNS = ("*.tar.xz", "*.tgz")   # bundle files in a directory
+SOLID = "flide-bundles.json"   # the first member of an archive of several bundles: {"format", "bundles": {name: manifest}}
+SOLID_FORMAT = 1
 
 _picks: dict[str, list] = {}   # autotuner picks from applied bundles, by kernel, until its module is loaded
 _matched = False   # a bundle for this GPU and Triton was found
@@ -169,6 +173,40 @@ def bundles(extra: str | None = None) -> list[Path]:
     return out
 
 
+def _index(path: Path) -> dict[str, dict]:
+    """{name: manifest} of the bundles in a file, the name "" for a file that is one bundle."""
+    with tarfile.open(path, "r:*") as tar:
+        first = tar.next()
+        if first is None:
+            raise ValueError("empty archive")
+        if first.name != SOLID:
+            return {"": json.load(tar.extractfile(MANIFEST))}
+        index = json.load(tar.extractfile(first))
+        if index.get("format") != SOLID_FORMAT:
+            raise ValueError(f"archive format {index.get('format')}")
+        return index["bundles"]
+
+
+def _files(path: Path, name: str) -> dict[str, bytes]:
+    """The kernel files of one bundle of `path` ({"dir/file": bytes}). An xz file is decompressed whole, several times
+    faster than member by member (179 MB for the ten shipped bundles, released when this returns)."""
+    data = path.read_bytes()
+    tar = tarfile.open(fileobj=io.BytesIO(lzma.decompress(data)), mode="r:") if data[:6] == b"\xfd7zXZ\0" \
+        else tarfile.open(path, "r:*")
+    out = {}
+    with tar:
+        for m in tar:
+            top, _, rest = m.name.partition("/")
+            if name:
+                if top != name:
+                    continue
+            else:
+                rest = m.name
+            if m.isfile() and rest not in (MANIFEST, SOLID):
+                out[rest] = tar.extractfile(m).read()
+    return out
+
+
 def seed(bundle: str | None = None, target: dict | None = None) -> int:
     """File every kernel of the bundles that fit this machine into its Triton cache (kernels already there are
     kept) and hold their autotuner picks for `tune()`. Returns the kernels added."""
@@ -187,31 +225,37 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
     backend = env_vars = None
     install = hashlib.sha256(triton_key().encode()).hexdigest()[:12]
     for path in paths:
-        t0 = time.perf_counter()
         try:
-            with tarfile.open(path, "r:*") as tar:
-                man = json.load(tar.extractfile(MANIFEST))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+            index = _index(path)
+        except (OSError, KeyError, ValueError, tarfile.TarError) as e:
+            log.warning("kernel bundle %s not applied: %s", path, e)
+            continue
+        for name, man in index.items():
+            t0 = time.perf_counter()
+            try:
                 if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
                     continue
                 global _matched
                 _matched = True
                 for fn, picks in man.get("tuning", {}).items():
                     _picks.setdefault(fn, []).extend(picks)
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-                marker = cache_dir() / f".flide-bundle-{digest}-{install}"
+                marker = cache_dir() / f".flide-bundle-{digest}-{name + '-' if name else ''}{install}"
                 if marker.exists():
                     continue
                 if backend is None:
                     backend, env_vars = _backend(target), _env_vars()
-                n = 0
+                files, n = None, 0
                 for e in man["kernels"]:
                     h = _hash(e["src"], e["options"], backend, env_vars)
                     mgr = get_cache_manager(h)
                     if mgr.get_group(e["meta"]) is not None:
                         continue
+                    if files is None:
+                        files = _files(path, name)
                     group = {}
                     for fname in e["files"]:
-                        data = tar.extractfile(f"{e['dir']}/{fname}").read()
+                        data = files[f"{e['dir']}/{fname}"]
                         if fname == e["meta"]:
                             meta = json.loads(data)
                             meta["hash"] = h
@@ -223,11 +267,12 @@ def seed(bundle: str | None = None, target: dict | None = None) -> int:
                     n += 1
                 marker.parent.mkdir(parents=True, exist_ok=True)
                 marker.write_text(str(path))
-        except (OSError, KeyError, ValueError, tarfile.TarError) as e:
-            log.warning("kernel bundle %s not applied: %s", path, e)
-            continue
-        added += n
-        log.info("seeded %s with %d kernels from %s in %.1fs", cache_dir(), n, path.name, time.perf_counter() - t0)
+            except (OSError, KeyError, ValueError, tarfile.TarError) as e:
+                log.warning("kernel bundle %s not applied: %s", path, e)
+                continue
+            added += n
+            log.info("seeded %s with %d kernels from %s in %.1fs", cache_dir(), n, name or path.name,
+                     time.perf_counter() - t0)
     tune()
     return added
 
@@ -243,13 +288,12 @@ def hold_picks(extra: str, target: dict | None = None) -> int:
     for path in bundles(extra):
         if path.parent == SHIPPED:
             continue
-        with tarfile.open(path, "r:*") as tar:
-            man = json.load(tar.extractfile(MANIFEST))
-        if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
-            continue
-        for fn, picks in man.get("tuning", {}).items():
-            _picks.setdefault(fn, []).extend(picks)
-            n += len(picks)
+        for man in _index(path).values():
+            if man.get("format") != FORMAT or man["triton"] != triton.__version__ or man["target"] != target:
+                continue
+            for fn, picks in man.get("tuning", {}).items():
+                _picks.setdefault(fn, []).extend(picks)
+                n += len(picks)
     tune()
     return n
 
@@ -389,7 +433,7 @@ def _pack(rec: _Recorder, out: Path) -> tuple[int, int]:
             missing += 1
             continue
         meta = f"{name[:150]}.json"
-        files = sorted(f for f in group if f == meta or f.endswith(".cubin"))
+        files = sorted(f for f in group if f == meta or f.endswith((".cubin", ".hsaco")))
         d = f"k{i:05d}"
         for f in files:
             data = Path(group[f]).read_bytes()
@@ -648,13 +692,48 @@ def merge(args) -> None:
     print(f"{args.out}: {len(man['kernels'])} kernels" + (f", {dropped} autotuner candidates left out" if dropped else ""))
 
 
+def pack(out: Path, paths, manifest: str = MANIFEST, solid: str = SOLID) -> int:
+    """One archive of the bundles in `paths` (each for one GPU and Triton, none a solid archive), with the same kernel's
+    files of every target side by side. `manifest` and `solid` are the names the package reads, for a package built under
+    another name. Returns the kernels written."""
+    bundles_, files, n = {}, [], 0
+    for path in paths:
+        with tarfile.open(path, "r:*") as tar:
+            man = json.load(tar.extractfile(manifest))
+            t = man["target"]
+            name = f"{_arch(t)}-triton{man['triton']}"
+            if name in bundles_:
+                raise SystemExit(f"two bundles for {name}")
+            bundles_[name] = man
+            for e in man["kernels"]:
+                for f in e["files"]:
+                    files.append(((e["fn"].rpartition(":")[2], f, name, e["dir"]), f"{name}/{e['dir']}/{f}",
+                                  tar.extractfile(f"{e['dir']}/{f}").read()))
+                n += 1
+    files.sort(key=lambda x: x[0])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    index = json.dumps({"format": SOLID_FORMAT, "bundles": bundles_}).encode()
+    with tarfile.open(out, "w:xz", preset=9 | lzma.PRESET_EXTREME) as tar:
+        for name, data in [(solid, index)] + [(x[1], x[2]) for x in files]:
+            info_ = tarfile.TarInfo(name)
+            info_.size = len(data)
+            info_.mode = 0o644
+            tar.addfile(info_, io.BytesIO(data))
+    return n
+
+
+def _arch(t: dict) -> str:
+    """A target's GPU as bundles are named: sm90 for NVIDIA, gfx90a for AMD."""
+    return f"sm{t['arch']}" if t["backend"] == "cuda" else str(t["arch"])
+
+
 def info(args) -> None:
-    with tarfile.open(args.bundle, "r:*") as tar:
-        m = json.load(tar.extractfile(MANIFEST))
-    t = m["target"]
-    picks = sum(len(v) for v in m["tuning"].values())
-    print(f"Triton {m['triton']}, {t['backend']} sm_{t['arch']}: {len(m['kernels'])} kernels, "
-          f"{picks} autotuner picks over {len(m['tuning'])} kernels")
+    for name, m in _index(Path(args.bundle)).items():
+        t = m["target"]
+        picks = sum(len(v) for v in m["tuning"].values())
+        gpu = f"sm_{t['arch']}" if t["backend"] == "cuda" else t["arch"]
+        print(f"{name + ': ' if name else ''}Triton {m['triton']}, {t['backend']} {gpu}: {len(m['kernels'])} "
+              f"kernels, {picks} autotuner picks over {len(m['tuning'])} kernels")
 
 
 def add_parser(sub) -> None:
@@ -679,6 +758,11 @@ def add_parser(sub) -> None:
     m.add_argument("out")
     m.add_argument("bundles", nargs="+")
     m.set_defaults(func=merge)
+    p = ks.add_parser("pack", help="one archive from the bundles of several GPUs and Triton versions")
+    p.add_argument("out")
+    p.add_argument("bundles", nargs="+")
+    p.set_defaults(func=lambda a: print(f"{a.out}: {pack(Path(a.out), a.bundles)} kernels, "
+                                        f"{Path(a.out).stat().st_size / 1e6:.1f} MB"))
     i = ks.add_parser("info", help="what a bundle holds")
     i.add_argument("bundle")
     i.set_defaults(func=info)

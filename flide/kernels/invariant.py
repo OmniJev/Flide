@@ -73,6 +73,9 @@ def _mm_tma_kernel(X, W, Y, M, N, K, sxm, swn, sym, BM: tl.constexpr, BN: tl.con
         y_desc.store([pm * BM, pn * BN], acc.to(Y.dtype.element_ty))
 
 
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
+
+
 def _alloc(size: int, alignment: int, stream):
     return torch.empty(size, device="cuda", dtype=torch.int8)
 
@@ -85,7 +88,7 @@ NEEDS = {CFG: 163856, SMALL_CFG: 90136, MID_CFG: 163888}
 
 def budget(device) -> int:
     """The shared memory per block this device lets one kernel ask for."""
-    return torch.cuda.get_device_properties(device).shared_memory_per_block_optin
+    return gpu.smem(device)
 
 
 def pick(M: int, budget_bytes: int, cfg: tuple | None = None):
@@ -113,13 +116,14 @@ def mm(x: torch.Tensor, w: torch.Tensor, out: torch.Tensor | None = None, cfg: t
     if M == 0:
         return y
     ieee = x.dtype == torch.float32
-    tma = (not ieee and torch.cuda.get_device_capability(x.device)[0] >= 9 and K % 8 == 0
-           and x.stride(0) % 8 == 0 and w.stride(0) % 8 == 0 and y.stride(0) % 8 == 0 and y.stride(-1) == 1)
+    tma = (not ieee and gpu.tma(x.device)
+           and K % 8 == 0 and x.stride(0) % 8 == 0 and w.stride(0) % 8 == 0 and y.stride(0) % 8 == 0
+           and y.stride(-1) == 1)
     shape = pick(M, budget(x.device), cfg) if tma else None
     if shape is not None:   # the widest TMA shape this device's shared memory holds (an sm_120 card holds 99 KB)
         BM, BN, BK, warps, stages = shape
         if _sms is None:
-            _sms = torch.cuda.get_device_properties(x.device).multi_processor_count
+            _sms = gpu.sms(x.device)
         if not getattr(_local, "allocator", False):
             triton.set_allocator(_alloc)
             _local.allocator = True
@@ -128,6 +132,7 @@ def mm(x: torch.Tensor, w: torch.Tensor, out: torch.Tensor | None = None, cfg: t
                                            BK=BK, GROUP=8, NUM_SMS=_sms, num_warps=warps, num_stages=stages)
         return y
     BM, BN, BK, warps, stages = (64, 64, 32, 4, 2) if ieee else (128, 128, 64, 8, 4)
+    stages = gpu.fit_stages(stages, x.device)   # four stages of these tiles take 96 KB
     grid = (triton.cdiv(M, BM) * triton.cdiv(N, BN),)
     _mm_kernel[grid](x, w, y, M, N, K, x.stride(0), w.stride(0), y.stride(0), BM=BM, BN=BN, BK=BK, GROUP=8,
                      IEEE=ieee, num_warps=warps, num_stages=stages)

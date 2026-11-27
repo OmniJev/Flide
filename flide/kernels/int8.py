@@ -20,7 +20,7 @@ _sms = None
 
 
 def supported(device) -> bool:
-    return torch.cuda.is_available() and torch.cuda.get_device_capability(device) >= (8, 0)
+    return gpu.int8(device)
 
 
 def quantize_rows(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -147,6 +147,9 @@ def _scale_kernel(WS, SX, SW, Y, M, N, sym, BLOCK: tl.constexpr):
     tl.store(Y + row * sym + cols, y.to(Y.dtype.element_ty), mask=cols < N)
 
 
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
+
+
 def _cfg(M: int, N: int, sms: int) -> tuple:
     """Tile and launch shape (BM, BN, BK, warps, stages) of the portable kernel, from bench/int8_tiles.py on an A40 (the
     products of Qwen3.5 0.8B to 27B, 1 to 8192 rows: 3% from the best on average); any choice gives the same bits. Large
@@ -190,11 +193,12 @@ def mm_scaled(xq: torch.Tensor, sx: torch.Tensor, q: torch.Tensor, sw: torch.Ten
     if M == 0:
         return y
     if _sms is None:
-        _sms = torch.cuda.get_device_properties(xq.device).multi_processor_count
+        _sms = gpu.sms(xq.device)
     # the TMA tiles need the shared memory of H100 and H200 (an sm_120 or sm_121 card holds 99 KB: the portable kernel)
-    tma = (torch.cuda.get_device_capability(xq.device)[0] >= 9 and budget(xq.device) >= 163856
+    tma = (gpu.tma(xq.device) and budget(xq.device) >= 163856
            and _aligned(xq) and _aligned(q) and _aligned(y))
     BM, BN, BK, warps, stages = cfg or (_tma_cfg(M, N) if tma else _cfg(M, N, _sms))
+    stages = gpu.fit_stages(stages, xq.device)   # the same sums at any stage count
     tiles = triton.cdiv(M, BM) * triton.cdiv(N, BN)
     if split is None:
         split = _split(tiles, triton.cdiv(K, BK), _sms) if M <= 256 else 1
@@ -242,10 +246,14 @@ class Int8Weight:
 
     def split(self, n: int) -> tuple["Int8Weight", "Int8Weight"]:
         """The first n output rows and the rest, sharing this weight's storage (no tail rows)."""
+        return self[:n], self[n:]
+
+    def __getitem__(self, rows: slice) -> "Int8Weight":
+        """A row slice (the query rows of a merged projection, its key and value rows), sharing this weight's
+        storage; no tail rows may be involved."""
         if self.tail is not None:
-            raise ValueError("a weight with tail rows does not split")
-        return (Int8Weight(self.q[:n], self.scale[:n], None, self.out_dtype, self.inv),
-                Int8Weight(self.q[n:], self.scale[n:], None, self.out_dtype, self.inv))
+            raise ValueError("a weight with tail rows does not slice")
+        return Int8Weight(self.q[rows], self.scale[rows], None, self.out_dtype, self.inv)
 
     def into(self, x: torch.Tensor, out: torch.Tensor) -> None:
         if x.stride(-1) != 1:
@@ -283,6 +291,13 @@ class InputMax:
                 for p, at in zip(parts, (slice(None, n), slice(n, None))))
         a.amax = b.amax = self.amax
         return a, b
+
+    def __getitem__(self, rows: slice) -> "InputMax":
+        """A row slice of the weight that keeps its maxima in this weight's (every row reads the same input)."""
+        fetch = self.fetch
+        part = InputMax(self.w[rows], None if fetch is None else (lambda: fetch()[rows]))
+        part.amax = self.amax
+        return part
 
     def into(self, x: torch.Tensor, out: torch.Tensor) -> None:
         out.copy_(self(x))

@@ -27,7 +27,7 @@ RCP_LN2 = 1.4426950408889634
 
 
 def _blackwell() -> bool:
-    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10
+    return gpu.blackwell()
 
 
 def solve(k, g, beta, cu, chunks, HV: int, chunk_size: int = 64):
@@ -241,6 +241,9 @@ def _gates(P, BETA, A, T, sp, NV: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_T: 
     tl.store(BETA + t[:, None] * NV + h[None, :], 1.0 * tl.sigmoid(b), mask=m)
     a = tl.load(P + t[:, None].to(tl.int64) * sp + NV + h[None, :], mask=m, other=0.0)
     tl.store(A + t[:, None] * NV + h[None, :], a, mask=m)
+
+
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
 
 
 def gates(p, nv: int):

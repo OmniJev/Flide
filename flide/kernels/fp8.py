@@ -16,7 +16,7 @@ FP8_MAX = 448.0
 
 
 def supported(device) -> bool:
-    return torch.cuda.is_available() and torch.cuda.get_device_capability(device) >= (8, 9)
+    return gpu.fp8(device)
 
 
 def quantize_rows(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -41,6 +41,9 @@ def _quantize_tokens(X, Q, S, K, sx, sq, BLOCK: tl.constexpr):
         x = tl.load(X + row * sx + cols, mask=cols < K, other=0.0).to(tl.float32)
         q = tl.minimum(tl.maximum(tl.math.div_rn(x, s), -448.0), 448.0)
         tl.store(Q + row * sq + cols, q.to(Q.dtype.element_ty), mask=cols < K)
+
+
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
 
 
 def quantize_tokens(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

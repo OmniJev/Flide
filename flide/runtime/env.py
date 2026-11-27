@@ -127,11 +127,22 @@ def torch_install(have: tuple[int, int] | None) -> str:
 def check_cuda() -> None:
     import torch
 
+    from ..kernels import gpu
+
     if torch.cuda.is_available():
         return
+    if gpu.AMD:   # a ROCm build of PyTorch that sees no AMD GPU
+        try:
+            torch.cuda.init()
+            reason = "no GPU is visible to this process"
+        except Exception as e:
+            reason = str(e).strip().splitlines()[0]
+        raise RuntimeError(f"PyTorch {torch.__version__} (ROCm {torch.version.hip}) cannot use an AMD GPU: {reason}. "
+                           "Check that the amdgpu driver is loaded and that HIP_VISIBLE_DEVICES names a card.")
     drv = driver_version()
     if drv is None:
-        raise RuntimeError("No NVIDIA driver is loaded, and flide's PyTorch path runs on NVIDIA GPUs.")
+        raise RuntimeError("No NVIDIA driver is loaded. flide runs on NVIDIA GPUs, and on AMD Instinct GPUs with "
+                           f"a ROCm build of PyTorch: pip install torch --index-url {TORCH_INDEX}rocm7.2")
     if torch.version.cuda is None:
         raise RuntimeError(f"PyTorch {torch.__version__} is a CPU build. Install a CUDA build: "
                            f"{torch_install(driver_cuda())}")

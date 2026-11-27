@@ -26,7 +26,7 @@ BK8 = 128   # float8 products: k steps of 32 per instruction
 
 @functools.lru_cache(maxsize=None)
 def _big(device) -> bool:
-    return getattr(torch.cuda.get_device_properties(device), "shared_memory_per_block_optin", 0) >= 160 * 1024
+    return gpu.big_smem(device)
 
 
 def tile(pairs: int, fp8: bool, device) -> tuple[int, int, int, int, int]:
@@ -165,7 +165,7 @@ def router(x: torch.Tensor, wr: torch.Tensor, wg: torch.Tensor | None = None):
                                                                   gate if gate is not None else logits, T, E, H,
                                                                   x.stride(0), wr.stride(0), logits.stride(0),
                                                                   HAS_G=wg is not None, BT=16, BE=BE, BK=64,
-                                                                  num_warps=4, num_stages=3)
+                                                                  num_warps=4, num_stages=gpu.fit_stages(3, x.device))
     return logits, gate
 
 
@@ -288,7 +288,7 @@ def grouped(a: torch.Tensor, w: torch.Tensor, out: torch.Tensor, rows, blocks, u
     """out[pair] = a[token of pair or pair] @ w[expert of pair].T, times the pair's weight when given. `tile` (block
     rows as `align` padded them, block columns, warps, stages, and optionally the row blocks run as a group through
     every column tile); the k step is fixed, so a row's sums are too."""
-    bm, bn, warps, stages, gm = _tile(tile)
+    bm, bn, warps, stages, gm = _fit(_tile(tile), a.device)
     n_pairs = out.shape[0]
     N, KD = w.shape[1], w.shape[2]
     nbm = blocks.shape[0]
@@ -305,7 +305,7 @@ def grouped_fp8(a: torch.Tensor, w: torch.Tensor, w_scale: torch.Tensor, out: to
     """`grouped` with float8 experts w [E, N, K] (scales [E, N]) and the rows going in scaled to float8 per row."""
     from .fp8 import quantize_tokens
 
-    bm, bn, warps, stages, gm = _tile(tile)
+    bm, bn, warps, stages, gm = _fit(_tile(tile), a.device)
     aq, sa = quantize_tokens(a if a.stride(-1) == 1 else a.contiguous())
     n_pairs = out.shape[0]
     N, KD = w.shape[1], w.shape[2]
@@ -381,6 +381,16 @@ def _combine_norm_kernel(Y, D, W1, W2, OUT, H, sd, so, eps, K: tl.constexpr, BH:
     a = d * tl.math.rsqrt(tl.sum(d * d, 0) / H + eps) * tl.load(W1 + c, mask=m, other=0.0).to(tl.float32)
     b = acc * tl.math.rsqrt(tl.sum(acc * acc, 0) / H + eps) * tl.load(W2 + c, mask=m, other=0.0).to(tl.float32)
     tl.store(OUT + t * so + c, (a + b).to(OUT.dtype.element_ty), mask=m)
+
+
+from . import gpu   # below the kernels: Triton keys a compiled kernel by the line it starts on
+
+
+def _fit(tile: tuple, device) -> tuple:
+    """A tile with its pipelining stages fitted to the part's shared memory (gpu.fit_stages): the same sums at
+    any stage count."""
+    bm, bn, warps, stages, gm = tile
+    return bm, bn, warps, gpu.fit_stages(stages, device), gm
 
 
 def combine_norm(y: torch.Tensor, dense: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, k: int,
