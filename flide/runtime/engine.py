@@ -257,6 +257,7 @@ class Engine:
 
             self.sessions = SessionCache(0 if auto else int(session_cache_gb * 2 ** 30), min_tokens=session_min_tokens)
         graphs = getattr(self.backbone, "request_graphs", lambda: None)()
+        self._diagnostic_graphs = graphs
         tune()
         if graphs is not None and capture is not False:
             limit = None if capture is True else capture

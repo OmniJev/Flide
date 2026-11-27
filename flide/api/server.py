@@ -349,11 +349,18 @@ def create_app(engine, model_name: str, description: str = "", release_date: str
         return {"status": "ok", "sessions": sessions.stats() if sessions is not None else None}
 
     @app.get("/stats")
-    async def stats():
+    async def stats(memory_details: bool = False):
         """What the server has done since it started: rounds, requests, where the GPU thread's time went, and what
         the session cache holds. Read-only, unlike /flush_cache."""
         remote = getattr(batcher, "stats", None)
-        payload = remote() if remote is not None else {}
+        if remote is not None:
+            payload = await asyncio.to_thread(remote, memory_details=True) if memory_details else remote()
+        elif hasattr(engine, "backbone"):
+            from ..runtime.diagnostics import diagnostics
+
+            payload = await asyncio.to_thread(diagnostics, engine, memory_details=memory_details)
+        else:
+            payload = {}
         if isinstance(payload, cf.Future):
             payload = await asyncio.wrap_future(payload)
         payload = dict(payload)

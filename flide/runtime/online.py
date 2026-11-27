@@ -182,11 +182,18 @@ class Batcher:
     def cancel_forward(self, future: cf.Future) -> None:
         future.cancel()
 
-    def stats(self) -> dict:
+    def stats(self, *, memory_details: bool = False) -> dict:
         """What this batcher has served since start, and where the GPU thread's time went."""
+        from .diagnostics import diagnostics
+
         return {"rounds": self.rounds, "requests": self.requests, "planning": self._planning,
                 "queue_s": round(self.queue_s, 3), "forward_s": round(self.forward_s, 3),
-                "max_round": self.max_round, "avg_round": round(self.requests / self.rounds, 2) if self.rounds else 0.0}
+                "max_round": self.max_round, "avg_round": round(self.requests / self.rounds, 2) if self.rounds else 0.0,
+                "limits": {"max_batch_tokens": self.max_round_tokens,
+                           "engine_microbatch_tokens": self.engine.budget,
+                           "max_request_tokens": getattr(getattr(self.engine, "format", None),
+                                                         "max_request_tokens", None)},
+                **diagnostics(self.engine, memory_details=memory_details)}
 
     # ---- GPU thread ------------------------------------------------------------------------------
 
