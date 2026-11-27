@@ -307,7 +307,8 @@ class GemmaGraphs:
             c[:, 1] = torch.where(br < 0, torch.minimum(r[:, 1], r[:, 0] + qpos + 1), r[:, 1])
             c[:, 3] = torch.where(br >= 0, torch.minimum(r[:, 3], ar + 1), r[:, 3])
             full = _Meta(tok + (self.gblk[:L],), r, groups=groups)
-            sliding = _Meta(tok, window_ranges(c, qpos, bb.config.sliding_window or 0), groups=groups, tiles=c)
+            sliding = full if bb.no_window else \
+                _Meta(tok, window_ranges(c, qpos, bb.config.sliding_window or 0), groups=groups, tiles=c)
             self._decode(L, full, sliding)
             return
         if bb.bidir:   # the image-widened ranges are the sliding layers'; the global layers stay causal
@@ -414,8 +415,8 @@ class GemmaGraphs:
         request and branch order, one replay; None when the round does not fit."""
         L = self.flat_shape(reqs)
         blocks = any(len(r) > 3 and r[3] for r in reqs)
-        if blocks and any(len(r) > 2 and r[2] is not None for r in reqs):
-            return None   # block attention takes text only
+        if blocks and not self.bb.no_window and any(len(r) > 2 and r[2] is not None for r in reqs):
+            return None   # block attention with a window takes text only
         if any(len(r) > 4 and r[4] is not None and (len(r[1]) != 1 or len(r[4]) != 1) for r in reqs):
             return None   # positions to read: one, in a one-branch request (`alone_reads`)
         if L is None or not self.capture(L, blocks):
@@ -468,7 +469,8 @@ class GemmaGraphs:
                 else:
                     r[1, s] = np.where(ar < p, at + p, at + n)
                     gblk[s] = (ar >= p).astype(np.int64)
-            if media is not None and bb.bidir:   # the tokens of one image see each other (sliding layers)
+            if media is not None and bb.bidir and not any(blocks):   # the tokens of one image see each other (sliding
+                # layers); under block attention (no_window) every layer reads the image's block whole, as _block_meta
                 for a, e in vision_runs(ids[s], bb.placeholders):
                     blk[at + a: at + e] = nblk
                     r[1, at + a: at + e] = at + e

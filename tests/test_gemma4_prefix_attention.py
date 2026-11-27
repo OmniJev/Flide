@@ -37,7 +37,7 @@ def check(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'} {name}{'' if ok else f' ({detail})'}")
 
 
-def reference(ident, layer, modes):
+def reference(ident, layer, modes, window=W):
     """[T, T]: does query q see key k. ident[i] = (tree, branch or -1, index) or None for padding; modes[tree] is
     "prefix" or "blocks"."""
     T = len(ident)
@@ -52,13 +52,13 @@ def reference(ident, layer, modes):
             p = len(TREES[a[0]][0])
             qp = a[2] if a[1] < 0 else p + a[2]
             kp = b[2] if b[1] < 0 else p + b[2]
-            if layer == "full_attention":
+            if layer == "full_attention" or not window:   # no window: every layer as the global ones
                 if modes[a[0]] == "blocks":   # every block whole: the prefix, and a branch with its prefix
                     out[q, k] = (a[1] < 0 and b[1] < 0) or a[1] >= 0
                 else:
                     out[q, k] = (a[1] < 0 and b[1] < 0) or (a[1] >= 0 and (b[1] < 0 or kp <= qp))
             else:
-                out[q, k] = kp <= qp and qp - kp < W
+                out[q, k] = kp <= qp and (not window or qp - kp < window)
     return out
 
 
@@ -78,22 +78,23 @@ def visible(meta, window):
     return in_range, vis
 
 
-def compare(name, metas, ident, modes):
+def compare(name, metas, ident, modes, window=W):
     for layer, m in metas.items():
-        in_range, vis = visible(m, W if layer == "sliding_attention" else 0)
+        in_range, vis = visible(m, window if layer == "sliding_attention" else 0)
         check(f"{name} {layer}: key ranges and metadata agree", torch.equal(in_range, vis),
               int((in_range != vis).sum()))
-        want = reference(ident, layer, modes)
+        want = reference(ident, layer, modes, window)
         check(f"{name} {layer}: the reference mask", torch.equal(vis, want), int((vis != want).sum()))
 
 
-def packed(modes):
+def packed(modes, no_window=False):
     jobs = [Job(list(p), [list(s) for s in ss], [(Read(None),)] * len(ss), blocks=mode == "blocks",
                 prefix_two_way=mode == "prefix") for (p, ss), mode in zip(TREES, modes)]
     b = pack(jobs, "cpu")
     ident = [(t, -1, i) for t, (p, _) in enumerate(TREES) for i in range(len(p))]
     ident += [(t, bi, i) for t, (_, ss) in enumerate(TREES) for bi, s in enumerate(ss) for i in range(len(s))]
-    me = SimpleNamespace(config=SimpleNamespace(sliding_window=W), bidir=False, placeholders=set())
+    me = SimpleNamespace(config=SimpleNamespace(sliding_window=0 if no_window else W), bidir=False, placeholders=set(),
+                         no_window=no_window)
     me._block_meta = lambda *a: Gemma4._block_meta(me, *a)
     tok = (b.job.int(), b.branch.int(), b.positions.int())
     return Gemma4.attention_meta(me, tok, b.key_ranges, b.input_ids.numpy(), b), ident
@@ -107,11 +108,14 @@ class _Stream:
         pass
 
 
-def staged(modes, L: int = 64):
-    """GemmaGraphs._stage and _body on stand-ins for the device buffers, `_decode` catching the two metas."""
+def staged(modes, L: int = 64, no_window=False, image=False):
+    """GemmaGraphs._stage and _body on stand-ins for the device buffers, `_decode` catching the two metas. `image`: the
+    first tree's prefix holds an image (placeholder tokens, on a model whose images read both ways)."""
     g = SimpleNamespace(bmax=64, staged=_Stream())
-    g.bb = SimpleNamespace(bidir=False, placeholders={999}, pad_id=0, config=SimpleNamespace(sliding_window=W),
-                           lm=SimpleNamespace(embed_tokens=lambda ids: torch.zeros(ids.shape[0], 1)))
+    g.bb = SimpleNamespace(bidir=image, placeholders={999}, pad_id=0, no_window=no_window,
+                           config=SimpleNamespace(sliding_window=0 if no_window else W),
+                           lm=SimpleNamespace(embed_tokens=lambda ids: torch.zeros(ids.shape[0], 1)),
+                           encode_vision=lambda raw, emb, media, graphs=None: emb, vision_graphs=lambda: None)
     g.ids, g.raw, g.pos = (torch.zeros(L, dtype=torch.long) for _ in range(3))
     g.meta = torch.zeros(4, L, dtype=torch.int32)
     g.ranges = torch.zeros(L, 4, dtype=torch.int32)
@@ -126,6 +130,9 @@ def staged(modes, L: int = 64):
     g._decode = lambda n, full, sliding: got.update(full_attention=full, sliding_attention=sliding)
     reqs = [(list(p), [list(s) for s in ss], None, "prefix" if mode == "prefix" else True)
             for (p, ss), mode in zip(TREES, modes)]
+    if image:
+        p0 = reqs[0][0]
+        reqs[0] = (p0[:1] + [999] * (len(p0) - 2) + p0[-1:], reqs[0][1], ("image",), reqs[0][3])
     GemmaGraphs._stage(g, reqs, L)
     GemmaGraphs._body(g, L, True)
     ident = []
@@ -148,6 +155,15 @@ def main():
         compare(f"packed {tag}", metas, ident, modes)
         metas, ident = staged(modes)
         compare(f"graphs {tag}", metas, ident, modes)
+    for modes in (("blocks",) * 3, ("blocks", "prefix", "blocks")):   # no_window: the sliding layers read every block whole
+        tag = "+".join(dict.fromkeys(modes)) + " without a window"
+        metas, ident = packed(modes, True)
+        compare(f"packed {tag}", metas, ident, modes, 0)
+        metas, ident = staged(modes, no_window=True)
+        compare(f"graphs {tag}", metas, ident, modes, 0)
+    modes = ("blocks",) * 3   # an image in a prefix, no window: every layer reads its block whole, the image's tokens too
+    metas, ident = staged(modes, no_window=True, image=True)
+    compare("graphs blocks with an image without a window", metas, ident, modes, 0)
     print("ALL PASS" if fails == 0 else f"{fails} FAILED")
     return fails
 
