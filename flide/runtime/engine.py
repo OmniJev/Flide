@@ -335,12 +335,10 @@ class Engine:
         mem_graphs = _gib()
         self._capture_on = capture is not False
         if self.sessions is not None and not auto:
-            from .session import reserve
-
             if hasattr(self.backbone, "kv_arena"):
                 self._attach_store(self.sessions.budget)
             else:
-                reserve(self.sessions.budget, self.backbone.device)
+                self.sessions.attach_prefix_store(self.backbone.device)
         if capture is not False:
             tune()
             self.warmup()
@@ -472,12 +470,16 @@ class Engine:
             shape = budget
             while shape < mb.tokens:
                 shape *= 2
-            if self.sessions is not None and self.sessions.store is not None and batch.marks:
+            store = getattr(self.sessions, "store", None) or getattr(self.sessions, "pstore", None) \
+                if self.sessions is not None else None
+            if store is not None and batch.marks:
                 # the store's rows for every save point, before the forward writes them (a save without room is skipped)
                 keep = [e for _, e, _ in batch.resumes]
                 for j in list(batch.marks):
                     m = max(batch.marks[j])
-                    rows = self.sessions.reserve(self.backbone.session_rows(m), keep=keep)
+                    need = self.backbone.session_rows(m)
+                    rows = (self.sessions.reserve(need, keep=keep) if getattr(self.sessions, "store", None) is not None
+                            else self.sessions.reserve_prefix(need, dtype=self.backbone.dtype))
                     if rows is None:
                         del batch.marks[j]
                     else:
@@ -692,6 +694,9 @@ class Engine:
         log.info("session cache %.2f GiB (auto)%s", n / 2 ** 30, "" if n else ": too little memory left, so it saves nothing")
         if n and hasattr(self.backbone, "kv_arena"):
             return self._attach_store(n)
+        if n and self.sessions is not None:
+            self.sessions.budget = n
+            return self.sessions.attach_prefix_store(dev)
         reserve(n, dev)
         return n
 

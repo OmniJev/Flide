@@ -913,10 +913,16 @@ class Qwen35(Backbone):
         for j, entry, start in b.resumes:
             c0 = C["start"][j]
             K0, V0 = entry.kv[i]
-            Kc[c0: c0 + start].copy_(K0[:start])
-            Vc[c0: c0 + start].copy_(V0[:start])
+            for t, lo, hi in K0.runs():        # a page at a time, not a saved block at a time
+                Kc[c0 + lo: c0 + hi].copy_(t)
+            for t, lo, hi in V0.runs():
+                Vc[c0 + lo: c0 + hi].copy_(t)
         o = attn_kernel.attention(q, Kc, Vc, k, v, tq, k1, tok, R, m.scaling, 0, cfg, qranges=qr)
         for j in b.marks:
             c0, P = C["start"][j], C["P"][j]
-            b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"][i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())
+            slot = b.saved.setdefault(j, {"states": {}, "kv": {}})["kv"]
+            if hasattr(slot, "write"):
+                slot.write(i, Kc[c0: c0 + P], Vc[c0: c0 + P])   # straight into the arena rows reserved before the forward
+            else:
+                slot[i] = (Kc[c0: c0 + P].clone(), Vc[c0: c0 + P].clone())
         return mm(gate_out(o, gate), w["o"])
