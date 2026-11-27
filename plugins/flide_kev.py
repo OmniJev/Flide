@@ -47,6 +47,7 @@ _SPECIAL = re.compile(r"<\|([A-Za-z0-9_]+)\|>")
 
 
 def _meta(model_dir: str) -> dict | None:
+    """The checkpoint's head.pt (the pointer head and its settings), or None when the directory has no pointer head."""
     path = Path(model_dir) / HEAD
     if not path.is_file():
         return None
@@ -76,6 +77,8 @@ def _saved_tokenizer(model_dir: str):
 
 
 def render(v: Any, indent: int = 0) -> str:
+    """A request value as the releases flatten it: objects as "key: value" lines, arrays as "- item" lines, nested
+    values indented two spaces a level, None as nothing."""
     pad = "  " * indent
     if v is None:
         return ""
@@ -88,10 +91,12 @@ def render(v: Any, indent: int = 0) -> str:
 
 
 def option_text(name: str, desc: Any) -> str:
+    """An option between its delimiters: its name, then ": " and its description when it has one."""
     return name if desc is None or desc == "" else f"{name}: {render(desc)}"
 
 
 def _options(q) -> tuple[str, list[str]]:
+    """A question's kind and the text of each of its options in order (a noul is the options "no" then "yes")."""
     if isinstance(q, NoulQuestion):
         c = q.criteria
         return "noul", [option_text("no", None if c is None else c.false), option_text("yes", None if c is None else c.true)]
@@ -102,7 +107,9 @@ def _options(q) -> tuple[str, list[str]]:
 
 @register("kev")
 class Kev(Format):
-    backbones = ("qwen3_5", "qwen2", "qwen3")
+    """Kev's pointer readout on Qwen3.5, Qwen2 and Qwen3 bases (the module docstring gives the prompt and limits)."""
+
+    backbones = ("qwen3_5", "qwen3_5_text", "qwen2", "qwen3")   # qwen3_5_text: kev-27b's full weights
     max_choice_options = 255
     max_score_levels = 255
     max_state = 65536
@@ -112,6 +119,7 @@ class Kev(Format):
     images = False
 
     def __init__(self, model_dir: str, tokenizer=None, temperature: float | None = None):
+        """Reads head.pt and the tokenizer the release reads; `temperature` overrides the checkpoint's."""
         import transformers
 
         self.model_dir = model_dir
@@ -144,15 +152,18 @@ class Kev(Format):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        """A head.pt with none of the keys that JevAny, Drex and other pointer families add."""
         meta = _meta(model_dir)
         return (meta is not None and "decision_mode" not in meta and "head_type" not in meta
                 and "state_bidir" not in meta)
 
     @staticmethod
     def _alphabet(tok) -> list[str]:
+        """The five delimiters: state, question, option open, option close, decide."""
         return LEGACY
 
     def load_heads(self, backbone) -> dict[str, Any]:
+        """The pointer head's q and k projections as one matrix, so a read row holds q then k."""
         import torch
 
         h = self.meta["head"]
@@ -161,19 +172,23 @@ class Kev(Format):
         return {READ: TokenRows(w, list(range(w.shape[0])), bias=b)}
 
     def _safe(self, text: str) -> str:
+        """`text` with every <|name|> and every delimiter broken up as <¦name¦>, so no text makes a delimiter."""
         text = _SPECIAL.sub(r"<¦\1¦>", text)
         for d in self.delimiters:
             text = text.replace(d, d.replace("<", "<¦", 1).replace(">", "¦>", 1))
         return text
 
     def _tokens(self, text: str) -> list[int]:
+        """Token ids of `text` once made safe, without special tokens."""
         return self.tokenizer(self._safe(text), add_special_tokens=False).input_ids
 
     def _check(self, request: SystemOneRequest) -> None:
+        """Refuses what the release refuses before rendering (images, for a text-only family)."""
         if getattr(request, "images", None) and not self.images:
             raise ValueError(f"images: the {self.name} family reads text only")
 
     def plan(self, request: SystemOneRequest, **_) -> Plan:
+        """The state as the prefix and a branch per question, read at its last token and at each option's close."""
         self._check(request)
         state = self._tokens(render(request.state))
         if len(state) + 1 > self.max_state:
@@ -212,6 +227,7 @@ class Kev(Format):
         return z if self.temperature == 1.0 else z / self.temperature
 
     def finish(self, request: SystemOneRequest, plan: Plan, outputs, **_):
+        """Each question's softmax over its option logits, as a noul, choice or score answer."""
         import torch
 
         answers = {}
@@ -228,17 +244,21 @@ class Kev(Format):
         return SystemOneResponse(model="", answers=answers, usage=usage), {"format": self.name, "tokens": plan.tokens}
 
     def _score(self, levels: list, probs: list[float]):
+        """A score answer, with the API's confidence."""
         return make_score(levels, probs)
 
 
 @register("drex")
 class Drex(Kev):
+    """Drex v1.5 and v2.0: Kev's readout on merged weights, with its own limits, tokenizer and score confidence."""
+
     backbones = ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
     max_state = 16384
     max_row = 16384
     max_context = 131072
 
     def __init__(self, model_dir: str, tokenizer=None, temperature: float | None = None, context: int = 16384):
+        """`context`: the state and row limit, as the release's KEV_CONTEXT (16,384 by default, at most 131,072)."""
         context = int(context)
         if not 1 <= context <= self.max_context:
             raise ValueError(f"context must be between 1 and {self.max_context}")
@@ -253,11 +273,13 @@ class Drex(Kev):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        """A head.pt that names `state_bidir`, which only Drex's carries."""
         meta = _meta(model_dir)
         return (meta is not None and "state_bidir" in meta and "decision_mode" not in meta
                 and "head_type" not in meta)
 
     def _score(self, levels: list, probs: list[float]):
+        """A score answer with Drex's confidence, 1 - E|level - mode| / (L - 1)."""
         a = make_score(levels, probs)
         L = len(probs)
         mode = max(range(L), key=probs.__getitem__)
@@ -267,6 +289,8 @@ class Drex(Kev):
 
 @register("jevany")
 class JevAny(Kev):
+    """JevAny: Kev's readout with a residual MLP, LoRA merged as the weights are read, its own limits and images."""
+
     backbones = ("qwen3_5",)
     merge_lora = True
     max_choice_options = 256
@@ -297,11 +321,13 @@ class JevAny(Kev):
 
     @classmethod
     def detect(cls, model_dir: str, config: Any, decision_config: dict | None) -> bool:
+        """A head.pt whose decision_mode is "pointer"."""
         meta = _meta(model_dir)
         return meta is not None and meta.get("decision_mode") == "pointer"
 
     @staticmethod
     def _alphabet(tok) -> list[str]:
+        """The delimiters the saved tokenizer names: its own five, or the legacy or v1 set."""
         kw = getattr(tok, "init_kwargs", {})
         explicit = kw.get("jevany_decision_tokens")
         if explicit is not None:
@@ -314,6 +340,7 @@ class JevAny(Kev):
         return LEGACY if schema == "legacy" else V1
 
     def _check(self, request: SystemOneRequest) -> None:
+        """The release's refusals: question count, noul criteria, score levels, image count, one question with images."""
         super()._check(request)
         if len(request.questions) > self.max_questions:
             raise ValueError(f"{len(request.questions)} questions, maximum is {self.max_questions}")
@@ -329,6 +356,7 @@ class JevAny(Kev):
             raise ValueError("images: a request with images holds one question")
 
     def plan(self, request: SystemOneRequest, **options) -> Plan:
+        """Kev's plan for text; with images the whole request as one text through the checkpoint's processor."""
         refs = getattr(request, "images", None) or []
         if not refs:
             return super().plan(request, **options)
@@ -339,6 +367,7 @@ class JevAny(Kev):
         escapes = [t for t in self.tokenizer.all_special_tokens if t.startswith(("<", "["))]
 
         def text(v: str) -> str:
+            """`v` made safe, and the special tokens left in it bracketed so the processor reads them as text."""
             v = self._safe(v)
             for t in escapes:
                 v = v.replace(t, t.replace("<", "‹").replace("[", "［"))
