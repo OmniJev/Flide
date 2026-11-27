@@ -356,7 +356,67 @@ class NextToken(Format):
             return [self._render(state, x, images) for x in suffixes]
         return texts
 
+    def _turn_after(self, text: str) -> str:
+        """The chat template's text after an assistant turn's content when the next user turn is `text`: its end of
+        turn, the user turn, and the generation prompt (thinking off where the template has a switch)."""
+        try:
+            whole = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": "\x01"}, {"role": "assistant", "content": "\x02"},
+                 {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True, **self.template_kwargs)
+        except TypeError:
+            whole = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": "\x01"}, {"role": "assistant", "content": "\x02"},
+                 {"role": "user", "content": text}], tokenize=False, add_generation_prompt=True)
+        if whole.count("\x02") != 1 or text not in whole:
+            raise ValueError("the chat template does not keep a conversation's turns as written")
+        return whole[whole.index("\x02") + 1:]
+
+    def _plan_after(self, request: SystemOneRequest, context: list[int]) -> Plan:
+        """The questions asked after a conversation given as tokens (`context_tokens`, a vLLM request's prompt and
+        reply): each question the next user turn, as `_turn_after` renders it, read at the first token of the reply.
+        The conversation is the shared prefix; its end-of-turn token is not repeated when the reply ended with it.
+        Text only."""
+        if getattr(request, "images", None):
+            raise ValueError("images: questions after a conversation take text only")
+        if self.style != "flide":
+            questions = [(qid, kind, (names, at), text)
+                         for qid, (kind, names, text, at) in ((qid, self._question_vllm(q))
+                                                              for qid, q in request.questions.items())]
+        else:
+            questions = [(qid, *self._question(q)) for qid, q in request.questions.items()]
+        if not context:
+            raise ValueError("context_tokens is empty")
+        tails = [self.tokenizer(self._turn_after(text), add_special_tokens=False).input_ids
+                 for _, _, _, text in questions]
+        if all(t and t[0] == context[-1] for t in tails) and context[-1] in self.tokenizer.all_special_ids:
+            tails = [t[1:] for t in tails]
+        m = min(len(t) for t in tails) - 1
+        m = next((k for k in range(m + 1) if any(t[k] != tails[0][k] for t in tails)), m)
+        prefix, suffixes = context + tails[0][:m], [t[m:] for t in tails]
+        longest = len(prefix) + max(len(s) for s in suffixes)
+        total = len(prefix) + sum(len(s) for s in suffixes)
+        if longest > self.max_branch_tokens:
+            raise ValueError(f"conversation plus longest question is {longest} tokens, limit is {self.max_branch_tokens}")
+        if total > self.max_request_tokens:
+            raise ValueError(f"request is {total} tokens, limit is {self.max_request_tokens}")
+        data = [(qid, kind, names) for qid, kind, names, _ in questions]
+        if self.style != "flide":
+            wide = any(max(at) >= len(self.labels) for _, _, (_, at), _ in questions)
+        else:
+            wide = any(len(names) > len(self.letter_ids) for _, _, names, _ in questions)
+        return Plan(prefix, suffixes, (WIDE,) if wide else (READ,), data)
+
     def plan(self, request: SystemOneRequest, **_) -> Plan:
+        context = getattr(request, "context_tokens", None)
+        if context is not None:
+            return self._plan_after(request, [int(t) for t in context])
+        ref = getattr(request, "vllm_ref", None)
+        if ref is not None:   # the questions after a vLLM request's conversation, its keys lent when the plan runs
+            from ..integrations.vllm_kv import tokens
+
+            plan = self._plan_after(request, tokens(str(ref)))
+            plan.vllm_ref = str(ref)
+            return plan
         if self.style != "flide":
             questions = [(qid, kind, (names, at), text)
                          for qid, (kind, names, text, at) in ((qid, self._question_vllm(q))

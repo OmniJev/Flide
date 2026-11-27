@@ -70,6 +70,14 @@ def run(args) -> None:
         os.environ["FLIDE_API_KEY"] = args.api_key
     if args.no_meta:
         os.environ["FLIDE_NO_META"] = "1"
+    if args.vllm_kv:   # in the environment too, for the planning processes of --frontends
+        from ..integrations.vllm_kv import ENV
+
+        os.environ[ENV] = os.path.abspath(args.vllm_kv)
+        if not args.session_cache_gb:   # vLLM's keys and values go to the session cache
+            args.session_cache_gb = "auto"
+        if args.session_min_tokens is None:   # agent conversations are often shorter than the default floor
+            args.session_min_tokens = 256
     model_dir = resolve_model(args.model)
     family = formats.detect(model_dir, model_config(model_dir), args.format)
     options = {"calibration": args.calibration, "max_branch_tokens": args.max_branch_tokens,
@@ -143,6 +151,9 @@ def add_parser(sub) -> None:
                    help="GPU memory for saved prefix states; a request that extends an earlier prefix resumes from it; auto: the memory left once the model is up")
     s.add_argument("--session-min-tokens", type=int, default=None,
                    help="shortest prefix the session cache saves (default: by model size, 2048 to 256)")
+    s.add_argument("--vllm-kv", default=None, metavar="DIR",
+                   help="the directory of a vLLM server's FlideConnector on this GPU: a request's vllm_ref asks its "
+                        "questions after that vLLM request's conversation, from vLLM's keys and values")
     s.add_argument("--planners", type=int, default=4, help="CPU threads that render and tokenize requests")
     s.add_argument("--frontends", type=int, default=0,
                    help="HTTP front-end processes (each plans and finishes requests with its own planners); 0 serves "
